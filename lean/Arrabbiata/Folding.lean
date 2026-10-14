@@ -2,7 +2,11 @@
 Copyright (c) 2026 Danny Willems. All rights reserved.
 Released under the MIT license as described in the file LICENSE.
 -/
-import Mathlib
+module
+
+public import Mathlib
+
+@[expose] public section
 
 /-!
 # Completeness of folding for homogeneous polynomial relations
@@ -68,11 +72,6 @@ theorem foldPoly_eval (P : MvPolynomial σ R) (x y : σ → R) (r : R) :
   simp only [foldPoly, line, MvPolynomial.eval₂_eq, MvPolynomial.eval_eq, eval_finsetSum,
     eval_mul, eval_C, eval_prod, eval_pow, eval_add, eval_X, Pi.add_apply, Pi.smul_apply,
     smul_eq_mul]
-  all_goals
-    refine Finset.sum_congr rfl fun m _ => ?_
-    congr 1
-    refine Finset.prod_congr rfl fun i _ => ?_
-    ring
 
 /-- The constant coefficient is the accumulator's value: `T 0 = P x`.
 Used by `fold_complete`. -/

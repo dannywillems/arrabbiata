@@ -1,1 +1,3 @@
-import Arrabbiata.Folding
+module
+
+public import Arrabbiata.Folding
