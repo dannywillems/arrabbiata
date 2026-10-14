@@ -1,0 +1,18 @@
+[package]
+name = "arrabbiata-poly"
+description = "Constraint expressions, graded evaluation and homogenization"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-field = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
