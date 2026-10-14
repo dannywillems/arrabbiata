@@ -1,0 +1,22 @@
+[package]
+name = "arrabbiata-curve"
+description = "Short Weierstrass elliptic curves with complete formulas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-field = { workspace = true }
+arrabbiata-transcript = { workspace = true }
+
+[dev-dependencies]
+# Doctests and tests instantiate the Pasta curves (a dev-dependency cycle,
+# which Cargo allows).
+arrabbiata-pasta = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
