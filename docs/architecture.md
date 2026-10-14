@@ -211,8 +211,8 @@ moves make the state linear, which is the discipline of session types
 (Honda, *Types for dyadic interaction*, CONCUR 1993). The design follows the
 typed Fiat-Shamir experiment of o1-labs/proof-systems#2094.
 
-The toy permutation is NOT cryptographic and serves the tests of the generic
-code; protocols use the Poseidon sponge.
+Every protocol, test and example runs on the Poseidon sponge; the
+repository has no non-cryptographic stand-in.
 
 ### `arrabbiata-commit`
 
@@ -230,8 +230,8 @@ combinations of small norm, so they are polynomial commitments but must not
 be folded with arbitrary field challenges; the type system rejects that use.
 A norm-aware folding (in the style of LatticeFold) would be a third trait.
 
-The reference schemes (`IdentityCommitment`, `RevealCommitment`) publish the
-committed object: binding, not hiding, not succinct.
+The schemes are IPA (Pedersen vector commitments with a logarithmic
+opening, transparent) and KZG (over any pairing, trusted setup).
 
 ### `arrabbiata-frontend`
 
@@ -247,7 +247,8 @@ and no wire escapes its builder.
 ### `arrabbiata-plonk`
 
 Vanilla PlonK (ePrint 2019/953) over any two-adic field and any univariate
-polynomial commitment, on the typed transcript. It is a toy: no blinding (not
+polynomial commitment and any sponge, on the typed transcript
+(`Plonk<F, PC, S>`). It is a toy: no blinding (not
 zero-knowledge), no linearization, unbatched openings, schoolbook
 multiplication.
 

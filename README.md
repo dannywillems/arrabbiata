@@ -34,8 +34,7 @@ Early, but end to end. Implemented and tested:
 Not yet implemented: the IVC verifier circuit on the cycle, the permutation
 argument inside the folded relation, zero-knowledge (blinding), and
 performance work (the pairing, MSMs and polynomial products use the plain
-textbook algorithms). `IdentityCommitment` and `RevealCommitment` remain as
-reference schemes for tests: binding, but neither hiding nor succinct.
+textbook algorithms).
 
 ## layout
 
@@ -53,7 +52,7 @@ the right group.
 | | `arrabbiata-bn254` | BN254 fields, `G1`, `G2`, `Fq12`, the pairing | not yet |
 | `crates/oracle` | `arrabbiata-transcript` | sponges over a permutation; the typed Fiat-Shamir transcript | yes |
 | | `arrabbiata-poseidon` | Poseidon with Grain-generated constants; Pasta and BN254 instances | not yet |
-| `crates/commitment` | `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family; reference schemes | yes |
+| `crates/commitment` | `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family | yes |
 | | `arrabbiata-ipa` | the inner-product argument, over any curve | not yet |
 | | `arrabbiata-kzg` | KZG, over any pairing | not yet |
 | `crates/arithmetization` | `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
@@ -65,60 +64,15 @@ the right group.
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
 non-test code.
 
-## example: fold two instances
+## examples
 
-```rust
-use arrabbiata_commit::IdentityCommitment;
-use arrabbiata_field::Goldilocks as F;
-use arrabbiata_folding::Fold;
-use arrabbiata_relation::{aggregation::Powers, examples};
-use arrabbiata_transcript::toy_sponge;
+Every example lives in the API documentation, where it is compiled and run
+as a doctest, so it cannot drift from the code. Good entry points:
 
-// Two constraints of degree 2, combined by folded powers of a challenge:
-// the relation has degree 3, and a fold has 2 cross-terms.
-type Scheme = Fold<F, IdentityCommitment, Powers, 2, 1, 2, 2, 2>;
-
-let cs = examples::fibonacci(8);
-let ck = IdentityCommitment;
-let fresh = |x, y| {
-    let trace = examples::fibonacci_trace(&cs, x, y);
-    let instance = cs.commit(&ck, &trace, &mut toy_sponge(1));
-    cs.relax(&ck, instance, trace)
-};
-let (acc, acc_w) = fresh(1, 2);
-let (new, new_w) = fresh(3, 4);
-
-let (folded, folded_w, proof, _) =
-    Scheme::prove(&cs, &ck, toy_sponge(0), (&acc, &acc_w), (&new, &new_w)).unwrap();
-let (verified, _) = Scheme::verify(&cs, &ck, toy_sponge(0), &acc, &new, proof);
-assert_eq!(folded, verified);
-cs.check_relaxed(&ck, &verified, &folded_w).unwrap();
-```
-
-## example: write a circuit and prove it with PlonK
-
-```rust
-use arrabbiata_commit::{RevealCommitment, Univariate};
-use arrabbiata_field::Goldilocks as F;
-use arrabbiata_frontend::build;
-use arrabbiata_plonk::{prove, setup, verify};
-use arrabbiata_transcript::toy_sponge;
-
-let (circuit, witness, ()) = build::<F, _, _>(|b| {
-    let x = b.witness(F::new(3));
-    let x2 = b.mul(&x, &x);
-    let x3 = b.mul(&x2, &x);
-    let sum = b.add(&x3, &x);
-    let lhs = b.add_constant(&sum, F::new(5));
-    let rhs = b.public_input(F::new(35));
-    b.assert_equal(&lhs, &rhs);
-});
-
-let pcs = RevealCommitment::<Univariate>::new();
-let (pk, vk) = setup(&circuit, &pcs).unwrap();
-let proof = prove(&pk, &pcs, toy_sponge(0), &witness).unwrap();
-verify(&vk, &pcs, toy_sponge(0), witness.public_inputs(), proof).unwrap();
-```
+- folding two instances: the crate documentation of `arrabbiata-folding`;
+- writing a circuit and proving it with PlonK: `arrabbiata_plonk::ipa` and
+  `arrabbiata_plonk::kzg`;
+- the typed transcript: `arrabbiata_transcript::typed`.
 
 ## what the type system enforces
 
