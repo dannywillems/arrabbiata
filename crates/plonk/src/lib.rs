@@ -57,6 +57,9 @@
 
 extern crate alloc;
 
+pub mod ipa;
+pub mod kzg;
+
 use alloc::{vec, vec::Vec};
 use core::{fmt, marker::PhantomData};
 
@@ -528,6 +531,9 @@ pub enum PlonkError {
     Opening(usize),
     /// The PlonK identity does not hold at `zeta`.
     IdentityFailed,
+    /// The coset shifts `1, g, g^2` of the permutation argument do not give
+    /// three disjoint cosets of the domain (`g^n = 1` or `g^(2n) = 1`).
+    CosetShifts,
 }
 
 impl fmt::Display for PlonkError {
@@ -538,6 +544,7 @@ impl fmt::Display for PlonkError {
             Self::PublicInputs => write!(f, "wrong number of public inputs"),
             Self::Opening(i) => write!(f, "opening proof {i} does not verify"),
             Self::IdentityFailed => write!(f, "the PlonK identity does not hold at zeta"),
+            Self::CosetShifts => write!(f, "the coset shifts are not in distinct cosets"),
         }
     }
 }
@@ -576,10 +583,13 @@ where
 {
     let n = circuit.num_rows();
     let domain = Domain::<F>::containing(n).ok_or(PlonkError::DomainTooLarge)?;
-    // Coset shifts 1, g, g^2 for a generator g of F*: the cosets H, gH, g^2 H
-    // are disjoint because g, g^2 and g^-1 are not in H (g has order p - 1).
     let g = F::MULTIPLICATIVE_GENERATOR;
     let shifts = [F::ONE, g, g * g];
+    // H, gH and g^2 H are disjoint iff g and g^2 are not in H.
+    let gn = g.pow(n as u64);
+    if gn == F::ONE || gn * gn == F::ONE {
+        return Err(PlonkError::CosetShifts);
+    }
 
     let gates = circuit.gates();
     let mut columns = [
