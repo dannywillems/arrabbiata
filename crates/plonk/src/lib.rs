@@ -67,8 +67,7 @@ use arrabbiata_poly::{Domain, UniPoly};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_length, absorb_slice,
     typed::{
-        Challenge, End, Label, Labeled, Message, ProofOf, Protocol, Public, prover_tape,
-        verifier_tape,
+        Challenge, End, Label, Message, ProofOf, Protocol, Public, prover_tape, verifier_tape,
     },
 };
 
@@ -76,14 +75,143 @@ use arrabbiata_transcript::{
 type Com<F, PC> = <PC as PolynomialCommitment<F>>::Commitment;
 
 /// The keys produced by [`setup`].
-pub type Keys<F, PC> = (ProverKey<F, Com<F, PC>>, VerifierKey<F, Com<F, PC>>);
+pub type Keys<F, PC> = (ProverKey<F, PC>, VerifierKey<F, PC>);
+
+/// A value of type `T` produced by the polynomial commitment scheme `PC`.
+///
+/// Every message of the PlonK transcript, and the verifier key, carries the
+/// scheme in its type and in its label: a proof made with one scheme is not
+/// a proof for another, even when the two use the same commitment type (IPA
+/// and KZG both commit to curve points). The type checker rejects the mix,
+/// and the transcripts differ from the first challenge.
+///
+/// ```
+/// use arrabbiata_commit::{RevealCommitment, Univariate};
+/// use arrabbiata_plonk::Scheme;
+/// let m: Scheme<RevealCommitment<Univariate>, u8, 1> = Scheme::new(7);
+/// assert_eq!(m.value, 7);
+/// ```
+///
+/// A proof made with one scheme does not type-check against the verifier of
+/// another, even when their commitment and proof types coincide. Here `Twin`
+/// is a copy of the reference scheme under another label:
+///
+/// ```compile_fail
+/// use arrabbiata_commit::{NoProof, PolynomialCommitment, RevealCommitment, Revealed, Univariate};
+/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_frontend::build;
+/// use arrabbiata_plonk::{prove, setup, verify};
+/// use arrabbiata_transcript::{toy_sponge, typed::Label};
+///
+/// struct Twin(RevealCommitment<Univariate>);
+/// impl Label for Twin {
+///     const LABEL: u64 = 0x7477;
+/// }
+/// impl PolynomialCommitment<F> for Twin {
+///     type Family = Univariate;
+///     type Commitment = Revealed<F>;
+///     type Proof = NoProof;
+///     fn commit(&self, p: &[F]) -> Revealed<F> { self.0.commit(p) }
+///     fn open(&self, p: &[F], x: &F) -> (F, NoProof) { self.0.open(p, x) }
+///     fn verify(&self, c: &Revealed<F>, x: &F, v: F, pr: &NoProof) -> bool { self.0.verify(c, x, v, pr) }
+/// }
+///
+/// let (circuit, witness, ()) = build::<F, _, _>(|b| {
+///     b.witness(F::new(1));
+/// });
+/// let reveal = RevealCommitment::<Univariate>::new();
+/// let twin = Twin(RevealCommitment::new());
+/// let (pk, _) = setup(&circuit, &reveal).unwrap();
+/// let (_, twin_vk) = setup(&circuit, &twin).unwrap();
+/// let proof = prove(&pk, &reveal, toy_sponge(0), &witness).unwrap();
+/// // A proof under `reveal` handed to the verifier of `twin`.
+/// let _ = verify(&twin_vk, &twin, toy_sponge(0), &[], proof);
+/// ```
+pub struct Scheme<PC, T, const TAG: u64> {
+    /// The value.
+    pub value: T,
+    scheme: PhantomData<fn() -> PC>,
+}
+
+impl<PC, T, const TAG: u64> Scheme<PC, T, TAG> {
+    /// Tag `value` with the scheme `PC`.
+    ///
+    /// ```
+    /// use arrabbiata_commit::{RevealCommitment, Univariate};
+    /// use arrabbiata_plonk::Scheme;
+    /// let m = Scheme::<RevealCommitment<Univariate>, _, 1>::new("x");
+    /// assert_eq!(m.value, "x");
+    /// ```
+    pub const fn new(value: T) -> Self {
+        Self {
+            value,
+            scheme: PhantomData,
+        }
+    }
+}
+
+impl<PC, T, const TAG: u64> Clone for Scheme<PC, T, TAG>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        Self::new(self.value.clone())
+    }
+}
+
+impl<PC, T, const TAG: u64> fmt::Debug for Scheme<PC, T, TAG>
+where
+    T: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Scheme").field(&self.value).finish()
+    }
+}
+
+impl<PC, T, const TAG: u64> PartialEq for Scheme<PC, T, TAG>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<PC, T, const TAG: u64> Eq for Scheme<PC, T, TAG> where T: Eq {}
+
+impl<PC, T, const TAG: u64> Label for Scheme<PC, T, TAG>
+where
+    PC: Label,
+{
+    const LABEL: u64 = PC::LABEL.rotate_left(16) ^ TAG;
+}
+
+impl<F, PC, T, const TAG: u64> Absorb<F> for Scheme<PC, T, TAG>
+where
+    F: Field,
+    PC: Label,
+    T: Absorb<F>,
+{
+    fn absorb_into<Tr>(&self, transcript: &mut Tr)
+    where
+        Tr: Transcript<F>,
+    {
+        transcript.absorb(F::from_u64(<Self as Label>::LABEL));
+        self.value.absorb_into(transcript);
+    }
+}
 
 /// Commitments to the wire polynomials `a, b, c`.
-pub type Wires<C> = Labeled<Triple<C>, 0x7769>;
+pub type Wires<F, PC> = Scheme<PC, Triple<Com<F, PC>>, 0x7769>;
 /// Commitment to the grand product `z`.
-pub type GrandProduct<C> = Labeled<C, 0x7a7a>;
+pub type GrandProduct<F, PC> = Scheme<PC, Com<F, PC>, 0x7a7a>;
 /// Commitment to the quotient `t`.
-pub type Quotient<C> = Labeled<C, 0x7474>;
+pub type Quotient<F, PC> = Scheme<PC, Com<F, PC>, 0x7474>;
+/// The opening proofs.
+pub type Openings<F, PC> =
+    Scheme<PC, OpeningProofs<<PC as PolynomialCommitment<F>>::Proof>, 0x6f70>;
+/// The verifier key: the preprocessed circuit, committed with `PC`.
+pub type VerifierKey<F, PC> = Scheme<PC, Preprocessed<F, Com<F, PC>>, 0x766b>;
 
 /// Three values of the same type, absorbed in order.
 ///
@@ -186,23 +314,19 @@ pub const OPENED: [&str; 13] = [
 ///
 /// ```
 /// use arrabbiata_commit::NoProof;
-/// use arrabbiata_plonk::Openings;
-/// let o = Openings { at_zeta: [NoProof; 13], at_zeta_shifted: NoProof };
+/// use arrabbiata_plonk::OpeningProofs;
+/// let o = OpeningProofs { at_zeta: [NoProof; 13], at_zeta_shifted: NoProof };
 /// assert_eq!(o.at_zeta_shifted, NoProof);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Openings<P> {
+pub struct OpeningProofs<P> {
     /// Proofs at `zeta`, in the order of [`OPENED`].
     pub at_zeta: [P; 13],
     /// Proof of `z` at `zeta * w`.
     pub at_zeta_shifted: P,
 }
 
-impl<P> Label for Openings<P> {
-    const LABEL: u64 = 0x6f70;
-}
-
-impl<F, P> Absorb<F> for Openings<P>
+impl<F, P> Absorb<F> for OpeningProofs<P>
 where
     F: Field,
     P: Absorb<F>,
@@ -222,7 +346,7 @@ where
 
 /// The verifier's view of a circuit: the domain, the coset shifts of the
 /// permutation argument, and the commitments to the selectors and to the
-/// permutation polynomials.
+/// permutation polynomials. Wrapped with its scheme as a [`VerifierKey`].
 ///
 /// ```
 /// use arrabbiata_commit::{RevealCommitment, Univariate};
@@ -232,10 +356,10 @@ where
 ///     b.witness(F::new(1));
 /// });
 /// let (_, vk) = arrabbiata_plonk::setup(&circuit, &RevealCommitment::<Univariate>::new()).unwrap();
-/// assert_eq!(vk.num_rows(), 2);
+/// assert_eq!(vk.value.num_rows(), 2);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VerifierKey<F, C> {
+pub struct Preprocessed<F, C> {
     log_size: u32,
     shifts: [F; 3],
     selectors: [C; 5],
@@ -243,7 +367,7 @@ pub struct VerifierKey<F, C> {
     public_rows: Vec<usize>,
 }
 
-impl<F, C> VerifierKey<F, C> {
+impl<F, C> Preprocessed<F, C> {
     /// The number of rows of the circuit.
     ///
     /// ```
@@ -252,7 +376,7 @@ impl<F, C> VerifierKey<F, C> {
     /// use arrabbiata_frontend::build;
     /// let (c, _, ()) = build::<F, _, _>(|_| ());
     /// let (_, vk) = arrabbiata_plonk::setup(&c, &RevealCommitment::<Univariate>::new()).unwrap();
-    /// assert_eq!(vk.num_rows(), c.num_rows());
+    /// assert_eq!(vk.value.num_rows(), c.num_rows());
     /// ```
     #[must_use]
     pub const fn num_rows(&self) -> usize {
@@ -260,11 +384,7 @@ impl<F, C> VerifierKey<F, C> {
     }
 }
 
-impl<F, C> Label for VerifierKey<F, C> {
-    const LABEL: u64 = 0x766b;
-}
-
-impl<F, C> Absorb<F> for VerifierKey<F, C>
+impl<F, C> Absorb<F> for Preprocessed<F, C>
 where
     F: Field,
     C: Absorb<F>,
@@ -309,16 +429,23 @@ where
 /// let (pk, vk) = arrabbiata_plonk::setup(&circuit, &RevealCommitment::<Univariate>::new()).unwrap();
 /// assert_eq!(pk.verifier_key(), &vk);
 /// ```
-#[derive(Clone, Debug)]
-pub struct ProverKey<F, C> {
-    vk: VerifierKey<F, C>,
+pub struct ProverKey<F, PC>
+where
+    F: Field,
+    PC: PolynomialCommitment<F>,
+{
+    vk: VerifierKey<F, PC>,
     domain: Domain<F>,
     selectors: [UniPoly<F>; 5],
     sigmas: [UniPoly<F>; 3],
     sigma_values: [Vec<F>; 3],
 }
 
-impl<F, C> ProverKey<F, C> {
+impl<F, PC> ProverKey<F, PC>
+where
+    F: Field,
+    PC: PolynomialCommitment<F>,
+{
     /// The verifier key.
     ///
     /// ```
@@ -327,29 +454,29 @@ impl<F, C> ProverKey<F, C> {
     /// use arrabbiata_frontend::build;
     /// let (c, _, ()) = build::<F, _, _>(|_| ());
     /// let (pk, _) = arrabbiata_plonk::setup(&c, &RevealCommitment::<Univariate>::new()).unwrap();
-    /// assert_eq!(pk.verifier_key().num_rows(), 2);
+    /// assert_eq!(pk.verifier_key().value.num_rows(), 2);
     /// ```
-    pub const fn verifier_key(&self) -> &VerifierKey<F, C> {
+    pub const fn verifier_key(&self) -> &VerifierKey<F, PC> {
         &self.vk
     }
 }
 
-/// The transcript of vanilla PlonK. The prover and the verifier both follow
-/// it, through [`Plonk`].
-pub type PlonkTranscript<F, C, P> = Public<
-    VerifierKey<F, C>,
+/// The transcript of vanilla PlonK compiled with the scheme `PC`. The prover
+/// and the verifier both follow it, through [`Plonk`].
+pub type PlonkTranscript<F, PC> = Public<
+    VerifierKey<F, PC>,
     Public<
         PublicInputs<F>,
         Message<
-            Wires<C>,
+            Wires<F, PC>,
             Challenge<
                 Challenge<
                     Message<
-                        GrandProduct<C>,
+                        GrandProduct<F, PC>,
                         Challenge<
                             Message<
-                                Quotient<C>,
-                                Challenge<Message<Evaluations<F>, Message<Openings<P>, End>>>,
+                                Quotient<F, PC>,
+                                Challenge<Message<Evaluations<F>, Message<Openings<F, PC>, End>>>,
                             >,
                         >,
                     >,
@@ -378,7 +505,7 @@ where
     F: Field,
     PC: PolynomialCommitment<F, Family = Univariate>,
 {
-    type Transcript = PlonkTranscript<F, PC::Commitment, PC::Proof>;
+    type Transcript = PlonkTranscript<F, PC>;
 }
 
 /// Why setup, proving or verification failed.
@@ -496,13 +623,13 @@ where
     });
     let sigmas = [p0?, p1?, p2?];
 
-    let vk = VerifierKey {
+    let vk = VerifierKey::new(Preprocessed {
         log_size: domain.log_size(),
         shifts,
         selectors: selectors.clone().map(|p| pcs.commit(&coefficients(&p))),
         sigmas: sigmas.clone().map(|p| pcs.commit(&coefficients(&p))),
         public_rows: circuit.public_rows().to_vec(),
-    };
+    });
     let pk = ProverKey {
         vk: vk.clone(),
         domain,
@@ -562,7 +689,7 @@ where
 /// assert_eq!(prove(&pk, &pcs, toy_sponge(0), &witness).unwrap_err(), PlonkError::Unsatisfied);
 /// ```
 pub fn prove<F, PC, T>(
-    pk: &ProverKey<F, Com<F, PC>>,
+    pk: &ProverKey<F, PC>,
     pcs: &PC,
     transcript: T,
     witness: &Witness<F>,
@@ -574,7 +701,7 @@ where
 {
     let domain = &pk.domain;
     let n = domain.size();
-    if witness.public_inputs().len() != pk.vk.public_rows.len() {
+    if witness.public_inputs().len() != pk.vk.value.public_rows.len() {
         return Err(PlonkError::PublicInputs);
     }
     let wires = witness.wires();
@@ -587,7 +714,7 @@ where
     let tape = prover_tape::<F, T, Plonk<F, PC>>(transcript)
         .public(&pk.vk)
         .public(&PublicInputs(witness.public_inputs().to_vec()))
-        .send(Labeled(wire_commitments));
+        .send(Scheme::new(wire_commitments));
     let (beta, tape) = tape.challenge();
     let (gamma, tape) = tape.challenge();
 
@@ -597,7 +724,7 @@ where
         let x = domain.element(i);
         let mut num = F::ONE;
         let mut den = F::ONE;
-        for ((column, shift), sigma) in wires.iter().zip(pk.vk.shifts).zip(&pk.sigma_values) {
+        for ((column, shift), sigma) in wires.iter().zip(pk.vk.value.shifts).zip(&pk.sigma_values) {
             num = num * (column[i] + beta * shift * x + gamma);
             den = den * (column[i] + beta * sigma[i] + gamma);
         }
@@ -607,19 +734,23 @@ where
     let z = domain
         .interpolate(&z_values)
         .ok_or(PlonkError::DomainTooLarge)?;
-    let tape = tape.send(Labeled(pcs.commit(&coefficients(&z))));
+    let tape = tape.send(Scheme::new(pcs.commit(&coefficients(&z))));
     let (alpha, tape) = tape.challenge();
 
     // Round 3: quotient.
     let pi = domain
-        .interpolate(&circuit_public_column(&pk.vk, witness.public_inputs(), n))
+        .interpolate(&circuit_public_column(
+            &pk.vk.value,
+            witness.public_inputs(),
+            n,
+        ))
         .ok_or(PlonkError::DomainTooLarge)?;
     let [q_l, q_r, q_o, q_m, q_c] = &pk.selectors;
     let gate =
         &(&(&(&(q_l * &a) + &(q_r * &b)) + &(q_o * &c)) + &(&(q_m * &a) * &b)) + &(q_c + &pi);
     let x = UniPoly::new(vec![F::ZERO, F::ONE]);
     let term = |w: &UniPoly<F>, s: &UniPoly<F>| &(w + &s.scale(beta)) + &constant(gamma);
-    let identity = |k: usize| x.scale(pk.vk.shifts[k]);
+    let identity = |k: usize| x.scale(pk.vk.value.shifts[k]);
     let perm_left =
         &(&(&term(&a, &identity(0)) * &term(&b, &identity(1))) * &term(&c, &identity(2))) * &z;
     let z_shifted = shift(&z, domain.generator());
@@ -637,7 +768,7 @@ where
     let t = numerator
         .divide_by_vanishing(n)
         .ok_or(PlonkError::Unsatisfied)?;
-    let tape = tape.send(Labeled(pcs.commit(&coefficients(&t))));
+    let tape = tape.send(Scheme::new(pcs.commit(&coefficients(&t))));
     let (zeta, tape) = tape.challenge();
 
     // Round 4: evaluations and openings.
@@ -663,16 +794,16 @@ where
         values: openings.clone().map(|(v, _)| v),
         z_shifted: z_shifted_value,
     };
-    let proofs = Openings {
+    let proofs = OpeningProofs {
         at_zeta: openings.map(|(_, p)| p),
         at_zeta_shifted: z_shifted_proof,
     };
-    let (_, proof) = tape.send(evaluations).send(proofs).finish();
+    let (_, proof) = tape.send(evaluations).send(Scheme::new(proofs)).finish();
     Ok(proof)
 }
 
 /// The public input column for the verifier key's rows.
-fn circuit_public_column<F, C>(vk: &VerifierKey<F, C>, public_inputs: &[F], n: usize) -> Vec<F>
+fn circuit_public_column<F, C>(vk: &Preprocessed<F, C>, public_inputs: &[F], n: usize) -> Vec<F>
 where
     F: Field,
 {
@@ -713,7 +844,7 @@ where
 /// assert!(verify(&vk, &pcs, toy_sponge(0), &[F::new(16)], proof).is_ok());
 /// ```
 pub fn verify<F, PC, T>(
-    vk: &VerifierKey<F, Com<F, PC>>,
+    vk: &VerifierKey<F, PC>,
     pcs: &PC,
     transcript: T,
     public_inputs: &[F],
@@ -724,37 +855,55 @@ where
     PC: PolynomialCommitment<F, Family = Univariate>,
     T: Transcript<F>,
 {
-    if public_inputs.len() != vk.public_rows.len() {
+    let key = &vk.value;
+    if public_inputs.len() != key.public_rows.len() {
         return Err(PlonkError::PublicInputs);
     }
-    let domain = Domain::<F>::new(vk.log_size).ok_or(PlonkError::DomainTooLarge)?;
-    let (Labeled(wires), tape) = verifier_tape::<F, T, Plonk<F, PC>>(transcript, proof)
+    let domain = Domain::<F>::new(key.log_size).ok_or(PlonkError::DomainTooLarge)?;
+    let (wires, tape) = verifier_tape::<F, T, Plonk<F, PC>>(transcript, proof)
         .public(vk)
         .public(&PublicInputs(public_inputs.to_vec()))
         .read();
     let (beta, tape) = tape.challenge();
     let (gamma, tape) = tape.challenge();
-    let (Labeled(z_commitment), tape) = tape.read();
+    let (
+        Scheme {
+            value: z_commitment,
+            ..
+        },
+        tape,
+    ) = tape.read();
     let (alpha, tape) = tape.challenge();
-    let (Labeled(t_commitment), tape) = tape.read();
+    let (
+        Scheme {
+            value: t_commitment,
+            ..
+        },
+        tape,
+    ) = tape.read();
     let (zeta, tape) = tape.challenge();
     let (evaluations, tape) = tape.read();
-    let (openings, tape) = tape.read();
+    let (
+        Scheme {
+            value: openings, ..
+        },
+        tape,
+    ) = tape.read();
     let _ = tape.finish();
 
     // Openings.
     let commitments: [&Com<F, PC>; 13] = [
-        &wires.0[0],
-        &wires.0[1],
-        &wires.0[2],
-        &vk.selectors[0],
-        &vk.selectors[1],
-        &vk.selectors[2],
-        &vk.selectors[3],
-        &vk.selectors[4],
-        &vk.sigmas[0],
-        &vk.sigmas[1],
-        &vk.sigmas[2],
+        &wires.value.0[0],
+        &wires.value.0[1],
+        &wires.value.0[2],
+        &key.selectors[0],
+        &key.selectors[1],
+        &key.selectors[2],
+        &key.selectors[3],
+        &key.selectors[4],
+        &key.sigmas[0],
+        &key.sigmas[1],
+        &key.sigmas[2],
         &z_commitment,
         &t_commitment,
     ];
@@ -781,11 +930,11 @@ where
     // The identity at zeta.
     let [a, b, c, q_l, q_r, q_o, q_m, q_c, s1, s2, s3, z, t] = evaluations.values;
     let mut pi = F::ZERO;
-    for (row, value) in vk.public_rows.iter().zip(public_inputs) {
+    for (row, value) in key.public_rows.iter().zip(public_inputs) {
         pi = pi - *value * domain.lagrange_at(*row, zeta);
     }
     let gate = q_l * a + q_r * b + q_o * c + q_m * a * b + q_c + pi;
-    let [k0, k1, k2] = vk.shifts;
+    let [k0, k1, k2] = key.shifts;
     let perm = (a + beta * k0 * zeta + gamma)
         * (b + beta * k1 * zeta + gamma)
         * (c + beta * k2 * zeta + gamma)
