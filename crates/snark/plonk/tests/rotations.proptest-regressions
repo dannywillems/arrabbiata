@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c5750b3a93bf6f71e9728725ff864bf98c79658bd4540414672b1e2fdd3a310f # shrinks to program = (53404739175456, 11484700052042603391, [(1, false), (1, true), (1, true), (1, true), (4, true), (1, false), (1, false)])
+cc 7cfddb700ecf3c3010934ef8edace93e7784633f77186ed8ef10108ccd08c3b2 # shrinks to a = [582932476264, 9775000292784519927, 5323803891736677057, 2869939319588604102, 13086731364852352815, 1070820772858570126, 12907189131657159275, 14478144256826079641], shift = 3
+cc 06c0cf0ef343dd40efe5df7b43822ced84367f6e3143c275906698d66b01ce15 # shrinks to program = (20825, 3087969145462881389, [(3, false), (4, false), (0, true), (2, true), (3, false), (0, false), (2, true), (4, true), (0, false), (1, false), (4, false)]), index = 0
+cc 3325b70de4d18c7cb8aa9f8d31ef9c99db40031a1654b73b378fc5dddb5a252f # shrinks to program = (2023, 5137116031770934499, [(3, false), (2, false), (3, true), (3, true), (4, false), (0, true), (3, true), (3, true)])
