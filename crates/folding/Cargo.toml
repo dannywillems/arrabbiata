@@ -1,0 +1,22 @@
+[package]
+name = "arrabbiata-folding"
+description = "Accumulation of homogeneous polynomial relations of arbitrary degree"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-commit = { workspace = true }
+arrabbiata-field = { workspace = true }
+arrabbiata-poly = { workspace = true }
+arrabbiata-relation = { workspace = true }
+arrabbiata-transcript = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
