@@ -686,6 +686,26 @@ pub struct Witness<F> {
 }
 
 impl<F> Witness<F> {
+    /// A witness given directly by its wire columns and public inputs, for
+    /// witnesses computed outside the builder. Nothing is checked here;
+    /// [`Circuit::is_satisfied`] and the prover check it against a circuit.
+    ///
+    /// ```
+    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_frontend::{Witness, build};
+    /// let (circuit, honest, ()) = build::<F, _, _>(|b| {
+    ///     let x = b.witness(F::new(2));
+    ///     b.mul(&x, &x);
+    /// });
+    /// let mut wires = honest.wires().clone();
+    /// wires[2][1] = F::new(5); // claim 2 * 2 = 5
+    /// assert!(!circuit.is_satisfied(&Witness::new(wires, vec![])));
+    /// ```
+    #[must_use]
+    pub const fn new(wires: [Vec<F>; 3], public: Vec<F>) -> Self {
+        Self { wires, public }
+    }
+
     /// The wire columns `a`, `b`, `c`.
     ///
     /// ```
@@ -847,5 +867,87 @@ where
             cell += 1;
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use proptest::prelude::*;
+    use std::{collections::BTreeSet, vec::Vec};
+
+    use super::*;
+
+    fn cell(index: usize, num_rows: usize) -> Cell {
+        Cell {
+            column: Column::ALL[index / num_rows],
+            row: index % num_rows,
+        }
+    }
+
+    /// The connected components of the copy graph, by breadth-first search:
+    /// an oracle independent of the union-find in `permutation`.
+    fn components(copies: &[(usize, usize)], size: usize) -> Vec<BTreeSet<usize>> {
+        let mut seen = vec![false; size];
+        let mut out = Vec::new();
+        for start in 0..size {
+            if seen[start] {
+                continue;
+            }
+            let mut component = BTreeSet::new();
+            let mut queue = vec![start];
+            seen[start] = true;
+            while let Some(x) = queue.pop() {
+                component.insert(x);
+                for &(a, b) in copies {
+                    for (from, to) in [(a, b), (b, a)] {
+                        if from == x && !seen[to] {
+                            seen[to] = true;
+                            queue.push(to);
+                        }
+                    }
+                }
+            }
+            out.push(component);
+        }
+        out
+    }
+
+    proptest! {
+        /// sigma is a permutation, and its cycles are exactly the connected
+        /// components of the copy constraints.
+        #[test]
+        fn sigma_cycles_are_copy_classes(
+            log_rows in 1u32..4,
+            raw in prop::collection::vec((any::<usize>(), any::<usize>()), 0..20),
+        ) {
+            let n = 1usize << log_rows;
+            let size = 3 * n;
+            let copies: Vec<(usize, usize)> = raw.iter().map(|(a, b)| (a % size, b % size)).collect();
+            let cells: Vec<(Cell, Cell)> =
+                copies.iter().map(|&(a, b)| (cell(a, n), cell(b, n))).collect();
+            let sigma = permutation(&cells, n);
+
+            // A bijection of 0..3n.
+            let image: BTreeSet<usize> = sigma.iter().copied().collect();
+            prop_assert_eq!(image.len(), size);
+            prop_assert!(sigma.iter().all(|&s| s < size));
+
+            // Each cycle is a component, and each component a cycle.
+            for component in components(&copies, size) {
+                let start = *component.iter().next().unwrap();
+                let mut cycle = BTreeSet::new();
+                let mut x = start;
+                loop {
+                    cycle.insert(x);
+                    x = sigma[x];
+                    if x == start {
+                        break;
+                    }
+                }
+                prop_assert_eq!(cycle, component);
+            }
+        }
     }
 }
