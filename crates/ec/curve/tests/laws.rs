@@ -87,6 +87,20 @@ where
             },
         )
         .unwrap();
+    // Larger inputs, for the wider Pippenger windows.
+    let mut runner = TestRunner::new(Config::with_cases(4));
+    runner
+        .run(
+            &(
+                prop::collection::vec(arb_point::<C>(), 32..200),
+                prop::collection::vec(arb_scalar::<C::Scalar>(), 32..200),
+            ),
+            |(points, scalars)| {
+                prop_assert!(laws::msm_is_the_sum(&points, &scalars), "msm");
+                Ok(())
+            },
+        )
+        .unwrap();
 }
 
 const CASES: u32 = 64;

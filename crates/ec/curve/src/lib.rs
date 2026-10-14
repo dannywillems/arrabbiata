@@ -457,8 +457,17 @@ where
     }
 }
 
-/// `sum_i scalars[i] points[i]`, the multi-scalar multiplication, computed
-/// naively. Extra entries of the longer slice are ignored.
+/// `sum_i scalars[i] points[i]`, the multi-scalar multiplication. Extra
+/// entries of the longer slice are ignored.
+///
+/// Pippenger's bucket method: the scalars are cut into windows of `c` bits;
+/// in each window, every point is added once to the bucket of its digit, and
+/// the buckets are combined as `sum_d d B_d` by a running sum, in
+/// `2^c` additions. With `b`-bit scalars this costs about
+/// `(b / c) (n + 2^(c + 1))` additions instead of the `b n` doublings and
+/// additions of `n` separate scalar multiplications; `c` grows with
+/// `log2(n)`. It agrees with the naive sum by the curve law
+/// [`laws::msm_is_the_sum`], checked on every curve.
 ///
 /// ```
 /// use arrabbiata_curve::{Projective, msm};
@@ -473,11 +482,71 @@ pub fn msm<C>(points: &[Projective<C>], scalars: &[C::Scalar]) -> Projective<C>
 where
     C: Curve,
 {
-    let mut acc = Projective::identity();
+    let n = if points.len() < scalars.len() {
+        points.len()
+    } else {
+        scalars.len()
+    };
+    if n == 0 {
+        return Projective::identity();
+    }
+    let limbs = <C::Scalar as PrimeField>::LIMBS;
+    let bits = 64 * limbs;
+    let mut digits = Vec::with_capacity(n * limbs);
     let mut i = 0;
-    while i < points.len() && i < scalars.len() {
-        acc = acc + points[i] * scalars[i];
+    while i < n {
+        let mut j = 0;
+        while j < limbs {
+            digits.push(scalars[i].limb(j));
+            j += 1;
+        }
         i += 1;
+    }
+    // Window width: about log2(n) - 3, at least 1 and at most 16.
+    let log_n = (usize::BITS - n.leading_zeros()) as usize;
+    let c = if log_n > 4 {
+        if log_n - 3 > 16 { 16 } else { log_n - 3 }
+    } else {
+        1
+    };
+    let windows = bits.div_ceil(c);
+    let mut acc = Projective::identity();
+    let mut w = windows;
+    while w > 0 {
+        w -= 1;
+        let mut k = 0;
+        while k < c {
+            acc = acc.double();
+            k += 1;
+        }
+        let mut buckets = alloc::vec![Projective::<C>::identity(); (1usize << c) - 1];
+        let mut i = 0;
+        while i < n {
+            // The c-bit digit of scalar i at window w.
+            let mut digit = 0usize;
+            let mut k = 0;
+            while k < c {
+                let bit = w * c + k;
+                if bit < bits && (digits[i * limbs + bit / 64] >> (bit % 64)) & 1 == 1 {
+                    digit |= 1 << k;
+                }
+                k += 1;
+            }
+            if digit != 0 {
+                buckets[digit - 1] = buckets[digit - 1] + points[i];
+            }
+            i += 1;
+        }
+        // sum_d d B_d = sum_{e} (sum_{d >= e} B_d), by a running sum.
+        let mut running = Projective::<C>::identity();
+        let mut window_sum = Projective::<C>::identity();
+        let mut d = buckets.len();
+        while d > 0 {
+            d -= 1;
+            running = running + buckets[d];
+            window_sum = window_sum + running;
+        }
+        acc = acc + window_sum;
     }
     acc
 }
