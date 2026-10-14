@@ -9,6 +9,7 @@ members = [
   "crates/poly",
   "crates/transcript",
   "crates/commit",
+  "crates/ipa",
   "crates/relation",
   "crates/folding",
   "crates/frontend",
@@ -32,6 +33,7 @@ arrabbiata-poseidon = { path = "crates/poseidon" }
 arrabbiata-poly = { path = "crates/poly" }
 arrabbiata-transcript = { path = "crates/transcript" }
 arrabbiata-commit = { path = "crates/commit" }
+arrabbiata-ipa = { path = "crates/ipa" }
 arrabbiata-relation = { path = "crates/relation" }
 arrabbiata-folding = { path = "crates/folding" }
 arrabbiata-frontend = { path = "crates/frontend" }
