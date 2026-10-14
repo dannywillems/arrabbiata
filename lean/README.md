@@ -58,5 +58,6 @@ subset of Rust that Aeneas supports.
 
 ## toolchain
 
-Lean `v4.30.0` and Mathlib `v4.30.0`, pinned together in `lean-toolchain` and
-`lakefile.toml`. Move them together.
+Lean and Mathlib as pinned by the Aeneas Lean library (currently
+`v4.35.0-rc4`), which `lakefile.toml` requires at a fixed revision.
+`lean-toolchain` must match Aeneas's; move the two together.

@@ -6,10 +6,15 @@ defaultTargets = ["Arrabbiata"]
 pp.unicode.fun = true
 autoImplicit = false
 
+# The Aeneas Lean library: the target of the Rust extraction. Mathlib comes
+# through it, so the toolchain and the Mathlib revision are Aeneas's own and
+# the extracted code and this library always agree. Move the revision and
+# lean-toolchain together.
 [[require]]
-name = "mathlib"
-scope = "leanprover-community"
-rev = "v4.30.0"
+name = "aeneas"
+git = "https://github.com/AeneasVerif/aeneas.git"
+rev = "6c2788d1366f09d69fd55b2b9be71cd17d28a9ab"
+subDir = "backends/lean"
 
 [[lean_lib]]
 name = "Arrabbiata"

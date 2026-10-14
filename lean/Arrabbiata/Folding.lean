@@ -65,13 +65,14 @@ noncomputable def foldPoly (P : MvPolynomial σ R) (x y : σ → R) : R[X] :=
 polynomial in `r` agrees with evaluation on the folded witness. -/
 theorem foldPoly_eval (P : MvPolynomial σ R) (x y : σ → R) (r : R) :
     (foldPoly P x y).eval r = MvPolynomial.eval (x + r • y) P := by
-  simp only [foldPoly, line, MvPolynomial.eval₂_eq, MvPolynomial.eval_eq, eval_finset_sum,
+  simp only [foldPoly, line, MvPolynomial.eval₂_eq, MvPolynomial.eval_eq, eval_finsetSum,
     eval_mul, eval_C, eval_prod, eval_pow, eval_add, eval_X, Pi.add_apply, Pi.smul_apply,
     smul_eq_mul]
-  refine Finset.sum_congr rfl fun m _ => ?_
-  congr 1
-  refine Finset.prod_congr rfl fun i _ => ?_
-  ring
+  all_goals
+    refine Finset.sum_congr rfl fun m _ => ?_
+    congr 1
+    refine Finset.prod_congr rfl fun i _ => ?_
+    ring
 
 /-- The constant coefficient is the accumulator's value: `T 0 = P x`.
 Used by `fold_complete`. -/
@@ -110,7 +111,7 @@ theorem prod_line_pow (x y : σ → R) (e : σ → ℕ) (s : Finset σ) :
     rw [Finset.prod_insert ha, Finset.sum_insert ha, Finset.prod_insert ha]
     refine ⟨?_, ?_⟩
     · exact (natDegree_mul_le).trans (Nat.add_le_add hpow_deg hdeg)
-    · rw [coeff_mul_of_natDegree_le hpow_deg hdeg, hpow_coeff, hcoeff]
+    · rw [coeff_mul_add_eq_of_natDegree_le hpow_deg hdeg, hpow_coeff, hcoeff]
 
 /-- For `P` homogeneous of degree `d`, the folding polynomial has degree at
 most `d`: there are exactly `d - 1` cross-terms. Used by `fold_complete`. -/
@@ -130,7 +131,7 @@ fresh instance's value: `T d = P y`. Used by `fold_complete`. -/
 theorem foldPoly_coeff_degree {P : MvPolynomial σ R} {d : ℕ} (hP : P.IsHomogeneous d)
     (x y : σ → R) : (foldPoly P x y).coeff d = MvPolynomial.eval y P := by
   classical
-  rw [foldPoly, MvPolynomial.eval₂_eq, finset_sum_coeff, MvPolynomial.eval_eq]
+  rw [foldPoly, MvPolynomial.eval₂_eq, finsetSum_coeff, MvPolynomial.eval_eq]
   refine Finset.sum_congr rfl fun m hm => ?_
   have hdeg : ∑ i ∈ m.support, m i = d := by
     have h := hP (MvPolynomial.mem_support_iff.mp hm)
