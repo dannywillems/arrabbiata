@@ -40,3 +40,8 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+# The extracted crates avoid closures (Aeneas), so explicit matches are
+# preferred to Option combinators taking a closure.
+manual_map = "allow"
+manual_unwrap_or = "allow"
+manual_unwrap_or_default = "allow"

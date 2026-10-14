@@ -40,10 +40,13 @@ use core::{
     ops::{Add, Mul, Neg, Sub},
 };
 
+pub mod bigint;
 pub mod goldilocks;
 pub mod laws;
+pub mod montgomery;
 
 pub use goldilocks::Goldilocks;
+pub use montgomery::{MontField, MontgomeryConfig};
 
 /// A finite field.
 ///
@@ -207,6 +210,18 @@ where
     /// assert_eq!(Goldilocks::new(u64::MAX).limb(0), u64::MAX - arrabbiata_field::goldilocks::MODULUS);
     /// ```
     fn limb(self, i: usize) -> u64;
+
+    /// The element whose canonical representative has the given limbs
+    /// (least significant first), or `None` if that integer is not below
+    /// the modulus. Limbs past [`PrimeField::LIMBS`] must be zero.
+    ///
+    /// ```
+    /// use arrabbiata_field::{Goldilocks, PrimeField, goldilocks::MODULUS};
+    /// assert_eq!(Goldilocks::from_limbs(&[5]), Some(Goldilocks::new(5)));
+    /// assert_eq!(Goldilocks::from_limbs(&[MODULUS]), None);
+    /// assert_eq!(Goldilocks::from_limbs(&[1, 1]), None);
+    /// ```
+    fn from_limbs(limbs: &[u64]) -> Option<Self>;
 }
 
 /// A field with a multiplicative subgroup of order `2^TWO_ADICITY`, hence
@@ -255,4 +270,39 @@ where
     /// assert!(Goldilocks::two_adic_generator(33).is_none());
     /// ```
     fn two_adic_generator(bits: u32) -> Option<Self>;
+}
+
+/// Square roots.
+///
+/// ```
+/// use arrabbiata_field::{Field, Sqrt, montgomery::{MontField, MontgomeryConfig}};
+/// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// struct F13;
+/// impl MontgomeryConfig<1> for F13 {
+///     const MODULUS: [u64; 1] = [13];
+///     const GENERATOR: u64 = 2;
+/// }
+/// type F = MontField<F13, 1>;
+/// let r = F::from_u64(10).sqrt().unwrap(); // 6^2 = 36 = 10 mod 13
+/// assert_eq!(r * r, F::from_u64(10));
+/// assert_eq!(F::from_u64(2).sqrt(), None);
+/// ```
+pub trait Sqrt
+where
+    Self: Field,
+{
+    /// A square root of `self`, or `None` if `self` is not a square. Which
+    /// of the two roots is returned is unspecified.
+    ///
+    /// ```
+    /// use arrabbiata_field::{Field, Sqrt, montgomery::{MontField, MontgomeryConfig}};
+    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    /// struct F13;
+    /// impl MontgomeryConfig<1> for F13 {
+    ///     const MODULUS: [u64; 1] = [13];
+    ///     const GENERATOR: u64 = 2;
+    /// }
+    /// assert_eq!(MontField::<F13, 1>::ZERO.sqrt(), Some(MontField::ZERO));
+    /// ```
+    fn sqrt(self) -> Option<Self>;
 }

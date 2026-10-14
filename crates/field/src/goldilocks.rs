@@ -144,6 +144,21 @@ impl PrimeField for Goldilocks {
     fn limb(self, i: usize) -> u64 {
         if i == 0 { self.0 } else { 0 }
     }
+
+    fn from_limbs(limbs: &[u64]) -> Option<Self> {
+        let mut i = 1;
+        while i < limbs.len() {
+            if limbs[i] != 0 {
+                return None;
+            }
+            i += 1;
+        }
+        match limbs.first() {
+            None => Some(Self::ZERO),
+            Some(&v) if v < MODULUS => Some(Self(v)),
+            Some(_) => None,
+        }
+    }
 }
 
 impl TwoAdicField for Goldilocks {
