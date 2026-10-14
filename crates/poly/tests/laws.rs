@@ -294,6 +294,27 @@ mod domain {
             prop_assert!(off.divide_by_vanishing(n).is_none());
         }
 
+        /// Dilation is precomposition with multiplication: p(w X) at x is
+        /// p at w x; and dilation by a root of unity shifts evaluations on
+        /// the domain by one position.
+        #[test]
+        fn dilation(
+            log in 1u32..5,
+            coefficients in prop::collection::vec(any::<u64>().prop_map(F::new), 0..16),
+            x in any::<u64>().prop_map(F::new),
+            w in any::<u64>().prop_map(F::new),
+        ) {
+            let p = UniPoly::new(coefficients);
+            prop_assert_eq!(p.dilate(w).evaluate(x), p.evaluate(w * x));
+            let domain = Domain::<F>::new(log).unwrap();
+            let shifted = p.dilate(domain.generator());
+            for i in 0..domain.size() {
+                prop_assert_eq!(shifted.evaluate(domain.element(i)), p.evaluate(domain.element(i + 1)));
+            }
+            prop_assert_eq!(UniPoly::constant(x).evaluate(w), x);
+            prop_assert_eq!(UniPoly::<F>::x().evaluate(w), w);
+        }
+
         /// L_1 is 1 at 1 and 0 elsewhere on the domain.
         #[test]
         fn first_lagrange(log in 0u32..6) {

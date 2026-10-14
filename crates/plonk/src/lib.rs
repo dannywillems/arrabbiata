@@ -551,14 +551,6 @@ impl fmt::Display for PlonkError {
 
 impl core::error::Error for PlonkError {}
 
-/// `constant` as a degree-0 polynomial.
-fn constant<F>(c: F) -> UniPoly<F>
-where
-    F: Field,
-{
-    UniPoly::new(vec![c])
-}
-
 /// Preprocess a circuit: interpolate and commit to the selectors and to the
 /// permutation.
 ///
@@ -636,8 +628,8 @@ where
     let vk = VerifierKey::new(Preprocessed {
         log_size: domain.log_size(),
         shifts,
-        selectors: selectors.clone().map(|p| pcs.commit(&coefficients(&p))),
-        sigmas: sigmas.clone().map(|p| pcs.commit(&coefficients(&p))),
+        selectors: selectors.clone().map(|p| pcs.commit(p.coefficients())),
+        sigmas: sigmas.clone().map(|p| pcs.commit(p.coefficients())),
         public_rows: circuit.public_rows().to_vec(),
     });
     let pk = ProverKey {
@@ -648,28 +640,6 @@ where
         sigma_values,
     };
     Ok((pk, vk))
-}
-
-/// The coefficients of `p`, constant first.
-fn coefficients<F>(p: &UniPoly<F>) -> Vec<F>
-where
-    F: Field,
-{
-    (0..p.len()).map(|k| p.coefficient(k)).collect()
-}
-
-/// `p(w X)`: the coefficients scaled by powers of `w`.
-fn shift<F>(p: &UniPoly<F>, w: F) -> UniPoly<F>
-where
-    F: Field,
-{
-    let mut power = F::ONE;
-    let mut out = Vec::with_capacity(p.len());
-    for k in 0..p.len() {
-        out.push(p.coefficient(k) * power);
-        power = power * w;
-    }
-    UniPoly::new(out)
 }
 
 /// Prove that `witness` satisfies the circuit of `pk`.
@@ -720,7 +690,7 @@ where
     let [a, b, c] = [&wires[0], &wires[1], &wires[2]]
         .map(|column| domain.interpolate(column).ok_or(PlonkError::DomainTooLarge));
     let (a, b, c) = (a?, b?, c?);
-    let wire_commitments = Triple([&a, &b, &c].map(|p| pcs.commit(&coefficients(p))));
+    let wire_commitments = Triple([&a, &b, &c].map(|p| pcs.commit(p.coefficients())));
     let tape = prover_tape::<F, T, Plonk<F, PC>>(transcript)
         .public(&pk.vk)
         .public(&PublicInputs(witness.public_inputs().to_vec()))
@@ -744,7 +714,7 @@ where
     let z = domain
         .interpolate(&z_values)
         .ok_or(PlonkError::DomainTooLarge)?;
-    let tape = tape.send(Scheme::new(pcs.commit(&coefficients(&z))));
+    let tape = tape.send(Scheme::new(pcs.commit(z.coefficients())));
     let (alpha, tape) = tape.challenge();
 
     // Round 3: quotient.
@@ -758,12 +728,12 @@ where
     let [q_l, q_r, q_o, q_m, q_c] = &pk.selectors;
     let gate =
         &(&(&(&(q_l * &a) + &(q_r * &b)) + &(q_o * &c)) + &(&(q_m * &a) * &b)) + &(q_c + &pi);
-    let x = UniPoly::new(vec![F::ZERO, F::ONE]);
-    let term = |w: &UniPoly<F>, s: &UniPoly<F>| &(w + &s.scale(beta)) + &constant(gamma);
+    let x = UniPoly::x();
+    let term = |w: &UniPoly<F>, s: &UniPoly<F>| &(w + &s.scale(beta)) + &UniPoly::constant(gamma);
     let identity = |k: usize| x.scale(pk.vk.value.shifts[k]);
     let perm_left =
         &(&(&term(&a, &identity(0)) * &term(&b, &identity(1))) * &term(&c, &identity(2))) * &z;
-    let z_shifted = shift(&z, domain.generator());
+    let z_shifted = z.dilate(domain.generator());
     let perm_right = &(&(&term(&a, &pk.sigmas[0]) * &term(&b, &pk.sigmas[1]))
         * &term(&c, &pk.sigmas[2]))
         * &z_shifted;
@@ -772,13 +742,13 @@ where
     let l1 = domain
         .interpolate(&l1_values)
         .ok_or(PlonkError::DomainTooLarge)?;
-    let boundary = &(&z - &constant(F::ONE)) * &l1;
+    let boundary = &(&z - &UniPoly::constant(F::ONE)) * &l1;
     let numerator =
         &(&gate + &(&perm_left - &perm_right).scale(alpha)) + &boundary.scale(alpha * alpha);
     let t = numerator
         .divide_by_vanishing(n)
         .ok_or(PlonkError::Unsatisfied)?;
-    let tape = tape.send(Scheme::new(pcs.commit(&coefficients(&t))));
+    let tape = tape.send(Scheme::new(pcs.commit(t.coefficients())));
     let (zeta, tape) = tape.challenge();
 
     // Round 4: evaluations and openings.
@@ -797,9 +767,9 @@ where
         &z,
         &t,
     ];
-    let openings = opened.map(|p| pcs.open(&coefficients(p), &zeta));
+    let openings = opened.map(|p| pcs.open(p.coefficients(), &zeta));
     let (z_shifted_value, z_shifted_proof) =
-        pcs.open(&coefficients(&z), &(zeta * domain.generator()));
+        pcs.open(z.coefficients(), &(zeta * domain.generator()));
     let evaluations = Evaluations {
         values: openings.clone().map(|(v, _)| v),
         z_shifted: z_shifted_value,

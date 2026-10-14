@@ -275,6 +275,67 @@ impl<F> UniPoly<F>
 where
     F: Field,
 {
+    /// The constant polynomial `c`.
+    ///
+    /// ```
+    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_poly::UniPoly;
+    /// assert_eq!(UniPoly::constant(F::new(4)).evaluate(F::new(9)), F::new(4));
+    /// ```
+    #[must_use]
+    pub fn constant(c: F) -> Self {
+        Self::new(vec![c])
+    }
+
+    /// The monomial `X`.
+    ///
+    /// ```
+    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_poly::UniPoly;
+    /// assert_eq!(UniPoly::<F>::x().evaluate(F::new(9)), F::new(9));
+    /// ```
+    #[must_use]
+    pub fn x() -> Self {
+        Self::new(vec![F::ZERO, F::ONE])
+    }
+
+    /// The stored coefficients, constant first.
+    ///
+    /// ```
+    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_poly::UniPoly;
+    /// assert_eq!(UniPoly::line(F::new(1), F::new(2)).coefficients(), &[F::new(1), F::new(2)]);
+    /// ```
+    #[must_use]
+    pub fn coefficients(&self) -> &[F] {
+        &self.coefficients
+    }
+
+    /// The polynomial `p(w X)`: coefficient `k` scaled by `w^k`.
+    ///
+    /// On a multiplicative domain with generator `w`, dilation by `w` shifts
+    /// the evaluations by one position, which is how a protocol refers to
+    /// the next row.
+    ///
+    /// ```
+    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_poly::UniPoly;
+    /// let p = UniPoly::new(vec![F::new(1), F::new(2), F::new(3)]);
+    /// assert_eq!(p.dilate(F::new(5)).evaluate(F::new(7)), p.evaluate(F::new(35)));
+    /// ```
+    #[must_use]
+    pub fn dilate(&self, w: F) -> Self {
+        let mut out = Vec::with_capacity(self.coefficients.len());
+        let mut power = F::ONE;
+        let mut k = 0;
+        while k < self.coefficients.len() {
+            out.push(self.coefficients[k] * power);
+            power = power * w;
+            k += 1;
+        }
+        Self::new(out)
+    }
+
     /// The polynomial `c * self`.
     ///
     /// ```
