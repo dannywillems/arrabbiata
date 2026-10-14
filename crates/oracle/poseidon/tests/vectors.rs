@@ -459,3 +459,54 @@ fn goldilocks_sponge_binds_its_input() {
     }
     assert_ne!(squeeze(&base), squeeze(&base[..19]));
 }
+
+/// The test vectors of the Poseidon reference implementation (Grassi,
+/// Khovratovich, Rechberger, Roy, Schofnegger, `hadeshash`,
+/// `code/test_vectors.txt`, fetched 2026-10-14) over the BN254 scalar
+/// field: `poseidonperm_x5_254_3` (width 3, 8 full and 57 partial rounds)
+/// and `poseidonperm_x5_254_5` (width 5, 8 full and 60 partial rounds),
+/// both on the input `0, 1, ..., t - 1`.
+mod hadeshash {
+    use arrabbiata_bn254::Fr;
+    use arrabbiata_field::{Field, PrimeField};
+    use arrabbiata_poseidon::{Poseidon, bn254_scalar};
+
+    const X5_254_3: [&str; 3] = [
+        "115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a",
+        "0fca49b798923ab0239de1c9e7a4a9a2210312b6a2f616d18b5a87f9b628ae29",
+        "0e7ae82e40091e63cbd4f16a6d16310b3729d4b6e138fcf54110e2867045a30c",
+    ];
+
+    const X5_254_5: [&str; 5] = [
+        "299c867db6c1fdd79dcefa40e4510b9837e60ebb1ce0663dbaa525df65250465",
+        "1148aaef609aa338b27dafd89bb98862d8bb2b429aceac47d86206154ffe053d",
+        "24febb87fed7462e23f6665ff9a0111f4044c38ee1672c1ac6b0637d34f24907",
+        "0eb08f6d809668a981c186beaf6110060707059576406b248e5d9cf6e78b3d3e",
+        "07748bc6877c9b82c8b98666ee9d0626ec7f5be4205f79ee8528ef1c4a376fc7",
+    ];
+
+    /// A big-endian hex string as a field element.
+    fn fr(hex: &str) -> Fr {
+        let mut limbs = [0u64; 4];
+        for (i, limb) in limbs.iter_mut().enumerate() {
+            let end = hex.len() - 16 * i;
+            *limb = u64::from_str_radix(&hex[end - 16..end], 16).unwrap();
+        }
+        Fr::from_limbs(&limbs).unwrap()
+    }
+
+    #[test]
+    fn width_3_matches_the_reference() {
+        let mut state = [Fr::ZERO, Fr::ONE, Fr::from_u64(2)];
+        bn254_scalar().permute_state(&mut state);
+        assert_eq!(state, X5_254_3.map(fr));
+    }
+
+    #[test]
+    fn width_5_matches_the_reference() {
+        let poseidon = Poseidon::<Fr, 5>::new(8, 60, 5);
+        let mut state: [Fr; 5] = core::array::from_fn(|i| Fr::from_u64(i as u64));
+        poseidon.permute_state(&mut state);
+        assert_eq!(state, X5_254_5.map(fr));
+    }
+}

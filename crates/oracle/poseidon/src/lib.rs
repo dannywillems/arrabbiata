@@ -138,6 +138,41 @@ where
         &self.mds
     }
 
+    /// The number of full rounds, half of them before the partial rounds
+    /// and half after.
+    ///
+    /// ```
+    /// use arrabbiata_poseidon::pallas_base;
+    /// assert_eq!(pallas_base().full_rounds(), 8);
+    /// ```
+    #[must_use]
+    pub const fn full_rounds(&self) -> usize {
+        self.full_rounds
+    }
+
+    /// The number of partial rounds.
+    ///
+    /// ```
+    /// use arrabbiata_poseidon::{bn254_scalar, pallas_base};
+    /// assert_eq!(pallas_base().partial_rounds(), 56);
+    /// assert_eq!(bn254_scalar().partial_rounds(), 57);
+    /// ```
+    #[must_use]
+    pub const fn partial_rounds(&self) -> usize {
+        self.partial_rounds
+    }
+
+    /// The exponent of the S-box.
+    ///
+    /// ```
+    /// use arrabbiata_poseidon::pallas_base;
+    /// assert_eq!(pallas_base().alpha(), 5);
+    /// ```
+    #[must_use]
+    pub const fn alpha(&self) -> u64 {
+        self.alpha
+    }
+
     fn apply_mds(&self, state: &mut [F; T]) {
         let mut out = [F::ZERO; T];
         let mut i = 0;
