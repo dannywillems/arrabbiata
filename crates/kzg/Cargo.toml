@@ -1,0 +1,22 @@
+[package]
+name = "arrabbiata-kzg"
+description = "The KZG polynomial commitment, over any pairing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-commit = { workspace = true }
+arrabbiata-curve = { workspace = true }
+arrabbiata-field = { workspace = true }
+arrabbiata-transcript = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-bn254 = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
