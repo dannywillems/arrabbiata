@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "arrabbiata-bn254"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-curve",
+ "arrabbiata-field",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-commit"
 version = "0.0.0"
 dependencies = [
@@ -15,6 +24,7 @@ dependencies = [
 name = "arrabbiata-curve"
 version = "0.0.0"
 dependencies = [
+ "arrabbiata-bn254",
  "arrabbiata-field",
  "arrabbiata-pasta",
  "arrabbiata-transcript",
@@ -32,9 +42,14 @@ dependencies = [
 name = "arrabbiata-folding"
 version = "0.0.0"
 dependencies = [
+ "arrabbiata-bn254",
  "arrabbiata-commit",
  "arrabbiata-field",
+ "arrabbiata-ipa",
+ "arrabbiata-kzg",
+ "arrabbiata-pasta",
  "arrabbiata-poly",
+ "arrabbiata-poseidon",
  "arrabbiata-relation",
  "arrabbiata-transcript",
  "proptest",
@@ -51,6 +66,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-ipa"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-commit",
+ "arrabbiata-curve",
+ "arrabbiata-field",
+ "arrabbiata-pasta",
+ "arrabbiata-poseidon",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
+name = "arrabbiata-kzg"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-bn254",
+ "arrabbiata-commit",
+ "arrabbiata-curve",
+ "arrabbiata-field",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-pasta"
 version = "0.0.0"
 dependencies = [
@@ -63,10 +103,16 @@ dependencies = [
 name = "arrabbiata-plonk"
 version = "0.0.0"
 dependencies = [
+ "arrabbiata-bn254",
  "arrabbiata-commit",
+ "arrabbiata-curve",
  "arrabbiata-field",
  "arrabbiata-frontend",
+ "arrabbiata-ipa",
+ "arrabbiata-kzg",
+ "arrabbiata-pasta",
  "arrabbiata-poly",
+ "arrabbiata-poseidon",
  "arrabbiata-transcript",
  "proptest",
 ]
@@ -83,6 +129,7 @@ dependencies = [
 name = "arrabbiata-poseidon"
 version = "0.0.0"
 dependencies = [
+ "arrabbiata-bn254",
  "arrabbiata-field",
  "arrabbiata-pasta",
  "arrabbiata-transcript",

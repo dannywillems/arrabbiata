@@ -41,6 +41,7 @@ use core::{
 };
 
 pub mod bigint;
+pub mod extension;
 pub mod goldilocks;
 pub mod laws;
 pub mod montgomery;

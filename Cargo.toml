@@ -39,6 +39,11 @@ arrabbiata-plonk = { path = "crates/plonk" }
 # must stay dependency-free so that Charon/Aeneas see only our code.
 proptest = "1.9"
 
+# Pairings and multi-scalar multiplications dominate the test suite; run
+# tests optimized.
+[profile.test]
+opt-level = 3
+
 [workspace.lints.rust]
 # Aeneas only handles safe Rust. Forbid, not deny: no crate may opt out.
 unsafe_code = "forbid"
