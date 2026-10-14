@@ -13,26 +13,48 @@ API documentation, with an example on every public item:
 
 ## status
 
-Early. The algebra, the relations, the folding scheme, the typed transcript
-and a toy vanilla PlonK are implemented and tested. The concrete field is the
-64-bit Goldilocks field; the curves of a cycle, a real polynomial commitment
-scheme, and the IVC verifier circuit are not implemented yet. The commitment
-schemes in the repository are reference schemes (publish the committed
-vector); they are binding but neither hiding nor succinct, and exist to test
-the protocols independently of the cryptography.
+Early, but end to end. Implemented and tested:
+
+- prime fields in Montgomery form, generic over the modulus (Goldilocks,
+  the Pasta fields, the BN254 fields), and quadratic extensions;
+- elliptic curves with complete addition formulas: the Pasta cycle (Pallas,
+  Vesta) and BN254 (`G1`, `G2`) with its pairing;
+- the Poseidon permutation over any prime field, matching the Zcash test
+  vectors on the Pasta fields;
+- two real polynomial commitment schemes: IPA over any curve (no trusted
+  setup) and KZG over any pairing;
+- constraint systems, the relaxed relation, and folding of homogeneous
+  relations of any degree (Nova is the degree-2 instance), with real
+  (Pedersen or KZG) commitments;
+- the typed Fiat-Shamir transcript;
+- vanilla PlonK, instantiated with KZG on BN254 and with IPA on Pallas and
+  on BN254;
+- the Lean statement and proof of completeness of folding.
+
+Not yet implemented: the IVC verifier circuit on the cycle, the permutation
+argument inside the folded relation, zero-knowledge (blinding), and
+performance work (the pairing, MSMs and polynomial products use the plain
+textbook algorithms). `IdentityCommitment` and `RevealCommitment` remain as
+reference schemes for tests: binding, but neither hiding nor succinct.
 
 ## crates
 
 | crate | contents | extracted to Lean |
 | --- | --- | --- |
-| `arrabbiata-field` | the `Field` trait; Goldilocks | yes |
+| `arrabbiata-field` | the `Field` traits; Montgomery prime fields; quadratic extensions; Goldilocks | yes |
 | `arrabbiata-poly` | typed columns, constraint expressions, graded evaluation and homogenization, NTT domains | yes |
 | `arrabbiata-transcript` | sponges over a permutation; typed Fiat-Shamir transcripts | yes |
 | `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family (univariate, multilinear) | yes |
 | `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
 | `arrabbiata-folding` | folding of homogeneous relations of any degree; Nova as a special case | yes |
+| `arrabbiata-curve` | short Weierstrass curves (complete formulas), MSM, the `Pairing` trait | not yet |
+| `arrabbiata-pasta` | Pallas, Vesta and their fields | not yet |
+| `arrabbiata-bn254` | BN254 fields, `G1`, `G2`, `Fq12`, the pairing | not yet |
+| `arrabbiata-poseidon` | Poseidon with Grain-generated constants; Pasta and BN254 instances | not yet |
+| `arrabbiata-ipa` | the inner-product argument polynomial commitment, over any curve | not yet |
+| `arrabbiata-kzg` | the KZG polynomial commitment, over any pairing | not yet |
 | `arrabbiata-frontend` | a typed circuit builder (vanilla PlonK arithmetization) | no |
-| `arrabbiata-plonk` | vanilla PlonK, as an end-to-end example | no |
+| `arrabbiata-plonk` | vanilla PlonK, with KZG (`kzg`) and IPA (`ipa`) | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
@@ -108,6 +130,8 @@ verify(&vk, &pcs, toy_sponge(0), witness.public_inputs(), proof).unwrap();
 - A PlonK prover only accepts a univariate polynomial commitment scheme; a
   folding scheme only accepts a commitment that is a module morphism (which a
   lattice commitment, homomorphic only for short vectors, is not).
+- A PlonK proof is typed by its commitment scheme: a KZG proof does not
+  type-check against an IPA verifier, even over the same field and curve.
 - A wire of a circuit cannot be used in another circuit, or escape its
   builder (generative lifetime brand).
 
@@ -115,9 +139,11 @@ Each of these is pinned by a `compile_fail` doctest.
 
 ## formal verification
 
-The `lean/` directory holds the Lean library. It currently proves the identity
-the folding scheme rests on, for every homogeneous polynomial over every
-commutative ring, so folding is complete for every circuit at once. See
+The `lean/` directory holds the Lean library, built in CI with the toolchain
+of the Aeneas Lean library. It proves the identity the folding scheme rests
+on, for every homogeneous polynomial over every commutative ring, so folding
+is complete for every circuit at once; the axiom census shows only `propext`,
+`Classical.choice` and `Quot.sound`. See
 [`lean/README.md`](lean/README.md) and [`docs/architecture.md`](docs/architecture.md).
 
 ## development

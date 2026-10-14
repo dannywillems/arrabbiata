@@ -27,9 +27,9 @@ extracted layer closes that gap.
 
 ## status
 
-- The specification library is written but has NOT been built yet: Mathlib
-  was not available in the session that wrote it. Run `make lean-setup` and
-  `make lean-build`; until both pass, treat the proofs as unchecked drafts.
+- The specification library builds in CI with `--wfail`, and
+  `fold_complete` depends only on `propext`, `Classical.choice` and
+  `Quot.sound`.
 - Charon and Aeneas are not installed; `make extract` reports it and stops.
 
 ## building

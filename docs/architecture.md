@@ -121,6 +121,68 @@ points is invertible), hence both witnesses, provided commitments are
 binding. Neither the extractor nor the knowledge-soundness theorem is
 formalized yet.
 
+### `arrabbiata-field`: Montgomery fields and extensions
+
+`MontField<C, N>` is a prime field on `N` limbs in Montgomery form. A
+configuration states only the modulus and a quadratic non-residue; `R`,
+`R^2`, `-p^-1 mod 2^64` and the two-adicity are computed by `const fn`, so
+the modulus is the single hand-written number, and it is checked from
+outside (primality, and the order of a curve over it). Multiplication is
+CIOS; inversion is Fermat; square roots are Tonelli-Shanks. The tests compare
+every operation with an independent reference (schoolbook product, binary
+long division) on 1-, 2- and 4-limb moduli. `Quadratic<C>` builds
+`F[u] / (u^2 - beta)`, inverting through the norm, which vanishes only at 0
+exactly because `beta` is not a square.
+
+### `arrabbiata-curve`, `arrabbiata-pasta`, `arrabbiata-bn254`
+
+Curves `y^2 = x^3 + b` over any field, in homogeneous projective
+coordinates, with the complete addition formula of Renes, Costello and
+Batina (EUROCRYPT 2016, Algorithm 7). Completeness holds on curves whose
+group has odd order, which covers Pallas, Vesta, BN254 `G1` and the BN254
+twist (of order `r (2p - r)`, both factors odd). One formula with no branch
+on point values is what makes the arithmetic short and uniform; it is
+checked against textbook affine addition.
+
+The Pasta curves form a cycle: Pallas over `Fp` has `q` points, Vesta over
+`Fq` has `p`. BN254 adds `Fq2`, the twist `G2`, `Fq12 = Fq2[w] / (w^6 - xi)`,
+and the reduced Tate pairing. The pairing is written for obvious
+correctness: a Miller loop over the bits of `r` with the point arithmetic in
+`G1` (affine, over `Fq`), line values in `Fq12`, vertical lines dropped
+because their values lie in `Fq6`, which the factor `p^6 - 1` of the final
+exponent kills (denominator elimination), and a plain exponentiation by
+`(p^12 - 1) / r`. Tests check bilinearity, non-degeneracy, the order of the
+target group, and that the final exponent times `r` is `p^12 - 1`.
+
+The `Pairing` trait abstracts the pairing (two groups with a common scalar
+field and a product-equals-one check), so KZG is written once for every
+pairing.
+
+### `arrabbiata-poseidon`
+
+Poseidon is a family: its round constants and MDS matrix are the output of
+the Grain LFSR seeded with the parameters, so an implementation must run the
+generator exactly as the reference does. Ours follows the reference script
+as implemented by `halo2_poseidon` (80-bit LFSR, self-shrinking, rejection
+sampling for the round constants, reduction for the Cauchy MDS points), and
+reproduces the Zcash permutation test vectors on both Pasta fields. The
+BN254 instances use the same generator; no compatibility with another BN254
+Poseidon is claimed.
+
+### `arrabbiata-ipa` and `arrabbiata-kzg`
+
+Both implement `PolynomialCommitment` with `Family = Univariate`, and
+`HomomorphicCommitment`, so both serve PlonK and folding.
+
+- IPA, over any curve: Pedersen vector commitments to the coefficients, and
+  the Bulletproofs inner-product argument as in Halo, with the value bound by
+  `U' = xi U`. No trusted setup; generators come from Poseidon over the base
+  field. The verifier is linear in the degree. Not hiding.
+- KZG, over any pairing: `C = [p(tau)] G`, opening proof `[q(tau)] G` for
+  `q = (p - v) / (X - z)`, checked with one pairing product. Binding needs
+  nobody to know `tau`; `insecure_setup` exists for tests, and a test shows
+  how knowing `tau` opens a commitment to any value.
+
 ### `arrabbiata-transcript`
 
 Two layers. `Transcript` is the untyped interface, implemented by a duplex
@@ -145,8 +207,8 @@ moves make the state linear, which is the discipline of session types
 (Honda, *Types for dyadic interaction*, CONCUR 1993). The design follows the
 typed Fiat-Shamir experiment of o1-labs/proof-systems#2094.
 
-The toy permutation and sponge are NOT cryptographic; a Poseidon permutation
-is future work.
+The toy permutation is NOT cryptographic and serves the tests of the generic
+code; protocols use the Poseidon sponge.
 
 ### `arrabbiata-commit`
 
@@ -192,9 +254,12 @@ multiplication.
   needs the permutation (or a lookup) argument as part of the folded relation.
 - **Circuit digest.** The folding transcript absorbs the whole constraint
   system on every fold. An IVC verifier needs a digest instead.
-- **The cycle of curves.** 255-bit fields (Pallas and Vesta), Pedersen and IPA
-  commitments, a Poseidon permutation, and the verifier circuit on the other
-  curve of the cycle are not implemented.
+- **The verifier circuit on the cycle.** The fields, curves, Poseidon and the
+  commitments of the cycle exist; the in-circuit verifier (non-native
+  arithmetic, EC gadgets, Poseidon gadget) does not yet.
+- **Performance.** Naive MSM (no Pippenger), Tate pairing over the bits of
+  `r` (not optimal ate), final exponentiation without Frobenius, schoolbook
+  polynomial products, unbatched PlonK openings.
 - **Generalized PlonK**, beyond the vanilla gate.
 - **Extraction.** Charon and Aeneas are not run yet. The first pilot is
   `arrabbiata-poly` (recursion over boxed expressions, generic algebras), to
@@ -208,13 +273,18 @@ multiplication.
 
 | law | tested (sampled) | proved in Lean |
 | --- | --- | --- |
-| field axioms (Goldilocks) | yes | by Mathlib for `ZMod p` |
+| field axioms (Goldilocks, Montgomery fields) | yes, against a long-division reference | by Mathlib for `ZMod p` |
+| curve group laws, complete formulas = affine | yes | no |
+| pairing bilinearity, non-degeneracy, order | yes | no |
+| Poseidon = reference permutation | yes, Zcash test vectors | no |
+| IPA and KZG completeness, binding, morphism | yes | no |
 | graded and homogeneous evaluation | yes | no |
-| folding identity | yes, on arbitrary relaxed pairs | yes, `fold_complete` (pending build) |
+| folding identity | yes, on arbitrary relaxed pairs | yes, `fold_complete` (built in CI) |
 | prover and verifier fold to the same instance | yes | by construction (shared function) |
 | commitment is a module morphism (reference scheme) | yes | no |
 | PCS completeness and evaluation binding (reference) | yes | no |
 | multilinear extension interpolates its table | yes | no |
-| PlonK completeness | yes, random circuits | no |
+| PlonK completeness | yes, random circuits, with the reference scheme, KZG and IPA | no |
+| folding with Pedersen and KZG commitments | yes | no |
 | PlonK rejects tampered evaluations, statements, transcripts | yes | no |
 | folding knowledge soundness | sanity tests only | no |
