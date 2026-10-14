@@ -1,0 +1,17 @@
+[package]
+name = "arrabbiata-field"
+description = "Abstract finite fields for Arrabbiata, and dependency-free concrete fields"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
