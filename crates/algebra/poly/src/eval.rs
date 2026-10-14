@@ -37,7 +37,7 @@
 //! }
 //!
 //! // f(x) = x^2 - 1, homogenized to degree 2: x^2 - u^2.
-//! let x = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
+//! let x = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
 //! let f = x.clone() * x - Expr::constant(F::ONE);
 //! let ring = Scalars::new();
 //! let (u, a, t) = (F::new(3), F::new(5), F::new(7));
@@ -81,8 +81,8 @@ use crate::{
 /// }
 ///
 /// type E = Expr<F, 2, 0>;
-/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::CURR);
 /// // f = a * b + a + 1, with components f_0 = 1, f_1 = a, f_2 = a * b.
 /// let f = a.clone() * b + a + E::constant(F::ONE);
 /// let row = Row([F::new(2), F::new(3)]);
@@ -105,17 +105,15 @@ where
     /// struct Row;
     /// impl Assignment<F, Scalars<F>, 1, 1> for Row {
     ///     fn witness(&self, _: &Scalars<F>, _: WitnessColumn<1>, r: Rotation) -> F {
-    ///         match r {
-    ///             Rotation::Curr => F::new(4),
-    ///             Rotation::Next => F::new(5),
-    ///         }
+    ///         // Row offsets 0 and 1; this row reads no other.
+    ///         if r == Rotation::NEXT { F::new(5) } else { F::new(4) }
     ///     }
     ///     fn fixed(&self, _: FixedColumn<1>, _: Rotation) -> F {
     ///         F::new(1)
     ///     }
     /// }
     /// let ring = Scalars::new();
-    /// assert_eq!(Row.witness(&ring, WitnessColumn::new::<0>(), Rotation::Next), F::new(5));
+    /// assert_eq!(Row.witness(&ring, WitnessColumn::new::<0>(), Rotation::NEXT), F::new(5));
     /// ```
     fn witness(&self, ring: &R, column: WitnessColumn<W>, rotation: Rotation) -> R::Elem;
 
@@ -130,16 +128,14 @@ where
     /// struct Row;
     /// impl Assignment<F, Scalars<F>, 1, 1> for Row {
     ///     fn witness(&self, _: &Scalars<F>, _: WitnessColumn<1>, r: Rotation) -> F {
-    ///         match r {
-    ///             Rotation::Curr => F::new(4),
-    ///             Rotation::Next => F::new(5),
-    ///         }
+    ///         // Row offsets 0 and 1; this row reads no other.
+    ///         if r == Rotation::NEXT { F::new(5) } else { F::new(4) }
     ///     }
     ///     fn fixed(&self, _: FixedColumn<1>, _: Rotation) -> F {
     ///         F::new(1)
     ///     }
     /// }
-    /// assert_eq!(Row.fixed(FixedColumn::new::<0>(), Rotation::Curr), F::new(1));
+    /// assert_eq!(Row.fixed(FixedColumn::new::<0>(), Rotation::CURR), F::new(1));
     /// ```
     fn fixed(&self, column: FixedColumn<X>, rotation: Rotation) -> F;
 }
@@ -165,8 +161,8 @@ where
 /// }
 ///
 /// type E = Expr<F, 2, 0>;
-/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::CURR);
 /// // f = a * b + a + 1, with components f_0 = 1, f_1 = a, f_2 = a * b.
 /// let f = a.clone() * b + a + E::constant(F::ONE);
 /// let row = Row([F::new(2), F::new(3)]);
@@ -227,8 +223,8 @@ where
 /// }
 ///
 /// type E = Expr<F, 2, 0>;
-/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::CURR);
 /// // f = a * b + a + 1, with components f_0 = 1, f_1 = a, f_2 = a * b.
 /// let f = a.clone() * b + a + E::constant(F::ONE);
 /// let row = Row([F::new(2), F::new(3)]);
@@ -329,8 +325,8 @@ where
 /// }
 ///
 /// type E = Expr<F, 2, 0>;
-/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::CURR);
 /// // f = a * b + a + 1, with components f_0 = 1, f_1 = a, f_2 = a * b.
 /// let f = a.clone() * b + a + E::constant(F::ONE);
 /// let row = Row([F::new(2), F::new(3)]);

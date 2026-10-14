@@ -22,11 +22,9 @@ struct Row {
     fixed: [[F; 2]; X],
 }
 
+/// The slot of a rotation drawn by `arb_rotation` (offset 0 or 1).
 const fn slot(rotation: Rotation) -> usize {
-    match rotation {
-        Rotation::Curr => 0,
-        Rotation::Next => 1,
-    }
+    rotation.offset() as usize
 }
 
 impl Assignment<F, Scalars<F>, W, X> for Row {
@@ -87,7 +85,7 @@ fn arb_row() -> impl Strategy<Value = Row> {
 }
 
 fn arb_rotation() -> impl Strategy<Value = Rotation> {
-    prop_oneof![Just(Rotation::Curr), Just(Rotation::Next)]
+    prop_oneof![Just(Rotation::CURR), Just(Rotation::NEXT)]
 }
 
 fn arb_expr() -> impl Strategy<Value = E> {
@@ -228,9 +226,9 @@ proptest! {
 
 #[test]
 fn degree_ignores_fixed_columns() {
-    let q = E::fixed(FixedColumn::new::<0>(), Rotation::Curr);
-    let a = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-    let b = E::witness(WitnessColumn::new::<1>(), Rotation::Next);
+    let q = E::fixed(FixedColumn::new::<0>(), Rotation::CURR);
+    let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+    let b = E::witness(WitnessColumn::new::<1>(), Rotation::NEXT);
     assert_eq!((q.clone() * q * a.clone() * b).degree(), 2);
     assert_eq!(a.degree(), 1);
     assert_eq!(E::constant(F::ONE).degree(), 0);
@@ -238,9 +236,9 @@ fn degree_ignores_fixed_columns() {
 
 #[test]
 fn rotation_wraps() {
-    assert_eq!(Rotation::Next.apply(3, 4), 0);
-    assert_eq!(Rotation::Next.apply(1, 4), 2);
-    assert_eq!(Rotation::Curr.apply(3, 4), 3);
+    assert_eq!(Rotation::NEXT.apply(3, 4), 0);
+    assert_eq!(Rotation::NEXT.apply(1, 4), 2);
+    assert_eq!(Rotation::CURR.apply(3, 4), 3);
 }
 
 mod domain {

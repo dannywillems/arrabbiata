@@ -1,7 +1,8 @@
 //! Gadgets and gate sets.
 //!
 //! A [`Gadget`] is a named list of polynomial constraints over the `W`
-//! witness columns and `X` fixed columns of a row and of the next row. A
+//! witness columns and `X` fixed columns, each read at a fixed offset from
+//! the constrained row (a [`Rotation`](arrabbiata_poly::Rotation)). A
 //! circuit activates at most one gadget per row, through a selector: the
 //! protocol multiplies every constraint of gadget `g` by the selector
 //! column `q_g`, so a gadget constrains exactly the rows that turn it on.
@@ -25,8 +26,8 @@
 //! impl Gadget<F, 2, 0> for Square {
 //!     const NAME: &'static str = "square";
 //!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
 //!         vec![b - a.clone() * a]
 //!     }
 //! }
@@ -36,9 +37,9 @@
 //! impl Gadget<F, 2, 0> for Step {
 //!     const NAME: &'static str = "step";
 //!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::Curr);
-//!         let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::Next);
+//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+//!         let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
 //!         vec![next - a - b]
 //!     }
 //! }
@@ -54,10 +55,70 @@ use core::marker::PhantomData;
 use arrabbiata_field::Field;
 use arrabbiata_poly::{Expr, Variable};
 
+/// The selector of one of `Q` gadgets: an index below `Q`.
+///
+/// A row of a circuit holds an `Option<Selector<Q>>`: no gadget, or exactly
+/// one. The selector columns are derived from these, so they are one-hot by
+/// construction.
+///
+/// ```
+/// use arrabbiata_plonk::gate::Selector;
+/// let s = Selector::<3>::new::<2>();
+/// assert_eq!(s.index(), 2);
+/// assert_eq!(Selector::<3>::try_new(3), None);
+/// ```
+///
+/// An index out of range is rejected at compile time:
+///
+/// ```compile_fail
+/// use arrabbiata_plonk::gate::Selector;
+/// let _ = Selector::<3>::new::<3>();
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Selector<const Q: usize>(usize);
+
+impl<const Q: usize> Selector<Q> {
+    /// The selector `I`, checked against `Q` at compile time.
+    ///
+    /// ```
+    /// use arrabbiata_plonk::gate::Selector;
+    /// assert_eq!(Selector::<2>::new::<0>().index(), 0);
+    /// ```
+    #[must_use]
+    pub const fn new<const I: usize>() -> Self {
+        const { assert!(I < Q, "selector index out of range") };
+        Self(I)
+    }
+
+    /// The selector `index`, or `None` if it is not below `Q`.
+    ///
+    /// ```
+    /// use arrabbiata_plonk::gate::Selector;
+    /// assert!(Selector::<2>::try_new(1).is_some());
+    /// assert!(Selector::<2>::try_new(2).is_none());
+    /// ```
+    #[must_use]
+    pub const fn try_new(index: usize) -> Option<Self> {
+        if index < Q { Some(Self(index)) } else { None }
+    }
+
+    /// The index, below `Q`.
+    ///
+    /// ```
+    /// use arrabbiata_plonk::gate::Selector;
+    /// assert_eq!(Selector::<4>::new::<3>().index(), 3);
+    /// ```
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
 /// A gadget: constraints that hold on every row whose selector is on.
 ///
-/// The constraints may read the `W` witness and `X` fixed columns at the
-/// current and the next row. They must not mention the selector: the
+/// The constraints may read the `W` witness and `X` fixed columns at any
+/// [`Rotation`](arrabbiata_poly::Rotation) of the constrained row. They must not mention the
+/// selector: the
 /// protocol multiplies each of them by it.
 ///
 /// ```
@@ -71,8 +132,8 @@ use arrabbiata_poly::{Expr, Variable};
 /// impl Gadget<F, 2, 0> for SBox {
 ///     const NAME: &'static str = "sbox";
 ///     fn constraints() -> Vec<Expr<F, 2, 0>> {
-///         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-///         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+///         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+///         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
 ///         let a2 = a.clone() * a.clone();
 ///         vec![b - a2.clone() * a2 * a]
 ///     }
@@ -244,6 +305,24 @@ pub(crate) fn total_degree<F, const W: usize, const X: usize>(e: &Expr<F, W, X>)
         }
         Expr::Mul(a, b) => total_degree(a) + total_degree(b),
     }
+}
+
+/// The smallest and largest row offsets the gadget turned on by `selector`
+/// reads, `(0, 0)` for a gadget that reads only its own row.
+pub(crate) fn span<F, G, const W: usize, const X: usize>(selector: usize) -> (i32, i32)
+where
+    F: Field,
+    G: GateSet<F, W, X>,
+{
+    let mut vars = Vec::new();
+    for c in G::constraints(selector) {
+        variables(&c, &mut vars);
+    }
+    vars.iter()
+        .map(|v| match v {
+            Variable::Witness(_, r) | Variable::Fixed(_, r) => r.offset(),
+        })
+        .fold((0, 0), |(lo, hi), k| (lo.min(k), hi.max(k)))
 }
 
 /// Every variable of `e`, in syntactic order, with repetitions.

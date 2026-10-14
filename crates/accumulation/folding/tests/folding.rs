@@ -11,7 +11,7 @@ use arrabbiata_field::Field;
 use arrabbiata_folding::{Fold, Nova};
 use arrabbiata_ipa::Ipa;
 use arrabbiata_pasta::{Fq as F, Pallas};
-use arrabbiata_poly::Scalars;
+use arrabbiata_poly::{Expr, FixedColumn, Rotation, Scalars, WitnessColumn};
 use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
 use arrabbiata_relation::{
     ConstraintSystem, RelaxedInstance, RelaxedWitness, RowView,
@@ -104,7 +104,49 @@ fn arb_sq_pair() -> impl Strategy<
     })
 }
 
+/// A Nova-shaped relation (one column, degree 2) reading other rows than
+/// the next one: `q (a(-1) a(+2) - a)`, with `q` off on the first row.
+fn rotated() -> ConstraintSystem<F, Single, 1, 1, 1, 2> {
+    type E = Expr<F, 1, 1>;
+    let a = |k| E::witness(WitnessColumn::new::<0>(), Rotation::new(k));
+    let q = E::fixed(FixedColumn::new::<0>(), Rotation::CURR);
+    let mut selector = vec![F::ONE; ROWS];
+    selector[0] = F::ZERO;
+    let constraint = q * (a(-1) * a(2) - a(0));
+    ConstraintSystem::new(
+        core::num::NonZeroUsize::new(ROWS).unwrap(),
+        [selector],
+        [constraint],
+    )
+    .unwrap()
+}
+
+fn arb_rotated_pair() -> impl Strategy<
+    Value = (
+        RelaxedInstance<F, C, NoCoefficients, 1>,
+        RelaxedWitness<F, 1>,
+    ),
+> {
+    (arb_f(), arb_columns::<1>())
+        .prop_map(|(u, columns)| satisfying(&rotated(), u, NoCoefficients, columns))
+}
+
 proptest! {
+    /// Folding needs nothing of rotations but their action on rows: a
+    /// relation reading the previous row and the row after next folds as
+    /// Nova does.
+    #[test]
+    fn completeness_with_other_rotations(a in arb_rotated_pair(), b in arb_rotated_pair(), seed in any::<u64>()) {
+        let cs = rotated();
+        let ck = key();
+        cs.check_relaxed(&ck, &a.0, &a.1).unwrap();
+        let (inst, wit, proof, _) =
+            SqScheme::prove(&cs, &ck, vesta_sponge(seed), (&a.0, &a.1), (&b.0, &b.1)).unwrap();
+        prop_assert!(cs.check_relaxed(&ck, &inst, &wit).is_ok());
+        let (verified, _) = SqScheme::verify(&cs, &ck, vesta_sponge(seed), &a.0, &b.0, proof);
+        prop_assert_eq!(verified, inst);
+    }
+
     /// Completeness: folding two satisfying relaxed pairs gives a satisfying
     /// pair, and the verifier computes the prover's instance.
     #[test]

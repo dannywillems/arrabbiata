@@ -93,7 +93,7 @@ impl<F, const W: usize> Trace<F, W> {
 /// let cs = examples::squaring::<Fq>(4);
 /// let trace = examples::squaring_trace(&cs, 3);
 /// let row = RowView::new(trace.columns(), cs.fixed_columns(), 1, cs.num_rows());
-/// let next = row.witness(&Scalars::new(), WitnessColumn::new::<0>(), Rotation::Next);
+/// let next = row.witness(&Scalars::new(), WitnessColumn::new::<0>(), Rotation::NEXT);
 /// assert_eq!(next, F::from_u64(81));
 /// ```
 #[derive(Clone, Copy, Debug)]
@@ -190,7 +190,7 @@ where
     /// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
     /// use arrabbiata_relation::{ConstraintSystem, aggregation::Single, error::ShapeError};
     ///
-    /// let x = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
+    /// let x = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
     /// let cubic = x.clone() * x.clone() * x;
     /// let rows = NonZeroUsize::new(4).unwrap();
     /// // A cubic constraint does not fit a degree-2 system.
@@ -648,13 +648,6 @@ where
     }
 }
 
-const fn rotation_code(rotation: Rotation) -> u64 {
-    match rotation {
-        Rotation::Curr => 0,
-        Rotation::Next => 1,
-    }
-}
-
 fn absorb_expr<F, T, const W: usize, const X: usize>(expr: &Expr<F, W, X>, transcript: &mut T)
 where
     F: Field,
@@ -668,12 +661,12 @@ where
         Expr::Variable(Variable::Witness(column, rotation)) => {
             transcript.absorb(F::from_u64(1));
             absorb_length(transcript, column.index());
-            transcript.absorb(F::from_u64(rotation_code(*rotation)));
+            transcript.absorb(F::from_u64(Rotation::code(*rotation)));
         }
         Expr::Variable(Variable::Fixed(column, rotation)) => {
             transcript.absorb(F::from_u64(2));
             absorb_length(transcript, column.index());
-            transcript.absorb(F::from_u64(rotation_code(*rotation)));
+            transcript.absorb(F::from_u64(Rotation::code(*rotation)));
         }
         Expr::Neg(a) => {
             transcript.absorb(F::from_u64(3));

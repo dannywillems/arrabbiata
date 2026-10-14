@@ -12,7 +12,7 @@
 //! use arrabbiata_poly::{Rotation, Variable, WitnessColumn};
 //!
 //! let a = WitnessColumn::<2>::new::<1>();
-//! let v: Variable<2, 0> = Variable::Witness(a, Rotation::Next);
+//! let v: Variable<2, 0> = Variable::Witness(a, Rotation::NEXT);
 //! assert_eq!(a.index(), 1);
 //! # let _ = v;
 //! ```
@@ -122,44 +122,135 @@ impl<const X: usize> FixedColumn<X> {
     }
 }
 
-/// Which row a variable refers to, relative to the row being constrained.
+/// Which row a variable refers to, relative to the row being constrained:
+/// an offset `k` in `Z`, acting on the rows `Z/n` by translation,
+/// `i |-> i + k mod n`.
 ///
-/// Rows wrap around: on the last row, [`Rotation::Next`] is the first row.
+/// Rows wrap around: on the last row, [`Rotation::NEXT`] is the first row,
+/// and on the first row [`Rotation::PREV`] is the last. The action is a
+/// group action of `Z` (through `Z -> Z/n`): `apply` of a composite is the
+/// composite of the `apply`s, and `apply` of `n` is the identity.
 ///
 /// ```
 /// use arrabbiata_poly::Rotation;
-/// assert_eq!(Rotation::Next.apply(7, 8), 0);
+/// assert_eq!(Rotation::NEXT.apply(7, 8), 0);
+/// assert_eq!(Rotation::PREV.apply(0, 8), 7);
+/// assert_eq!(Rotation::new(10).apply(3, 8), 5);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Rotation {
-    /// The constrained row.
-    Curr,
-    /// The row after it.
-    Next,
-}
+pub struct Rotation(i32);
 
 impl Rotation {
-    /// The row index this rotation designates from `row`, in a trace of
-    /// `num_rows` rows. `num_rows` must be non-zero.
+    /// The constrained row: the identity.
     ///
     /// ```
     /// use arrabbiata_poly::Rotation;
-    /// assert_eq!(Rotation::Curr.apply(3, 8), 3);
-    /// assert_eq!(Rotation::Next.apply(3, 8), 4);
-    /// assert_eq!(Rotation::Next.apply(7, 8), 0);
+    /// assert_eq!(Rotation::CURR.offset(), 0);
+    /// ```
+    pub const CURR: Self = Self(0);
+
+    /// The row after the constrained row.
+    ///
+    /// ```
+    /// use arrabbiata_poly::Rotation;
+    /// assert_eq!(Rotation::NEXT.offset(), 1);
+    /// ```
+    pub const NEXT: Self = Self(1);
+
+    /// The row before the constrained row.
+    ///
+    /// ```
+    /// use arrabbiata_poly::Rotation;
+    /// assert_eq!(Rotation::PREV.offset(), -1);
+    /// ```
+    pub const PREV: Self = Self(-1);
+
+    /// The rotation by `offset` rows.
+    ///
+    /// ```
+    /// use arrabbiata_poly::Rotation;
+    /// assert_eq!(Rotation::new(1), Rotation::NEXT);
+    /// ```
+    #[must_use]
+    pub const fn new(offset: i32) -> Self {
+        Self(offset)
+    }
+
+    /// The offset in rows.
+    ///
+    /// ```
+    /// use arrabbiata_poly::Rotation;
+    /// assert_eq!(Rotation::new(-3).offset(), -3);
+    /// ```
+    #[must_use]
+    pub const fn offset(self) -> i32 {
+        self.0
+    }
+
+    /// The rotation by `self` then `other`, or `None` if the offset
+    /// overflows an `i32`.
+    ///
+    /// ```
+    /// use arrabbiata_poly::Rotation;
+    /// assert_eq!(Rotation::NEXT.compose(Rotation::PREV), Some(Rotation::CURR));
+    /// assert_eq!(Rotation::new(i32::MAX).compose(Rotation::NEXT), None);
+    /// ```
+    #[must_use]
+    pub const fn compose(self, other: Self) -> Option<Self> {
+        match self.0.checked_add(other.0) {
+            Some(offset) => Some(Self(offset)),
+            None => None,
+        }
+    }
+
+    /// The inverse rotation, or `None` for `i32::MIN`, whose negation is
+    /// not an `i32`.
+    ///
+    /// ```
+    /// use arrabbiata_poly::Rotation;
+    /// assert_eq!(Rotation::NEXT.inverse(), Some(Rotation::PREV));
+    /// assert_eq!(Rotation::new(i32::MIN).inverse(), None);
+    /// ```
+    #[must_use]
+    pub const fn inverse(self) -> Option<Self> {
+        match self.0.checked_neg() {
+            Some(offset) => Some(Self(offset)),
+            None => None,
+        }
+    }
+
+    /// The zigzag code of the offset, `0, -1, 1, -2, 2, ... |-> 0, 1, 2, 3,
+    /// 4, ...`: an injection of `i32` into `u64` (into `0..2^32`), used to
+    /// absorb a rotation into a transcript.
+    ///
+    /// ```
+    /// use arrabbiata_poly::Rotation;
+    /// assert_eq!(Rotation::CURR.code(), 0);
+    /// assert_eq!(Rotation::PREV.code(), 1);
+    /// assert_eq!(Rotation::NEXT.code(), 2);
+    /// assert_eq!(Rotation::new(i32::MIN).code(), u32::MAX as u64);
+    /// ```
+    #[must_use]
+    pub const fn code(self) -> u64 {
+        let k = self.0 as i64;
+        ((k << 1) ^ (k >> 63)) as u64
+    }
+
+    /// The row this rotation designates from `row`, in a trace of
+    /// `num_rows` rows: `row + offset mod num_rows`. `num_rows` must be
+    /// non-zero.
+    ///
+    /// ```
+    /// use arrabbiata_poly::Rotation;
+    /// assert_eq!(Rotation::CURR.apply(3, 8), 3);
+    /// assert_eq!(Rotation::NEXT.apply(3, 8), 4);
+    /// assert_eq!(Rotation::NEXT.apply(7, 8), 0);
+    /// assert_eq!(Rotation::new(-9).apply(0, 8), 7);
     /// ```
     #[must_use]
     pub const fn apply(self, row: usize, num_rows: usize) -> usize {
-        match self {
-            Self::Curr => row,
-            Self::Next => {
-                if row + 1 == num_rows {
-                    0
-                } else {
-                    row + 1
-                }
-            }
-        }
+        let n = num_rows as i128;
+        (row as i128 + self.0 as i128).rem_euclid(n) as usize
     }
 }
 
@@ -167,7 +258,7 @@ impl Rotation {
 ///
 /// ```
 /// use arrabbiata_poly::{FixedColumn, Rotation, Variable};
-/// let selector: Variable<1, 1> = Variable::Fixed(FixedColumn::new::<0>(), Rotation::Curr);
+/// let selector: Variable<1, 1> = Variable::Fixed(FixedColumn::new::<0>(), Rotation::CURR);
 /// # let _ = selector;
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

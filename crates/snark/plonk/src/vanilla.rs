@@ -45,7 +45,7 @@ use arrabbiata_poly::{Expr, FixedColumn, Rotation, WitnessColumn};
 use crate::{
     PlonkError,
     circuit::{Circuit, Witness},
-    gate::Gadget,
+    gate::{Gadget, Selector},
 };
 
 /// The arithmetic gate of the PlonK paper,
@@ -70,14 +70,14 @@ where
 
     fn constraints() -> Vec<Expr<F, 3, 5>> {
         type E<F> = Expr<F, 3, 5>;
-        let a = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-        let b = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::Curr);
-        let c = E::<F>::witness(WitnessColumn::new::<2>(), Rotation::Curr);
-        let q_l = E::<F>::fixed(FixedColumn::new::<0>(), Rotation::Curr);
-        let q_r = E::<F>::fixed(FixedColumn::new::<1>(), Rotation::Curr);
-        let q_o = E::<F>::fixed(FixedColumn::new::<2>(), Rotation::Curr);
-        let q_m = E::<F>::fixed(FixedColumn::new::<3>(), Rotation::Curr);
-        let q_c = E::<F>::fixed(FixedColumn::new::<4>(), Rotation::Curr);
+        let a = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+        let b = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+        let c = E::<F>::witness(WitnessColumn::new::<2>(), Rotation::CURR);
+        let q_l = E::<F>::fixed(FixedColumn::new::<0>(), Rotation::CURR);
+        let q_r = E::<F>::fixed(FixedColumn::new::<1>(), Rotation::CURR);
+        let q_o = E::<F>::fixed(FixedColumn::new::<2>(), Rotation::CURR);
+        let q_m = E::<F>::fixed(FixedColumn::new::<3>(), Rotation::CURR);
+        let q_c = E::<F>::fixed(FixedColumn::new::<4>(), Rotation::CURR);
         vec![q_l * a.clone() + q_r * b.clone() + q_o * c + q_m * a * b + q_c]
     }
 }
@@ -158,14 +158,14 @@ where
     }
     // A public row is bound by the public-input identity; its gate (which
     // the frontend writes as `a + PI = 0`) is turned off.
-    let mut selector = vec![F::ONE; n];
+    let mut gadgets = vec![Some(Selector::new::<0>()); n];
     for row in circuit.public_rows() {
-        selector[*row] = F::ZERO;
+        gadgets[*row] = None;
     }
     Circuit::new(
         n,
         fixed,
-        [selector],
+        gadgets,
         circuit.sigma().to_vec(),
         circuit.public_rows().to_vec(),
     )

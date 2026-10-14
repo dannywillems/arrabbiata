@@ -10,7 +10,7 @@
 //!   [`Powers`]. The relation has degree 3 and a fold has two cross-terms.
 //!
 //! Both gate their constraints with a selector that is off on the last row,
-//! since [`Rotation::Next`] wraps around.
+//! since [`Rotation::NEXT`] wraps around.
 //!
 //! ```
 //! use arrabbiata_pasta::Fq;
@@ -89,9 +89,9 @@ pub fn squaring<F>(num_rows: usize) -> Squaring<F>
 where
     F: Field,
 {
-    let q = Expr::<F, 1, 1>::fixed(FixedColumn::new::<0>(), Rotation::Curr);
-    let curr = Expr::<F, 1, 1>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-    let next = Expr::<F, 1, 1>::witness(WitnessColumn::new::<0>(), Rotation::Next);
+    let q = Expr::<F, 1, 1>::fixed(FixedColumn::new::<0>(), Rotation::CURR);
+    let curr = Expr::<F, 1, 1>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+    let next = Expr::<F, 1, 1>::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
     let constraint = q * (next - curr.clone() * curr);
     match Squaring::new(rows(num_rows), [selector(num_rows)], [constraint]) {
         Ok(cs) => cs,
@@ -144,11 +144,11 @@ where
     F: Field,
 {
     type E<F> = Expr<F, 2, 1>;
-    let q = E::<F>::fixed(FixedColumn::new::<0>(), Rotation::Curr);
-    let x = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-    let y = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::Curr);
-    let x_next = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::Next);
-    let y_next = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::Next);
+    let q = E::<F>::fixed(FixedColumn::new::<0>(), Rotation::CURR);
+    let x = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+    let y = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+    let x_next = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
+    let y_next = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::NEXT);
     let shift = q.clone() * (x_next - y.clone());
     let product = q * (y_next - x * y);
     match Fibonacci::new(rows(num_rows), [selector(num_rows)], [shift, product]) {

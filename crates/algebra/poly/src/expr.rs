@@ -14,9 +14,9 @@
 //! use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
 //!
 //! type E = Expr<Goldilocks, 3, 0>;
-//! let a = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-//! let b = E::witness(WitnessColumn::new::<1>(), Rotation::Curr);
-//! let c = E::witness(WitnessColumn::new::<2>(), Rotation::Curr);
+//! let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+//! let b = E::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+//! let c = E::witness(WitnessColumn::new::<2>(), Rotation::CURR);
 //! let gate = a.clone() * b - c;
 //! assert_eq!(gate.degree(), 2);
 //! ```
@@ -37,10 +37,10 @@ use crate::column::{FixedColumn, Rotation, Variable, WitnessColumn};
 ///
 /// // A selector-gated multiplication gate: q * (a * b - c).
 /// type E = Expr<F, 3, 1>;
-/// let q = E::fixed(FixedColumn::new::<0>(), Rotation::Curr);
-/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::Curr);
-/// let c = E::witness(WitnessColumn::new::<2>(), Rotation::Curr);
+/// let q = E::fixed(FixedColumn::new::<0>(), Rotation::CURR);
+/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+/// let c = E::witness(WitnessColumn::new::<2>(), Rotation::CURR);
 /// let gate = q * (a * b - c);
 /// // The selector is fixed, hence of degree zero.
 /// assert_eq!(gate.degree(), 2);
@@ -80,7 +80,7 @@ where
     /// ```
     /// use arrabbiata_field::Goldilocks as F;
     /// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-    /// let next = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::Next);
+    /// let next = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
     /// assert_eq!(next.degree(), 1);
     /// ```
     #[must_use]
@@ -93,7 +93,7 @@ where
     /// ```
     /// use arrabbiata_field::Goldilocks as F;
     /// use arrabbiata_poly::{Expr, FixedColumn, Rotation};
-    /// let q = Expr::<F, 0, 1>::fixed(FixedColumn::new::<0>(), Rotation::Curr);
+    /// let q = Expr::<F, 0, 1>::fixed(FixedColumn::new::<0>(), Rotation::CURR);
     /// assert_eq!(q.degree(), 0);
     /// ```
     #[must_use]
@@ -112,7 +112,7 @@ where
     /// ```
     /// use arrabbiata_field::Goldilocks as F;
     /// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-    /// let x = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
+    /// let x = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
     /// // x^5 - x^5 denotes zero but has syntactic degree 5.
     /// let x5 = x.clone() * x.clone() * x.clone() * x.clone() * x;
     /// assert_eq!((x5.clone() - x5).degree(), 5);

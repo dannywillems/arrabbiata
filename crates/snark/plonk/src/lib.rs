@@ -3,7 +3,8 @@
 //! The arithmetization is the PlonKish one of the original Arrabbiata
 //! circuits: a table of `W` witness columns and `X` fixed columns, a set of
 //! [gadgets](gate::Gadget) each turned on by its own selector, at most one
-//! gadget per row, constraints that read the current and the next row, copy
+//! gadget per row (one-hot by construction), constraints that read any row
+//! at a fixed offset from the constrained one ([`Rotation`]), copy
 //! constraints between any two witness cells, and public inputs in witness
 //! column 0. The gate set is a type ([`gate::GateSet`]), so the index of a
 //! selector is the position of its gadget in the type, and the protocol
@@ -31,8 +32,8 @@
 //! impl Gadget<F, 2, 0> for SBox {
 //!     const NAME: &'static str = "sbox";
 //!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
 //!         let a2 = a.clone() * a.clone();
 //!         vec![b - a2.clone() * a2 * a]
 //!     }
@@ -43,8 +44,8 @@
 //! impl Gadget<F, 2, 0> for Chain {
 //!     const NAME: &'static str = "chain";
 //!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::Curr);
-//!         let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::Next);
+//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+//!         let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
 //!         vec![next - b]
 //!     }
 //! }
@@ -90,8 +91,8 @@
 //!    ranges over the `J` constraints of all gadgets, `L_P` is 1 on the
 //!    public rows and 0 elsewhere, and `PI` interpolates the public inputs;
 //! 4. the verifier sends `zeta`; the prover sends every polynomial at
-//!    `zeta`, `z` and the columns read at the next row at `zeta w`, with
-//!    their opening proofs ([`Opened`]);
+//!    `zeta`, `z` at `zeta w`, and each column read at a rotation `k` at
+//!    `zeta w^k`, with their opening proofs ([`Opened`]);
 //! 5. the verifier checks the openings and the identity at `zeta`.
 //!
 //! The quotient is computed on a coset of a domain of size at least
@@ -116,7 +117,7 @@ pub mod ipa;
 pub mod kzg;
 pub mod vanilla;
 
-use alloc::{vec, vec::Vec};
+use alloc::{collections::BTreeSet, vec, vec::Vec};
 use core::{array, fmt, iter, marker::PhantomData};
 
 use arrabbiata_commit::{PolynomialCommitment, Univariate};
@@ -255,7 +256,15 @@ impl<PC, T, const TAG: u64> Label for Scheme<PC, T, TAG>
 where
     PC: Label,
 {
-    const LABEL: u64 = PC::LABEL.rotate_left(16) ^ TAG;
+    const LABEL: u64 = message_label(PC::LABEL, TAG);
+}
+
+/// The label of a message tagged `tag` from the scheme labelled `scheme`:
+/// the scheme label rotated by 16 bits, combined with the tag. For scheme
+/// labels below `2^48` the two occupy disjoint bits, so the map is
+/// injective in the pair.
+const fn message_label(scheme: u64, tag: u64) -> u64 {
+    scheme.rotate_left(16) ^ tag
 }
 
 impl<F, PC, T, const TAG: u64> Absorb<F> for Scheme<PC, T, TAG>
@@ -390,14 +399,15 @@ where
 ///
 /// The order, used by [`Opened::iter`] and [`PlonkError::Opening`], is:
 /// the witness, fixed, selector and permutation polynomials, `z` and `t`
-/// at `zeta`; then `z`, the witness columns of [`Opened::next_witness`]
-/// and the fixed columns of [`Opened::next_fixed`] at `zeta w`.
+/// at `zeta`; `z` at `zeta w`; then each pair `(column, k)` of
+/// [`Opened::rotated_witness`] and of [`Opened::rotated_fixed`] at
+/// `zeta w^k`.
 ///
 /// ```
 /// use arrabbiata_plonk::Opened;
 /// let o = Opened::<u8, 1, 1, 1> {
 ///     witness: [0], fixed: [1], selectors: [2], sigmas: [3], z: 4, t: 5,
-///     z_next: 6, witness_next: vec![], fixed_next: vec![],
+///     z_next: 6, witness_rotated: vec![], fixed_rotated: vec![],
 /// };
 /// assert_eq!(o.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5, 6]);
 /// ```
@@ -417,10 +427,12 @@ pub struct Opened<T, const W: usize, const X: usize, const Q: usize> {
     pub t: T,
     /// The grand product at `zeta w`.
     pub z_next: T,
-    /// The witness polynomials read at the next row, at `zeta w`.
-    pub witness_next: Vec<T>,
-    /// The fixed polynomials read at the next row, at `zeta w`.
-    pub fixed_next: Vec<T>,
+    /// The witness polynomials read at a rotation `k`, at `zeta w^k`, in
+    /// the order of [`Opened::rotated_witness`].
+    pub witness_rotated: Vec<T>,
+    /// The fixed polynomials read at a rotation `k`, at `zeta w^k`, in the
+    /// order of [`Opened::rotated_fixed`].
+    pub fixed_rotated: Vec<T>,
 }
 
 impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
@@ -430,7 +442,7 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
     /// use arrabbiata_plonk::Opened;
     /// let o = Opened::<u8, 2, 0, 0> {
     ///     witness: [1, 2], fixed: [], selectors: [], sigmas: [3, 4], z: 5, t: 6,
-    ///     z_next: 7, witness_next: vec![8], fixed_next: vec![],
+    ///     z_next: 7, witness_rotated: vec![8], fixed_rotated: vec![],
     /// };
     /// assert_eq!(o.iter().count(), 8);
     /// ```
@@ -443,8 +455,8 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
             .chain(iter::once(&self.z))
             .chain(iter::once(&self.t))
             .chain(iter::once(&self.z_next))
-            .chain(&self.witness_next)
-            .chain(&self.fixed_next)
+            .chain(&self.witness_rotated)
+            .chain(&self.fixed_rotated)
     }
 
     /// Every value, mutably, in the order of the openings.
@@ -453,7 +465,7 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
     /// use arrabbiata_plonk::Opened;
     /// let mut o = Opened::<u8, 1, 0, 0> {
     ///     witness: [1], fixed: [], selectors: [], sigmas: [2], z: 3, t: 4,
-    ///     z_next: 5, witness_next: vec![], fixed_next: vec![],
+    ///     z_next: 5, witness_rotated: vec![], fixed_rotated: vec![],
     /// };
     /// *o.iter_mut().nth(4).unwrap() = 9;
     /// assert_eq!(o.z_next, 9);
@@ -467,21 +479,21 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
             .chain(iter::once(&mut self.z))
             .chain(iter::once(&mut self.t))
             .chain(iter::once(&mut self.z_next))
-            .chain(&mut self.witness_next)
-            .chain(&mut self.fixed_next)
+            .chain(&mut self.witness_rotated)
+            .chain(&mut self.fixed_rotated)
     }
 
-    /// The witness columns opened at `zeta w`: those some constraint of
-    /// `G` reads at the next row, in increasing order.
+    /// The witness columns some constraint of `G` reads at a rotation
+    /// other than the current row, with the rotation, in increasing order.
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_plonk::{Opened, vanilla::Vanilla};
     /// // Vanilla PlonK reads only the current row.
-    /// assert!(Opened::<F, 3, 5, 1>::next_witness::<F, Vanilla>().is_empty());
+    /// assert!(Opened::<F, 3, 5, 1>::rotated_witness::<F, Vanilla>().is_empty());
     /// ```
     #[must_use]
-    pub fn next_witness<F, G>() -> Vec<usize>
+    pub fn rotated_witness<F, G>() -> Vec<(usize, Rotation)>
     where
         F: Field,
         G: GateSet<F, W, X>,
@@ -489,16 +501,16 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
         rotations::<F, G, W, X>().0
     }
 
-    /// The fixed columns opened at `zeta w`: those some constraint of `G`
-    /// reads at the next row, in increasing order.
+    /// The fixed columns some constraint of `G` reads at a rotation other
+    /// than the current row, with the rotation, in increasing order.
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_plonk::{Opened, vanilla::Vanilla};
-    /// assert!(Opened::<F, 3, 5, 1>::next_fixed::<F, Vanilla>().is_empty());
+    /// assert!(Opened::<F, 3, 5, 1>::rotated_fixed::<F, Vanilla>().is_empty());
     /// ```
     #[must_use]
-    pub fn next_fixed<F, G>() -> Vec<usize>
+    pub fn rotated_fixed<F, G>() -> Vec<(usize, Rotation)>
     where
         F: Field,
         G: GateSet<F, W, X>,
@@ -515,8 +527,8 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
             z: f(self.z),
             t: f(self.t),
             z_next: f(self.z_next),
-            witness_next: self.witness_next.into_iter().map(&mut f).collect(),
-            fixed_next: self.fixed_next.into_iter().map(&mut f).collect(),
+            witness_rotated: self.witness_rotated.into_iter().map(&mut f).collect(),
+            fixed_rotated: self.fixed_rotated.into_iter().map(&mut f).collect(),
         }
     }
 }
@@ -534,47 +546,55 @@ where
     where
         Tr: Transcript<F>,
     {
-        absorb_length(transcript, self.witness_next.len());
-        absorb_length(transcript, self.fixed_next.len());
+        absorb_length(transcript, self.witness_rotated.len());
+        absorb_length(transcript, self.fixed_rotated.len());
         for value in self.iter() {
             value.absorb_into(transcript);
         }
     }
 }
 
-/// The witness and fixed columns some constraint of `G` reads at the next
-/// row, each in increasing order.
-fn rotations<F, G, const W: usize, const X: usize>() -> (Vec<usize>, Vec<usize>)
+/// The pairs `(column, rotation)` with a rotation other than the current
+/// row that some constraint of `G` reads, for the witness and the fixed
+/// columns, each sorted and without repetition.
+type Rotated = Vec<(usize, Rotation)>;
+
+fn rotations<F, G, const W: usize, const X: usize>() -> (Rotated, Rotated)
 where
     F: Field,
     G: GateSet<F, W, X>,
 {
-    let mut witness = [false; W];
-    let mut fixed = [false; X];
-    let mut gadget = 0;
-    while gadget < G::SELECTORS {
+    let mut witness = BTreeSet::new();
+    let mut fixed = BTreeSet::new();
+    for gadget in 0..G::SELECTORS {
         for c in G::constraints(gadget) {
             let mut vars = Vec::new();
             gate::variables(&c, &mut vars);
             for v in vars {
                 match v {
-                    Variable::Witness(col, Rotation::Next) => witness[col.index()] = true,
-                    Variable::Fixed(col, Rotation::Next) => fixed[col.index()] = true,
+                    Variable::Witness(col, r) if r != Rotation::CURR => {
+                        witness.insert((col.index(), r));
+                    }
+                    Variable::Fixed(col, r) if r != Rotation::CURR => {
+                        fixed.insert((col.index(), r));
+                    }
                     _ => {}
                 }
             }
         }
-        gadget += 1;
     }
-    let pick = |flags: &[bool]| {
-        flags
-            .iter()
-            .enumerate()
-            .filter(|(_, on)| **on)
-            .map(|(i, _)| i)
-            .collect()
-    };
-    (pick(&witness), pick(&fixed))
+    (witness.into_iter().collect(), fixed.into_iter().collect())
+}
+
+/// `w^k` for the generator `w` of `domain`, for any `k` in `Z`.
+fn root_power<F>(domain: &Domain<F>, rotation: Rotation) -> F
+where
+    F: TwoAdicField,
+{
+    let n = domain.size() as i64;
+    domain
+        .generator()
+        .pow((rotation.offset() as i64).rem_euclid(n) as u64)
 }
 
 /// The verifier's view of a circuit: the domain, the coset shifts of the
@@ -718,14 +738,12 @@ where
         absorb_length(transcript, W);
         absorb_length(transcript, X);
         absorb_length(transcript, Q);
-        let mut gadget = 0;
-        while gadget < Q {
+        for gadget in 0..Q {
             let constraints = G::constraints(gadget);
             absorb_length(transcript, constraints.len());
             for c in &constraints {
                 absorb_expr(c, transcript);
             }
-            gadget += 1;
         }
         for shift in &self.shifts {
             transcript.absorb(*shift);
@@ -747,10 +765,7 @@ where
     F: Field,
     T: Transcript<F>,
 {
-    let rotation = |r: Rotation| match r {
-        Rotation::Curr => 0,
-        Rotation::Next => 1,
-    };
+    let rotation = |r: Rotation| r.code() as usize;
     match e {
         Expr::Constant(c) => {
             absorb_length(transcript, 0);
@@ -917,8 +932,9 @@ pub enum PlonkError {
     CosetShifts,
     /// A circuit, a witness or a proof has the wrong shape.
     Shape,
-    /// A selector value is not 0 or 1, or two gadgets are on in one row.
-    Selectors,
+    /// A gadget reads a row outside the rows of a path (see
+    /// [`circuit::Builder::new`]).
+    Rotation,
 }
 
 impl fmt::Display for PlonkError {
@@ -931,7 +947,7 @@ impl fmt::Display for PlonkError {
             Self::IdentityFailed => write!(f, "the PlonK identity does not hold at zeta"),
             Self::CosetShifts => write!(f, "the coset shifts are not in distinct cosets"),
             Self::Shape => write!(f, "a circuit, witness or proof has the wrong shape"),
-            Self::Selectors => write!(f, "the selectors are not one-hot"),
+            Self::Rotation => write!(f, "a gadget reads a row outside the circuit"),
         }
     }
 }
@@ -968,6 +984,29 @@ where
     Ok(into_array(polys))
 }
 
+/// The shifts `g^k`, `k < W`, of the cosets `g^k H` labelling the witness
+/// columns in the permutation argument, for `g` the multiplicative
+/// generator and `H` the subgroup of order `n`.
+///
+/// `g^i H` and `g^j H` are disjoint iff `g^(i - j)` is not in `H`, that is
+/// `g^((i - j) n) != 1`; for `0 <= j < i < W` it suffices to check
+/// `g^(m n) != 1` for `0 < m < W`.
+fn coset_shifts<F, const W: usize>(n: usize) -> Result<[F; W], PlonkError>
+where
+    F: TwoAdicField,
+{
+    let g = F::MULTIPLICATIVE_GENERATOR;
+    let gn = g.pow(n as u64);
+    let mut power = F::ONE;
+    for _ in 1..W {
+        power = power * gn;
+        if power == F::ONE {
+            return Err(PlonkError::CosetShifts);
+        }
+    }
+    Ok(array::from_fn(|k| g.pow(k as u64)))
+}
+
 /// Preprocess a circuit: interpolate and commit to the fixed, selector and
 /// permutation polynomials.
 ///
@@ -999,23 +1038,10 @@ where
 {
     let n = circuit.num_rows();
     let domain = Domain::<F>::containing(n).ok_or(PlonkError::DomainTooLarge)?;
-    let g = F::MULTIPLICATIVE_GENERATOR;
-    let shifts: [F; W] = array::from_fn(|k| g.pow(k as u64));
-    // g^i H and g^j H are disjoint iff g^(i - j) is not in H, that is
-    // g^((i - j) n) != 1.
-    let gn = g.pow(n as u64);
-    let mut power = gn;
-    let mut m = 1;
-    while m < W {
-        if power == F::ONE {
-            return Err(PlonkError::CosetShifts);
-        }
-        power = power * gn;
-        m += 1;
-    }
+    let shifts = coset_shifts::<F, W>(n)?;
 
     let fixed = interpolate_all(&domain, circuit.fixed())?;
-    let selectors = interpolate_all(&domain, circuit.selectors())?;
+    let selectors = interpolate_all(&domain, &circuit.selector_columns())?;
     // sigma_k(i) is the identity label of the cell sigma maps (k, i) to:
     // shift_(column) * w^(row).
     let sigma = circuit.sigma();
@@ -1080,10 +1106,9 @@ where
     F: Copy,
 {
     fn at(&self, values: &[F], rotation: Rotation) -> F {
-        match rotation {
-            Rotation::Curr => values[self.point],
-            Rotation::Next => values[(self.point + self.step) % values.len()],
-        }
+        let size = values.len() as i64;
+        let shift = (rotation.offset() as i64 * self.step as i64).rem_euclid(size) as usize;
+        values[(self.point + shift) % values.len()]
     }
 }
 
@@ -1319,7 +1344,7 @@ where
 
     // Round 4: evaluations and openings.
     let zeta_w = zeta * domain.generator();
-    let (next_witness, next_fixed) = rotations::<F, G, W, X>();
+    let (rotated_witness, rotated_fixed) = rotations::<F, G, W, X>();
     let at = |p: &UniPoly<F>, point: &F| pcs.open(p.coefficients(), point);
     let opened = Opened::<(F, Prf<F, PC>), W, X, Q> {
         witness: array::from_fn(|k| at(&wires[k], &zeta)),
@@ -1329,13 +1354,13 @@ where
         z: at(&z, &zeta),
         t: at(&t, &zeta),
         z_next: at(&z, &zeta_w),
-        witness_next: next_witness
+        witness_rotated: rotated_witness
             .iter()
-            .map(|k| at(&wires[*k], &zeta_w))
+            .map(|(k, r)| at(&wires[*k], &(zeta * root_power(domain, *r))))
             .collect(),
-        fixed_next: next_fixed
+        fixed_rotated: rotated_fixed
             .iter()
-            .map(|k| at(&pk.fixed[*k], &zeta_w))
+            .map(|(k, r)| at(&pk.fixed[*k], &(zeta * root_power(domain, *r))))
             .collect(),
     };
     let evaluations = opened.clone().map(|(v, _)| v);
@@ -1348,20 +1373,20 @@ where
 /// constraint at `zeta`.
 struct OpenedView<'a, F, const W: usize, const X: usize, const Q: usize> {
     opened: &'a Opened<F, W, X, Q>,
-    next_witness: &'a [usize],
-    next_fixed: &'a [usize],
+    rotated_witness: &'a [(usize, Rotation)],
+    rotated_fixed: &'a [(usize, Rotation)],
 }
 
-/// The value of `column` among the `columns` opened at the next row.
-fn lookup<F>(columns: &[usize], values: &[F], column: usize) -> F
+/// The value of `(column, rotation)` among the `opened` pairs.
+fn lookup<F>(opened: &[(usize, Rotation)], values: &[F], column: usize, rotation: Rotation) -> F
 where
     F: Field,
 {
-    match columns.iter().position(|c| *c == column) {
-        Some(i) => values[i],
-        // Not reached: the columns read at the next row are computed from
-        // the gate set that produced the constraint.
-        None => F::ZERO,
+    match opened.binary_search(&(column, rotation)) {
+        Ok(i) => values[i],
+        // Not reached: the rotated columns are computed from the gate set
+        // that produced the constraint.
+        Err(_) => F::ZERO,
     }
 }
 
@@ -1371,16 +1396,28 @@ where
     F: Field,
 {
     fn witness(&self, _: &Scalars<F>, column: WitnessColumn<W>, rotation: Rotation) -> F {
-        match rotation {
-            Rotation::Curr => self.opened.witness[column.index()],
-            Rotation::Next => lookup(self.next_witness, &self.opened.witness_next, column.index()),
+        if rotation == Rotation::CURR {
+            self.opened.witness[column.index()]
+        } else {
+            lookup(
+                self.rotated_witness,
+                &self.opened.witness_rotated,
+                column.index(),
+                rotation,
+            )
         }
     }
 
     fn fixed(&self, column: FixedColumn<X>, rotation: Rotation) -> F {
-        match rotation {
-            Rotation::Curr => self.opened.fixed[column.index()],
-            Rotation::Next => lookup(self.next_fixed, &self.opened.fixed_next, column.index()),
+        if rotation == Rotation::CURR {
+            self.opened.fixed[column.index()]
+        } else {
+            lookup(
+                self.rotated_fixed,
+                &self.opened.fixed_rotated,
+                column.index(),
+                rotation,
+            )
         }
     }
 }
@@ -1390,8 +1427,8 @@ where
 /// # Errors
 ///
 /// [`PlonkError::PublicInputs`] if the number of public inputs is wrong,
-/// [`PlonkError::Shape`] if the proof opens the wrong number of columns at
-/// the next row, [`PlonkError::Opening`] if an opening proof fails, and
+/// [`PlonkError::Shape`] if the proof opens the wrong number of rotated
+/// columns, [`PlonkError::Opening`] if an opening proof fails, and
 /// [`PlonkError::IdentityFailed`] if the PlonK identity does not hold at
 /// `zeta`.
 ///
@@ -1453,35 +1490,42 @@ where
         proofs.value,
     );
 
-    let (next_witness, next_fixed) = rotations::<F, G, W, X>();
-    if evaluations.witness_next.len() != next_witness.len()
-        || evaluations.fixed_next.len() != next_fixed.len()
-        || proofs.witness_next.len() != next_witness.len()
-        || proofs.fixed_next.len() != next_fixed.len()
+    let (rotated_witness, rotated_fixed) = rotations::<F, G, W, X>();
+    if evaluations.witness_rotated.len() != rotated_witness.len()
+        || evaluations.fixed_rotated.len() != rotated_fixed.len()
+        || proofs.witness_rotated.len() != rotated_witness.len()
+        || proofs.fixed_rotated.len() != rotated_fixed.len()
     {
         return Err(PlonkError::Shape);
     }
 
-    // Openings, in the order of `Opened::iter`.
-    let zeta_w = zeta * domain.generator();
-    let at_zeta = wires
+    // The commitment and the point of every opening, in the same shape as
+    // the evaluations and the proofs, so the three are zipped by one
+    // traversal.
+    let at = |r: Rotation| zeta * root_power(&domain, r);
+    let claims = Opened::<(&Com<F, PC>, F), W, X, Q> {
+        witness: array::from_fn(|k| (&wires[k], zeta)),
+        fixed: array::from_fn(|k| (&key.fixed[k], zeta)),
+        selectors: array::from_fn(|k| (&key.selectors[k], zeta)),
+        sigmas: array::from_fn(|k| (&key.sigmas[k], zeta)),
+        z: (&z_commitment, zeta),
+        t: (&t_commitment, zeta),
+        z_next: (&z_commitment, at(Rotation::NEXT)),
+        witness_rotated: rotated_witness
+            .iter()
+            .map(|(k, r)| (&wires[*k], at(*r)))
+            .collect(),
+        fixed_rotated: rotated_fixed
+            .iter()
+            .map(|(k, r)| (&key.fixed[*k], at(*r)))
+            .collect(),
+    };
+    for (i, ((commitment, point), (value, proof))) in claims
         .iter()
-        .chain(&key.fixed)
-        .chain(&key.selectors)
-        .chain(&key.sigmas)
-        .chain(iter::once(&z_commitment))
-        .chain(iter::once(&t_commitment))
-        .map(|c| (c, zeta));
-    let at_zeta_w = iter::once(&z_commitment)
-        .chain(next_witness.iter().map(|k| &wires[*k]))
-        .chain(next_fixed.iter().map(|k| &key.fixed[*k]))
-        .map(|c| (c, zeta_w));
-    for (i, ((commitment, point), (value, proof))) in at_zeta
-        .chain(at_zeta_w)
         .zip(evaluations.iter().zip(proofs.iter()))
         .enumerate()
     {
-        if !pcs.verify(commitment, &point, *value, proof) {
+        if !pcs.verify(commitment, point, *value, proof) {
             return Err(PlonkError::Opening(i));
         }
     }
@@ -1489,19 +1533,17 @@ where
     // The identity at zeta.
     let view = OpenedView {
         opened: &evaluations,
-        next_witness: &next_witness,
-        next_fixed: &next_fixed,
+        rotated_witness: &rotated_witness,
+        rotated_fixed: &rotated_fixed,
     };
     let ring = Scalars::new();
     let mut lhs = F::ZERO;
     let mut power = F::ONE;
-    let mut gadget = 0;
-    while gadget < Q {
+    for gadget in 0..Q {
         for c in G::constraints(gadget) {
             lhs = lhs + power * evaluations.selectors[gadget] * evaluate(&ring, &c, &view);
             power = power * alpha;
         }
-        gadget += 1;
     }
     if W > 0 {
         let mut lp = F::ZERO;
@@ -1607,6 +1649,155 @@ mod tests {
             }
         }
         assert!(checked > 0);
+    }
+
+    /// `b = a(-1) + a(+1)`.
+    struct Neighbours;
+    impl Gadget<F, 2, 1> for Neighbours {
+        const NAME: &'static str = "neighbours";
+        fn constraints() -> Vec<Expr<F, 2, 1>> {
+            let a = |r| Expr::witness(WitnessColumn::new::<0>(), r);
+            let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+            vec![b - a(Rotation::PREV) - a(Rotation::NEXT)]
+        }
+    }
+
+    /// `b = f(+2) a(+2)`.
+    struct Ahead;
+    impl Gadget<F, 2, 1> for Ahead {
+        const NAME: &'static str = "ahead";
+        fn constraints() -> Vec<Expr<F, 2, 1>> {
+            let two = Rotation::new(2);
+            let a = Expr::witness(WitnessColumn::new::<0>(), two);
+            let f = Expr::fixed(FixedColumn::new::<0>(), two);
+            let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+            vec![b - f * a]
+        }
+    }
+
+    /// Every cell changed alone in a circuit whose gadgets read other rows
+    /// (witness at -1, +1, +2, fixed at +2) is rejected by the identity: the
+    /// rotated openings carry the constraint, not only the current row.
+    #[test]
+    fn every_broken_cell_fails_the_identity_with_rotations() {
+        type G = (Neighbours, (Ahead, ()));
+        let a: Vec<F> = (0..8).map(|i| F::from_u64(3 * i + 1)).collect();
+        let f: Vec<F> = (0..8).map(|i| F::from_u64(i + 2)).collect();
+        let mut b = Builder::<F, G, 2, 1, 2>::new();
+        for i in 0..8 {
+            if (1..7).contains(&i) && i % 2 == 1 {
+                b.row::<Neighbours, _>([a[i], a[i - 1] + a[i + 1]], [f[i]]);
+            } else if i < 6 {
+                b.row::<Ahead, _>([a[i], f[i + 2] * a[i + 2]], [f[i]]);
+            } else {
+                b.plain_row([a[i], F::ZERO], [f[i]]);
+            }
+        }
+        b.public(7);
+        let (circuit, witness) = b.build().unwrap();
+        assert!(circuit.is_satisfied(&witness));
+        let pcs = ipa::pallas(&circuit);
+        let (pk, vk) = setup(&circuit, &pcs).unwrap();
+        let mut checked = 0;
+        for k in 0..2 {
+            for row in 0..circuit.num_rows() {
+                let mut columns = witness.columns().clone();
+                columns[k][row] = columns[k][row] + F::ONE;
+                let broken = Witness::new(columns, witness.public_inputs().to_vec());
+                if circuit.is_satisfied(&broken) {
+                    continue;
+                }
+                checked += 1;
+                let proof = prove_with(
+                    &pk,
+                    &pcs,
+                    ipa::pallas_transcript(),
+                    &broken,
+                    Prover::Cheating,
+                )
+                .unwrap();
+                assert_eq!(
+                    verify(
+                        &vk,
+                        &pcs,
+                        ipa::pallas_transcript(),
+                        witness.public_inputs(),
+                        proof
+                    ),
+                    Err(PlonkError::IdentityFailed),
+                    "cell ({k}, {row})"
+                );
+            }
+        }
+        // The cells some gadget reads; changing any other one changes
+        // nothing the circuit constrains.
+        assert_eq!(checked, 11);
+    }
+
+    /// The field of order 17: `p - 1 = 16 = 2^4`, generator 3.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct F17;
+    impl arrabbiata_field::MontgomeryConfig<1> for F17 {
+        const MODULUS: [u64; 1] = [17];
+        const GENERATOR: u64 = 3;
+    }
+    type Small = arrabbiata_field::MontField<F17, 1>;
+
+    /// The cosets `g^k H` of a subgroup `H` of order `n`, as sets of
+    /// canonical integers.
+    fn cosets<const W: usize>(shifts: &[Small; W], n: usize) -> Vec<Vec<u64>> {
+        use arrabbiata_field::PrimeField;
+        let h = Small::two_adic_generator(n.trailing_zeros()).unwrap();
+        shifts
+            .iter()
+            .map(|s| {
+                let mut c: Vec<u64> = (0..n).map(|i| (*s * h.pow(i as u64)).limb(0)).collect();
+                c.sort_unstable();
+                c
+            })
+            .collect()
+    }
+
+    /// `coset_shifts` succeeds exactly when the `W` cosets are pairwise
+    /// disjoint, checked by enumerating them, for every subgroup of the
+    /// field of order 17 and `W` up to 5.
+    #[test]
+    fn coset_shifts_are_disjoint_exactly_when_accepted() {
+        fn check<const W: usize>() {
+            for log in 0..=4 {
+                let n = 1usize << log;
+                let disjoint = |c: &Vec<Vec<u64>>| {
+                    (0..W).all(|i| (0..i).all(|j| c[i].iter().all(|x| !c[j].contains(x))))
+                };
+                match coset_shifts::<Small, W>(n) {
+                    Ok(shifts) => {
+                        assert!(disjoint(&cosets(&shifts, n)), "W = {W}, n = {n}");
+                        assert_eq!(shifts[0], Small::ONE);
+                    }
+                    Err(e) => {
+                        assert_eq!(e, PlonkError::CosetShifts);
+                        let g = Small::MULTIPLICATIVE_GENERATOR;
+                        let all: [Small; W] = core::array::from_fn(|k| g.pow(k as u64));
+                        assert!(!disjoint(&cosets(&all, n)), "W = {W}, n = {n}");
+                    }
+                }
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+        check::<5>();
+        // 16 / n cosets of H fit in the 16 nonzero elements.
+        assert!(coset_shifts::<Small, 2>(8).is_ok());
+        assert_eq!(
+            coset_shifts::<Small, 3>(8).unwrap_err(),
+            PlonkError::CosetShifts
+        );
+        assert_eq!(
+            coset_shifts::<Small, 2>(16).unwrap_err(),
+            PlonkError::CosetShifts
+        );
     }
 
     /// A true witness for one statement does not prove another.

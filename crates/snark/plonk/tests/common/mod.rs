@@ -71,6 +71,21 @@ where
     b.assert_equal(&last, &output);
 }
 
+/// The frontend circuit of `program` and its witness, before compilation.
+pub fn frontend<F>(
+    program: &[Op],
+    lie: bool,
+) -> (
+    arrabbiata_frontend::Circuit<F>,
+    arrabbiata_frontend::Witness<F>,
+)
+where
+    F: Field,
+{
+    let (circuit, witness, ()) = build::<F, _, _>(|b| run(b, program, lie));
+    (circuit, witness)
+}
+
 /// The circuit of `program`, its last wire exposed as a public output that
 /// claims the right value, or a wrong one when `lie` is set.
 pub fn circuit<F>(program: &[Op], lie: bool) -> (VanillaCircuit<F>, Witness<F, 3>)

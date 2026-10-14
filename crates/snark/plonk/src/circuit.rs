@@ -4,7 +4,8 @@
 //! fixes, on each of its `n` rows (a power of two):
 //!
 //! - the values of the fixed columns (constants and coefficients);
-//! - which gadget of the gate set `G` is on, if any (one-hot selectors);
+//! - which gadget of the gate set `G` is on, if any: an
+//!   `Option<`[`Selector`]`<Q>>`, so selectors are one-hot by construction;
 //! - the copy constraints, as a permutation `sigma` of the `W n` witness
 //!   cells (cell `(k, i)` has index `k n + i`);
 //! - the rows whose witness column 0 is a public input.
@@ -13,6 +14,16 @@
 //! satisfies the circuit when every constraint of every active gadget
 //! vanishes, copied cells are equal, and column 0 holds the public inputs
 //! on the public rows.
+//!
+//! # Rows: a cycle for the protocol, a path for the builder
+//!
+//! The protocol reads rows on the cyclic group `Z/n`: a gadget on the last
+//! row reading the next row reads row 0. A [`Builder`] made with
+//! [`Builder::new`] writes rows on a path instead: a gadget may only read
+//! rows that were added, so the padding to a power of two, and the wrap
+//! around, are never observed, and adding rows never changes what the
+//! existing ones mean. [`Builder::cyclic`] opts into the cycle: the rows
+//! must already be a power of two, and rotations wrap.
 //!
 //! ```
 //! use arrabbiata_field::Field;
@@ -28,8 +39,8 @@
 //! impl Gadget<F, 2, 0> for Square {
 //!     const NAME: &'static str = "square";
 //!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
 //!         vec![b - a.clone() * a]
 //!     }
 //! }
@@ -53,11 +64,11 @@ use alloc::{vec, vec::Vec};
 use core::{array, fmt, marker::PhantomData};
 
 use arrabbiata_field::Field;
-use arrabbiata_poly::{Assignment, FixedColumn, Rotation, Scalars, WitnessColumn, evaluate};
+use arrabbiata_poly::{Assignment, Expr, FixedColumn, Rotation, Scalars, WitnessColumn, evaluate};
 
 use crate::{
     PlonkError,
-    gate::{GateSet, Member},
+    gate::{self, GateSet, Member, Selector},
 };
 
 /// A witness cell: a column and a row.
@@ -181,7 +192,7 @@ impl<F, const W: usize> Witness<F, W> {
 pub struct Circuit<F, G, const W: usize, const X: usize, const Q: usize> {
     num_rows: usize,
     fixed: [Vec<F>; X],
-    selectors: [Vec<F>; Q],
+    gadgets: Vec<Option<Selector<Q>>>,
     sigma: Vec<usize>,
     public_rows: Vec<usize>,
     gates: PhantomData<fn() -> G>,
@@ -198,7 +209,7 @@ where
         Self {
             num_rows: self.num_rows,
             fixed: self.fixed.clone(),
-            selectors: self.selectors.clone(),
+            gadgets: self.gadgets.clone(),
             sigma: self.sigma.clone(),
             public_rows: self.public_rows.clone(),
             gates: PhantomData,
@@ -214,7 +225,7 @@ where
         f.debug_struct("Circuit")
             .field("num_rows", &self.num_rows)
             .field("fixed", &self.fixed)
-            .field("selectors", &self.selectors)
+            .field("gadgets", &self.gadgets)
             .field("sigma", &self.sigma)
             .field("public_rows", &self.public_rows)
             .finish()
@@ -228,7 +239,7 @@ where
     fn eq(&self, other: &Self) -> bool {
         self.num_rows == other.num_rows
             && self.fixed == other.fixed
-            && self.selectors == other.selectors
+            && self.gadgets == other.gadgets
             && self.sigma == other.sigma
             && self.public_rows == other.public_rows
     }
@@ -247,33 +258,35 @@ where
         "Q must be the number of gadgets of the gate set"
     );
 
-    /// The circuit with the given columns, copy permutation and public
-    /// rows.
+    /// The circuit with the given fixed columns, gadget of each row, copy
+    /// permutation and public rows. Rows are read on the cycle `Z/n`: a
+    /// gadget on the last row reading the next row reads row 0.
     ///
     /// # Errors
     ///
     /// [`PlonkError::Shape`] if `num_rows` is not a power of two at least
-    /// 2, a column does not have `num_rows` values, `sigma` is not a
-    /// permutation of the `W num_rows` cells, or a public row is out of
-    /// range or repeated; [`PlonkError::Selectors`] if a selector value is
-    /// not 0 or 1, or two selectors are on in the same row.
+    /// 2, a column or the gadget list does not have `num_rows` entries,
+    /// `sigma` is not a permutation of the `W num_rows` cells, or a public
+    /// row is out of range, repeated, or given without a witness column to
+    /// hold it (`W = 0`).
     ///
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{PlonkError, circuit::Circuit, vanilla::Vanilla};
+    /// use arrabbiata_plonk::{PlonkError, circuit::Circuit, gate::Selector, vanilla::Vanilla};
     /// let fixed: [Vec<F>; 5] = std::array::from_fn(|_| vec![F::ZERO; 2]);
+    /// let on = Some(Selector::new::<0>());
     /// let identity: Vec<usize> = (0..6).collect();
-    /// let ok = Circuit::<F, Vanilla, 3, 5, 1>::new(2, fixed.clone(), [vec![F::ONE; 2]], identity.clone(), vec![]);
+    /// let ok = Circuit::<F, Vanilla, 3, 5, 1>::new(2, fixed.clone(), vec![on, None], identity.clone(), vec![]);
     /// assert!(ok.is_ok());
-    /// let two = F::ONE + F::ONE;
-    /// let bad = Circuit::<F, Vanilla, 3, 5, 1>::new(2, fixed, [vec![two; 2]], identity, vec![]);
-    /// assert_eq!(bad.unwrap_err(), PlonkError::Selectors);
+    /// // A permutation of 5 cells, not 6.
+    /// let bad = Circuit::<F, Vanilla, 3, 5, 1>::new(2, fixed, vec![on, None], (0..5).collect(), vec![]);
+    /// assert_eq!(bad.unwrap_err(), PlonkError::Shape);
     /// ```
     pub fn new(
         num_rows: usize,
         fixed: [Vec<F>; X],
-        selectors: [Vec<F>; Q],
+        gadgets: Vec<Option<Selector<Q>>>,
         sigma: Vec<usize>,
         public_rows: Vec<usize>,
     ) -> Result<Self, PlonkError> {
@@ -281,25 +294,8 @@ where
         if num_rows < 2 || !num_rows.is_power_of_two() {
             return Err(PlonkError::Shape);
         }
-        if fixed.iter().any(|c| c.len() != num_rows)
-            || selectors.iter().any(|c| c.len() != num_rows)
-        {
+        if fixed.iter().any(|c| c.len() != num_rows) || gadgets.len() != num_rows {
             return Err(PlonkError::Shape);
-        }
-        let mut row = 0;
-        while row < num_rows {
-            let mut on = 0;
-            for column in &selectors {
-                if column[row] == F::ONE {
-                    on += 1;
-                } else if !column[row].is_zero() {
-                    return Err(PlonkError::Selectors);
-                }
-            }
-            if on > 1 {
-                return Err(PlonkError::Selectors);
-            }
-            row += 1;
         }
         if sigma.len() != W * num_rows {
             return Err(PlonkError::Shape);
@@ -311,6 +307,9 @@ where
             }
             seen[*target] = true;
         }
+        if W == 0 && !public_rows.is_empty() {
+            return Err(PlonkError::Shape);
+        }
         let mut used = vec![false; num_rows];
         for row in &public_rows {
             if *row >= num_rows || used[*row] {
@@ -321,7 +320,7 @@ where
         Ok(Self {
             num_rows,
             fixed,
-            selectors,
+            gadgets,
             sigma,
             public_rows,
             gates: PhantomData,
@@ -354,17 +353,44 @@ where
         &self.fixed
     }
 
-    /// The selector columns, one per gadget of `G`, in the order of `G`.
+    /// The gadget turned on in each row, if any.
     ///
     /// ```
+    /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
-    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-    /// assert_eq!(c.selectors().len(), 1);
+    /// use arrabbiata_plonk::{circuit::Builder, gate::Selector, vanilla::{Arithmetic, Vanilla}};
+    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
+    /// b.row::<Arithmetic, _>([F::ZERO; 3], [F::ZERO; 5]);
+    /// let (c, _) = b.build().unwrap();
+    /// assert_eq!(c.gadgets(), &[Some(Selector::new::<0>()), None]);
     /// ```
     #[must_use]
-    pub const fn selectors(&self) -> &[Vec<F>; Q] {
-        &self.selectors
+    pub fn gadgets(&self) -> &[Option<Selector<Q>>] {
+        &self.gadgets
+    }
+
+    /// The selector columns, one per gadget of `G`, in the order of `G`:
+    /// column `g` is 1 on the rows that turn gadget `g` on, 0 elsewhere.
+    /// They are one-hot: at most one is 1 in each row.
+    ///
+    /// ```
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
+    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
+    /// b.row::<Arithmetic, _>([F::ZERO; 3], [F::ZERO; 5]);
+    /// let (c, _) = b.build().unwrap();
+    /// assert_eq!(c.selector_columns(), [vec![F::ONE, F::ZERO]]);
+    /// ```
+    #[must_use]
+    pub fn selector_columns(&self) -> [Vec<F>; Q] {
+        let mut columns: [Vec<F>; Q] = array::from_fn(|_| vec![F::ZERO; self.num_rows]);
+        for (row, gadget) in self.gadgets.iter().enumerate() {
+            if let Some(g) = gadget {
+                columns[g.index()][row] = F::ONE;
+            }
+        }
+        columns
     }
 
     /// The copy permutation of the witness cells.
@@ -427,12 +453,7 @@ where
     /// ```
     #[must_use]
     pub fn max_coefficients(&self) -> usize {
-        let quotient = (self.quotient_factor() - 1) * self.num_rows;
-        if quotient > self.num_rows {
-            quotient
-        } else {
-            self.num_rows
-        }
+        ((self.quotient_factor() - 1) * self.num_rows).max(self.num_rows)
     }
 
     /// Whether `witness` satisfies the circuit: the gates of the active
@@ -460,26 +481,22 @@ where
         {
             return false;
         }
-        for (column, gadget) in self.selectors.iter().zip(0..Q) {
-            let constraints = G::constraints(gadget);
-            let mut row = 0;
-            while row < n {
-                if column[row] == F::ONE {
-                    let view = RowView {
-                        witness: &witness.columns,
-                        fixed: &self.fixed,
-                        row,
-                        num_rows: n,
-                    };
-                    let ring = Scalars::new();
-                    if constraints
-                        .iter()
-                        .any(|c| !evaluate(&ring, c, &view).is_zero())
-                    {
-                        return false;
-                    }
+        let constraints: Vec<Vec<Expr<F, W, X>>> = (0..Q).map(|g| G::constraints(g)).collect();
+        let ring = Scalars::new();
+        for (row, gadget) in self.gadgets.iter().enumerate() {
+            if let Some(g) = gadget {
+                let view = RowView {
+                    witness: &witness.columns,
+                    fixed: &self.fixed,
+                    row,
+                    num_rows: n,
+                };
+                if constraints[g.index()]
+                    .iter()
+                    .any(|c| !evaluate(&ring, c, &view).is_zero())
+                {
+                    return false;
                 }
-                row += 1;
             }
         }
         if !witness.columns.is_empty() {
@@ -504,22 +521,19 @@ where
     F: Field,
     G: GateSet<F, W, X>,
 {
-    let mut factor = if W + 1 > 2 { W + 1 } else { 2 };
-    let mut gadget = 0;
-    while gadget < G::SELECTORS {
+    // The permutation term has degree W + 1, the boundary and public-input
+    // terms 2, and a gated constraint its total degree plus the selector.
+    let mut factor = (W + 1).max(2);
+    for gadget in 0..G::SELECTORS {
         for c in G::constraints(gadget) {
-            let gated = crate::gate::total_degree(&c) + 1;
-            if gated > factor {
-                factor = gated;
-            }
+            factor = factor.max(gate::total_degree(&c) + 1);
         }
-        gadget += 1;
     }
     factor
 }
 
-/// The values of one row (and of the next) of a witness and the fixed
-/// columns, as an assignment of the variables of a constraint.
+/// The values of one row (and of the rows around it) of a witness and the
+/// fixed columns, as an assignment of the variables of a constraint.
 pub(crate) struct RowView<'a, F, const W: usize, const X: usize> {
     pub(crate) witness: &'a [Vec<F>; W],
     pub(crate) fixed: &'a [Vec<F>; X],
@@ -540,12 +554,20 @@ where
     }
 }
 
+/// How a builder lays its rows out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Topology {
+    /// Rows on a path: a gadget reads only rows that were added.
+    Path,
+    /// Rows on the cycle `Z/n`: rotations wrap.
+    Cycle,
+}
+
 /// A builder of a circuit and its witness, row by row.
 ///
 /// Each row either turns on one gadget of `G` ([`Builder::row`]) or none
 /// ([`Builder::plain_row`]). Copy constraints and public inputs refer to
-/// rows by the index these calls return. [`Builder::build`] pads to a
-/// power of two with rows of zeros and no gadget.
+/// rows by the index these calls return.
 ///
 /// ```
 /// use arrabbiata_field::Field;
@@ -559,9 +581,10 @@ where
 /// assert!(circuit.is_satisfied(&witness));
 /// ```
 pub struct Builder<F, G, const W: usize, const X: usize, const Q: usize> {
+    topology: Topology,
     witness: [Vec<F>; W],
     fixed: [Vec<F>; X],
-    active: Vec<Option<usize>>,
+    gadgets: Vec<Option<Selector<Q>>>,
     copies: Vec<(Cell<W>, Cell<W>)>,
     public: Vec<usize>,
     gates: PhantomData<fn() -> G>,
@@ -582,7 +605,22 @@ where
     F: Field,
     G: GateSet<F, W, X>,
 {
-    /// An empty builder.
+    fn with(topology: Topology) -> Self {
+        let () = Circuit::<F, G, W, X, Q>::SELECTORS;
+        Self {
+            topology,
+            witness: array::from_fn(|_| Vec::new()),
+            fixed: array::from_fn(|_| Vec::new()),
+            gadgets: Vec::new(),
+            copies: Vec::new(),
+            public: Vec::new(),
+            gates: PhantomData,
+        }
+    }
+
+    /// A builder of rows on a path: a gadget may only read rows that were
+    /// added ([`Builder::build`] fails otherwise), and the circuit is padded
+    /// to a power of two with rows no gadget reads.
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
@@ -591,15 +629,27 @@ where
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        let () = Circuit::<F, G, W, X, Q>::SELECTORS;
-        Self {
-            witness: array::from_fn(|_| Vec::new()),
-            fixed: array::from_fn(|_| Vec::new()),
-            active: Vec::new(),
-            copies: Vec::new(),
-            public: Vec::new(),
-            gates: PhantomData,
-        }
+        Self::with(Topology::Path)
+    }
+
+    /// A builder of rows on the cycle `Z/n`: rotations wrap around, the
+    /// next row of the last row being the first. The number of rows must
+    /// be a power of two (at least 2), since nothing is padded.
+    ///
+    /// ```
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::{PlonkError, circuit::Builder, vanilla::Vanilla};
+    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::cyclic();
+    /// for _ in 0..3 {
+    ///     b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
+    /// }
+    /// // 3 rows do not form a cycle of a power-of-two length.
+    /// assert_eq!(b.build().unwrap_err(), PlonkError::Shape);
+    /// ```
+    #[must_use]
+    pub fn cyclic() -> Self {
+        Self::with(Topology::Cycle)
     }
 
     /// The number of rows added so far.
@@ -614,11 +664,12 @@ where
     /// ```
     #[must_use]
     pub fn num_rows(&self) -> usize {
-        self.active.len()
+        self.gadgets.len()
     }
 
     /// Add a row turning on the gadget `H`, which `G` must contain; returns
-    /// its index.
+    /// its index. The selector of `H` is its position in `G`, computed at
+    /// compile time.
     ///
     /// ```
     /// use arrabbiata_field::Field;
@@ -633,11 +684,18 @@ where
     where
         G: Member<H, I>,
     {
-        self.push(witness, fixed, Some(<G as Member<H, I>>::INDEX))
+        let selector = const {
+            match Selector::<Q>::try_new(<G as Member<H, I>>::INDEX) {
+                Some(s) => s,
+                None => panic!("a gadget of the gate set has an index below Q"),
+            }
+        };
+        self.push(witness, fixed, Some(selector))
     }
 
     /// Add a row with no gadget on (its cells are only constrained by
-    /// copies and public inputs); returns its index.
+    /// copies, public inputs, and gadgets of other rows reading it); returns
+    /// its index.
     ///
     /// ```
     /// use arrabbiata_field::Field;
@@ -651,15 +709,15 @@ where
         self.push(witness, fixed, None)
     }
 
-    fn push(&mut self, witness: [F; W], fixed: [F; X], gadget: Option<usize>) -> usize {
+    fn push(&mut self, witness: [F; W], fixed: [F; X], gadget: Option<Selector<Q>>) -> usize {
         for (column, value) in self.witness.iter_mut().zip(witness) {
             column.push(value);
         }
         for (column, value) in self.fixed.iter_mut().zip(fixed) {
             column.push(value);
         }
-        self.active.push(gadget);
-        self.active.len() - 1
+        self.gadgets.push(gadget);
+        self.gadgets.len() - 1
     }
 
     /// Require two cells to hold the same value.
@@ -696,13 +754,17 @@ where
         self.public.push(row);
     }
 
-    /// The circuit and its witness, padded to a power of two (at least 2)
-    /// rows of zeros with no gadget on.
+    /// The circuit and its witness. On a path, the rows are padded to a
+    /// power of two (at least 2) with rows of zeros and no gadget; on a
+    /// cycle, nothing is padded.
     ///
     /// # Errors
     ///
-    /// [`PlonkError::Shape`] if a copy or a public input refers to a row
-    /// that was not added, or a row is public twice.
+    /// [`PlonkError::Rotation`] if, on a path, a gadget reads a row before
+    /// the first or after the last row added; [`PlonkError::Shape`] if a
+    /// copy or a public input refers to a row that was not added, a row is
+    /// public twice, there is no witness column for a public input, or a
+    /// cycle does not have a power of two (at least 2) rows.
     ///
     /// ```
     /// use arrabbiata_field::Field;
@@ -713,11 +775,28 @@ where
     /// assert_eq!(b.build().unwrap_err(), PlonkError::Shape);
     /// ```
     pub fn build(self) -> Result<(Circuit<F, G, W, X, Q>, Witness<F, W>), PlonkError> {
-        let rows = self.active.len();
-        let mut n = 2;
-        while n < rows {
-            n *= 2;
-        }
+        let rows = self.gadgets.len();
+        let n = match self.topology {
+            Topology::Path => {
+                for (row, gadget) in self.gadgets.iter().enumerate() {
+                    if let Some(g) = gadget {
+                        let (lo, hi) = gate::span::<F, G, W, X>(g.index());
+                        let (first, last) = (row as i64 + lo as i64, row as i64 + hi as i64);
+                        if first < 0 || last >= rows as i64 {
+                            return Err(PlonkError::Rotation);
+                        }
+                    }
+                }
+                let mut n = 2;
+                while n < rows {
+                    n *= 2;
+                }
+                n
+            }
+            // Nothing is padded: `Circuit::new` rejects a length that is not
+            // a power of two at least 2.
+            Topology::Cycle => rows,
+        };
         let mut witness = self.witness;
         for column in &mut witness {
             column.resize(n, F::ZERO);
@@ -726,12 +805,8 @@ where
         for column in &mut fixed {
             column.resize(n, F::ZERO);
         }
-        let mut selectors: [Vec<F>; Q] = array::from_fn(|_| vec![F::ZERO; n]);
-        for (row, gadget) in self.active.iter().enumerate() {
-            if let Some(g) = gadget {
-                selectors[*g][row] = F::ONE;
-            }
-        }
+        let mut gadgets = self.gadgets;
+        gadgets.resize(n, None);
         for (x, y) in &self.copies {
             if x.row >= rows || y.row >= rows {
                 return Err(PlonkError::Shape);
@@ -745,13 +820,14 @@ where
             }
             public.push(witness[0][*row]);
         }
-        let circuit = Circuit::new(n, fixed, selectors, sigma, self.public)?;
+        let circuit = Circuit::new(n, fixed, gadgets, sigma, self.public)?;
         Ok((circuit, Witness::new(witness, public)))
     }
 }
 
 /// The permutation whose cycles are the classes of cells equated by
-/// `copies`, each cycle in increasing order of cell index.
+/// `copies`, each cycle in increasing order of cell index: a function of
+/// the partition the copies generate, not of the copies themselves.
 pub(crate) fn permutation<const W: usize>(
     copies: &[(Cell<W>, Cell<W>)],
     columns: usize,

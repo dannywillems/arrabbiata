@@ -37,8 +37,7 @@ struct Mul;
 impl<F: Field> Gadget<F, W, X> for Mul {
     const NAME: &'static str = "mul";
     fn constraints() -> Vec<E<F>> {
-        use Rotation::Curr;
-        vec![w(3, Curr) - w(0, Curr) * w(1, Curr)]
+        vec![w(3, Rotation::CURR) - w(0, Rotation::CURR) * w(1, Rotation::CURR)]
     }
 }
 
@@ -47,10 +46,9 @@ struct Pow5;
 impl<F: Field> Gadget<F, W, X> for Pow5 {
     const NAME: &'static str = "pow5";
     fn constraints() -> Vec<E<F>> {
-        use Rotation::Curr;
-        let a = w::<F>(0, Curr);
+        let a = w::<F>(0, Rotation::CURR);
         let a2 = a.clone() * a.clone();
-        vec![w(1, Curr) - a2.clone() * a2 * a]
+        vec![w(1, Rotation::CURR) - a2.clone() * a2 * a]
     }
 }
 
@@ -59,8 +57,7 @@ struct Step;
 impl<F: Field> Gadget<F, W, X> for Step {
     const NAME: &'static str = "step";
     fn constraints() -> Vec<E<F>> {
-        use Rotation::{Curr, Next};
-        vec![w(0, Next) - w(0, Curr) - w(1, Curr) * f(Curr)]
+        vec![w(0, Rotation::NEXT) - w(0, Rotation::CURR) - w(1, Rotation::CURR) * f(Rotation::CURR)]
     }
 }
 
@@ -69,8 +66,7 @@ struct Shift;
 impl<F: Field> Gadget<F, W, X> for Shift {
     const NAME: &'static str = "shift";
     fn constraints() -> Vec<E<F>> {
-        use Rotation::{Curr, Next};
-        vec![w(3, Curr) - f(Next)]
+        vec![w(3, Rotation::CURR) - f(Rotation::NEXT)]
     }
 }
 
@@ -152,7 +148,7 @@ where
         }
         // The fixed value of the next row: the next program row, or the
         // final plain row (fixed 0).
-        let next_fixed = fixed.get(r + 1).copied().unwrap_or(F::ZERO);
+        let rotated_fixed = fixed.get(r + 1).copied().unwrap_or(F::ZERO);
         let index = match row.op {
             Op::Mul => {
                 cells[3] = cells[0] * cells[1];
@@ -171,7 +167,7 @@ where
                 b.row::<Step, _>(cells, [fixed[r]])
             }
             Op::Shift => {
-                cells[3] = next_fixed;
+                cells[3] = rotated_fixed;
                 b.row::<Shift, _>(cells, [fixed[r]])
             }
             Op::Plain => b.plain_row(cells, [fixed[r]]),
@@ -192,8 +188,8 @@ where
 }
 
 fn openings() -> usize {
-    let next = Opened::<Fq, W, X, Q>::next_witness::<Fq, Gates>().len()
-        + Opened::<Fq, W, X, Q>::next_fixed::<Fq, Gates>().len();
+    let next = Opened::<Fq, W, X, Q>::rotated_witness::<Fq, Gates>().len()
+        + Opened::<Fq, W, X, Q>::rotated_fixed::<Fq, Gates>().len();
     2 * W + X + Q + 3 + next
 }
 
@@ -205,8 +201,14 @@ fn gate_set_shape() {
     // Pow5 is degree 5, 6 with the selector, above W + 1 = 5.
     let (circuit, _) = compile::<Fq>(&[]);
     assert_eq!(circuit.quotient_factor(), 6);
-    assert_eq!(Opened::<Fq, W, X, Q>::next_witness::<Fq, Gates>(), vec![0]);
-    assert_eq!(Opened::<Fq, W, X, Q>::next_fixed::<Fq, Gates>(), vec![0]);
+    assert_eq!(
+        Opened::<Fq, W, X, Q>::rotated_witness::<Fq, Gates>(),
+        vec![(0, Rotation::NEXT)]
+    );
+    assert_eq!(
+        Opened::<Fq, W, X, Q>::rotated_fixed::<Fq, Gates>(),
+        vec![(0, Rotation::NEXT)]
+    );
     assert_eq!(openings(), 18);
 }
 
@@ -294,7 +296,7 @@ proptest! {
         let pcs = ipa::pallas(&circuit);
         let (pk, vk) = setup(&circuit, &pcs).unwrap();
         let mut proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
-        proof.tail.tail.tail.head.witness_next.clear();
+        proof.tail.tail.tail.head.witness_rotated.clear();
         prop_assert_eq!(
             verify(&vk, &pcs, ipa::pallas_transcript(), witness.public_inputs(), proof),
             Err(PlonkError::Shape)
@@ -378,8 +380,8 @@ fn single_column() {
     impl Gadget<Fq, 1, 0> for Square {
         const NAME: &'static str = "square";
         fn constraints() -> Vec<Expr<Fq, 1, 0>> {
-            let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-            let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::Next);
+            let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+            let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
             vec![next - a.clone() * a]
         }
     }
@@ -407,4 +409,101 @@ fn single_column() {
         )
         .is_ok()
     );
+}
+
+/// Each of the four lists of rotated openings (evaluations and proofs, of
+/// witness and of fixed columns) is checked for its length on its own.
+#[test]
+fn every_rotated_list_is_shape_checked() {
+    let program = vec![
+        Row {
+            op: Op::Step,
+            fresh: [1, 2, 3, 4],
+            fixed: 5,
+            copy: None,
+            public: false,
+        },
+        Row {
+            op: Op::Shift,
+            fresh: [6, 7, 8, 9],
+            fixed: 1,
+            copy: None,
+            public: true,
+        },
+    ];
+    let (circuit, witness) = compile::<Fq>(&program);
+    let pcs = ipa::pallas(&circuit);
+    let (pk, vk) = setup(&circuit, &pcs).unwrap();
+    let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
+    for list in 0..4 {
+        let mut p = proof.clone();
+        match list {
+            0 => drop(p.tail.tail.tail.head.witness_rotated.pop()),
+            1 => drop(p.tail.tail.tail.head.fixed_rotated.pop()),
+            2 => drop(p.tail.tail.tail.tail.head.value.witness_rotated.pop()),
+            _ => drop(p.tail.tail.tail.tail.head.value.fixed_rotated.pop()),
+        }
+        assert_eq!(
+            verify(
+                &vk,
+                &pcs,
+                ipa::pallas_transcript(),
+                witness.public_inputs(),
+                p
+            ),
+            Err(PlonkError::Shape),
+            "list {list}"
+        );
+    }
+}
+
+/// No witness column at all: a circuit of fixed columns proves (the
+/// public-input and permutation terms are empty).
+#[test]
+fn no_witness_column() {
+    let mut b = Builder::<Fq, (), 0, 1, 0>::new();
+    for i in 0..5 {
+        b.plain_row([], [Fq::from_u64(i)]);
+    }
+    let (circuit, witness) = b.build().unwrap();
+    let pcs = ipa::pallas(&circuit);
+    let (pk, vk) = setup(&circuit, &pcs).unwrap();
+    let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
+    assert!(verify(&vk, &pcs, ipa::pallas_transcript(), &[], proof).is_ok());
+}
+
+/// Two circuits have equal verifier keys iff they are equal, and a key
+/// reports its circuit's size and public rows.
+#[test]
+fn verifier_keys_are_equal_iff_the_circuits_are() {
+    let variant = |change: u8| {
+        let mut b = Builder::<Fq, Gates, W, X, Q>::new();
+        let f = if change == 1 { 9 } else { 1 };
+        if change == 2 {
+            b.row::<Pow5, _>([Fq::ONE; W], [Fq::from_u64(f)]);
+        } else {
+            b.row::<Mul, _>([Fq::ONE; W], [Fq::from_u64(f)]);
+        }
+        for _ in 0..4 {
+            b.plain_row([Fq::ONE; W], [Fq::ZERO]);
+        }
+        let col = |k: usize| WitnessColumn::try_new(k).unwrap();
+        if change == 3 {
+            b.copy(Cell::new(col(0), 0), Cell::new(col(2), 3));
+        }
+        b.public(2);
+        b.public(if change == 4 { 3 } else { 4 });
+        b.build().unwrap().0
+    };
+    let reference = variant(0);
+    let pcs = ipa::pallas(&reference);
+    let (_, vk) = setup(&reference, &pcs).unwrap();
+    assert_eq!(vk.value.num_rows(), reference.num_rows());
+    assert_eq!(vk.value.public_rows(), &[2, 4]);
+    assert_eq!(setup(&variant(0), &pcs).unwrap().1, vk);
+    for change in 1..=4 {
+        let other = setup(&variant(change), &pcs).unwrap().1;
+        assert_ne!(other, vk, "change {change}");
+        assert_ne!(other.value, vk.value, "change {change}");
+    }
 }

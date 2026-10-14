@@ -15,8 +15,8 @@
 //!
 //! // The constraint of a squaring gadget: next = curr^2.
 //! type E = Expr<F, 1, 0>;
-//! let curr = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-//! let next = E::witness(WitnessColumn::new::<0>(), Rotation::Next);
+//! let curr = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+//! let next = E::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
 //! let gate = next - curr.clone() * curr;
 //! assert_eq!(gate.degree(), 2);
 //! ```

@@ -27,11 +27,11 @@ where
     F: PrimeField,
 {
     type E<F> = Expr<F, 2, 1>;
-    let q = E::<F>::fixed(FixedColumn::new::<0>(), Rotation::Curr);
-    let x = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-    let y = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::Curr);
-    let xn = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::Next);
-    let yn = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::Next);
+    let q = E::<F>::fixed(FixedColumn::new::<0>(), Rotation::CURR);
+    let x = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
+    let y = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::CURR);
+    let xn = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
+    let yn = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::NEXT);
     let mut selector = vec![F::ONE; ROWS];
     selector[ROWS - 1] = F::ZERO;
     Fibonacci::new(
