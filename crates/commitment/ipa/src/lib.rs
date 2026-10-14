@@ -46,7 +46,7 @@ use alloc::vec::Vec;
 
 use arrabbiata_commit::{HomomorphicCommitment, PolynomialCommitment, Univariate};
 use arrabbiata_curve::{Curve, Projective, absorb_point, msm, points_from_transcript};
-use arrabbiata_field::{Field, PrimeField, Sqrt};
+use arrabbiata_field::{Field, PrimeField, Sqrt, inner_product, powers};
 use arrabbiata_transcript::{Absorb, Transcript, absorb_length, typed::Label};
 
 /// Domain separator absorbed at the start of every opening.
@@ -169,19 +169,6 @@ where
     const LABEL: u64 = 0x6970_6100;
 }
 
-fn inner_product<F>(a: &[F], b: &[F]) -> F
-where
-    F: Field,
-{
-    let mut acc = F::ZERO;
-    let mut i = 0;
-    while i < a.len() && i < b.len() {
-        acc = acc + a[i] * b[i];
-        i += 1;
-    }
-    acc
-}
-
 impl<C, T> Ipa<C, T>
 where
     C: Curve,
@@ -264,22 +251,6 @@ where
         let xi = transcript.squeeze();
         (transcript, self.u * xi)
     }
-}
-
-/// `(1, z, z^2, ..., z^(n-1))`.
-fn powers<F>(z: F, n: usize) -> Vec<F>
-where
-    F: Field,
-{
-    let mut out = Vec::with_capacity(n);
-    let mut acc = F::ONE;
-    let mut i = 0;
-    while i < n {
-        out.push(acc);
-        acc = acc * z;
-        i += 1;
-    }
-    out
 }
 
 impl<C, T> PolynomialCommitment<C::Scalar> for Ipa<C, T>

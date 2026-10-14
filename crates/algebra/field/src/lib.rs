@@ -35,6 +35,8 @@
 
 #![no_std]
 
+extern crate alloc;
+
 use core::{
     fmt::Debug,
     ops::{Add, Mul, Neg, Sub},
@@ -45,9 +47,11 @@ pub mod extension;
 pub mod goldilocks;
 pub mod laws;
 pub mod montgomery;
+pub mod vector;
 
 pub use goldilocks::Goldilocks;
 pub use montgomery::{MontField, MontgomeryConfig};
+pub use vector::{inner_product, powers};
 
 /// A finite field.
 ///
