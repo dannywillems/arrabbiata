@@ -95,6 +95,11 @@ use arrabbiata_transcript::{
 
 /// The commitments to the cross-terms `T_1, ..., T_N` of a fold.
 ///
+/// # Type parameters
+///
+/// - `C`: the type of a commitment.
+/// - `N`: the number of cross-terms, `d - 1` for a relation of degree `d`.
+///
 /// ```
 /// use arrabbiata_folding::CrossTerms;
 /// let t = CrossTerms::new([1u8, 2]);
@@ -149,6 +154,18 @@ where
 }
 
 /// The relaxed instance type of the scheme.
+///
+/// # Type parameters
+///
+/// - `F`: the field the relation is over (the scalar field of the commitment
+///   scheme).
+/// - `PC`: the homomorphic vector commitment scheme; `PC::Commitment` is the
+///   type of the column, error and cross-term commitments.
+/// - `A`: the aggregation strategy combining the `M` constraints into one
+///   equation per row ([`Single`] or
+///   [`Powers`](arrabbiata_relation::aggregation::Powers)).
+/// - `W`: the number of witness columns (committed and folded).
+/// - `M`: the number of constraints.
 pub type Accumulator<F, PC, A, const W: usize, const M: usize> = RelaxedInstance<
     F,
     <PC as HomomorphicCommitment<F>>::Commitment,
@@ -158,6 +175,24 @@ pub type Accumulator<F, PC, A, const W: usize, const M: usize> = RelaxedInstance
 
 /// The transcript of one fold: the circuit, the two instances, the
 /// cross-terms, then the folding challenge.
+///
+/// # Type parameters
+///
+/// - `F`: the field the relation is over (the scalar field of the commitment
+///   scheme).
+/// - `PC`: the homomorphic vector commitment scheme; `PC::Commitment` is the
+///   type of the column, error and cross-term commitments.
+/// - `A`: the aggregation strategy combining the `M` constraints into one
+///   equation per row ([`Single`] or
+///   [`Powers`](arrabbiata_relation::aggregation::Powers)).
+/// - `W`: the number of witness columns (committed and folded).
+/// - `X`: the number of fixed columns (selectors; shared by both instances,
+///   never folded).
+/// - `M`: the number of constraints.
+/// - `D`: the maximum degree of a constraint in the witness columns; each
+///   constraint is homogenized to this degree with `u`.
+/// - `T`: the number of cross-terms, `d - 1` for the relation's degree
+///   `d = D + A::EXTRA_DEGREE` (checked at compile time where `Fold` is used).
 ///
 /// Declaring the statement (`Public`) before the message is what binds `r`
 /// to everything the verifier folds; this is the weak Fiat-Shamir pitfall
@@ -198,6 +233,24 @@ pub type FoldingTranscript<
 /// and `M` constraints of degree at most `D`, aggregated by `A`, committed
 /// with `PC`; a fold produces `T` cross-terms, and `T` must equal
 /// `D + A::EXTRA_DEGREE - 1` (checked at compile time).
+///
+/// # Type parameters
+///
+/// - `F`: the field the relation is over (the scalar field of the commitment
+///   scheme).
+/// - `PC`: the homomorphic vector commitment scheme; `PC::Commitment` is the
+///   type of the column, error and cross-term commitments.
+/// - `A`: the aggregation strategy combining the `M` constraints into one
+///   equation per row ([`Single`] or
+///   [`Powers`](arrabbiata_relation::aggregation::Powers)).
+/// - `W`: the number of witness columns (committed and folded).
+/// - `X`: the number of fixed columns (selectors; shared by both instances,
+///   never folded).
+/// - `M`: the number of constraints.
+/// - `D`: the maximum degree of a constraint in the witness columns; each
+///   constraint is homogenized to this degree with `u`.
+/// - `T`: the number of cross-terms, `d - 1` for the relation's degree
+///   `d = D + A::EXTRA_DEGREE` (checked at compile time where `Fold` is used).
 ///
 /// ```
 /// use arrabbiata_commit::IdentityCommitment;
@@ -245,6 +298,16 @@ pub struct Fold<
 >(PhantomData<(F, PC, A)>);
 
 /// Nova: degree 2, one constraint, no combiner, one cross-term.
+///
+/// # Type parameters
+///
+/// - `F`: the field the relation is over (the scalar field of the commitment
+///   scheme).
+/// - `PC`: the homomorphic vector commitment scheme; `PC::Commitment` is the
+///   type of the column, error and cross-term commitments.
+/// - `W`: the number of witness columns (committed and folded).
+/// - `X`: the number of fixed columns (selectors; shared by both instances,
+///   never folded).
 ///
 /// With the row-local constraint `a * b - c`, the relaxed relation is
 /// `a * b - u * c = E`, Nova's relaxed R1CS, and the single cross-term is
