@@ -32,6 +32,7 @@ pub mod grain;
 
 use alloc::vec::Vec;
 
+use arrabbiata_bn254::{Fq as Bn254Fq, Fr as Bn254Fr};
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_pasta::{Fp, Fq};
 use arrabbiata_transcript::{Duplex, Permutation};
@@ -309,4 +310,55 @@ pub fn pallas_sponge(domain: u64) -> PoseidonSponge<Fp> {
 #[must_use]
 pub fn vesta_sponge(domain: u64) -> PoseidonSponge<Fq> {
     Duplex::new(vesta_base(), domain)
+}
+
+/// Poseidon over the BN254 scalar field: width 3, 8 full and 57 partial
+/// rounds, `x^5` (the round numbers of the Poseidon paper for a 254-bit
+/// field at 128 bits of security). Constants are Grain-generated with the
+/// first MDS matrix; no compatibility with another implementation is
+/// claimed.
+///
+/// ```
+/// use arrabbiata_poseidon::bn254_scalar;
+/// assert_eq!(bn254_scalar().round_constants().len(), 65);
+/// ```
+#[must_use]
+pub fn bn254_scalar() -> Poseidon<Bn254Fr, 3> {
+    Poseidon::new(8, 57, 5)
+}
+
+/// Poseidon over the BN254 base field, with the parameters of
+/// [`bn254_scalar`].
+///
+/// ```
+/// use arrabbiata_poseidon::bn254_base;
+/// assert_eq!(bn254_base().round_constants().len(), 65);
+/// ```
+#[must_use]
+pub fn bn254_base() -> Poseidon<Bn254Fq, 3> {
+    Poseidon::new(8, 57, 5)
+}
+
+/// A Poseidon sponge over the BN254 scalar field, separated by `domain`.
+///
+/// ```
+/// use arrabbiata_poseidon::bn254_scalar_sponge;
+/// use arrabbiata_transcript::Transcript;
+/// let _ = bn254_scalar_sponge(0).squeeze();
+/// ```
+#[must_use]
+pub fn bn254_scalar_sponge(domain: u64) -> PoseidonSponge<Bn254Fr> {
+    Duplex::new(bn254_scalar(), domain)
+}
+
+/// A Poseidon sponge over the BN254 base field, separated by `domain`.
+///
+/// ```
+/// use arrabbiata_poseidon::bn254_base_sponge;
+/// use arrabbiata_transcript::Transcript;
+/// let _ = bn254_base_sponge(0).squeeze();
+/// ```
+#[must_use]
+pub fn bn254_base_sponge(domain: u64) -> PoseidonSponge<Bn254Fq> {
+    Duplex::new(bn254_base(), domain)
 }

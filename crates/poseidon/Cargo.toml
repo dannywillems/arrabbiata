@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+arrabbiata-bn254 = { workspace = true }
 arrabbiata-field = { workspace = true }
 arrabbiata-pasta = { workspace = true }
 arrabbiata-transcript = { workspace = true }
