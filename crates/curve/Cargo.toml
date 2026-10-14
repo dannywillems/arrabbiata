@@ -15,6 +15,7 @@ arrabbiata-transcript = { workspace = true }
 [dev-dependencies]
 # Doctests and tests instantiate the Pasta curves (a dev-dependency cycle,
 # which Cargo allows).
+arrabbiata-bn254 = { workspace = true }
 arrabbiata-pasta = { workspace = true }
 proptest = { workspace = true }
 

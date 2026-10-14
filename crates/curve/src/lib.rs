@@ -571,3 +571,53 @@ where
     }
     points
 }
+
+/// A bilinear pairing `e: G1 x G2 -> Gt` between two groups of the same
+/// prime order: non-degenerate, and bilinear,
+/// `e(a P, b Q) = e(P, Q)^(a b)`.
+///
+/// Protocols that need a pairing (KZG) are generic over this trait; a
+/// curve crate provides the instance (for example `arrabbiata_bn254::Bn254`).
+///
+/// ```
+/// use arrabbiata_bn254::{Bn254, Fr};
+/// use arrabbiata_curve::{Pairing, Projective};
+/// use arrabbiata_field::Field;
+///
+/// fn check<E>(a: <E::G1 as arrabbiata_curve::Curve>::Scalar) -> bool
+/// where
+///     E: Pairing,
+/// {
+///     let (p, q) = (Projective::<E::G1>::generator(), Projective::<E::G2>::generator());
+///     // e(aP, Q) e(-P, aQ) = 1.
+///     E::pairing_product_is_one(&[(p * a, q), (-p, q * a)])
+/// }
+/// assert!(check::<Bn254>(Fr::from_u64(7)));
+/// ```
+pub trait Pairing
+where
+    Self: 'static + Copy + Debug + Eq + Send + Sync,
+{
+    /// The first source group.
+    type G1: Curve;
+
+    /// The second source group, with the same scalar field.
+    type G2: Curve<Scalar = <Self::G1 as Curve>::Scalar>;
+
+    /// Whether `prod_i e(P_i, Q_i) = 1`, the form in which pairing checks are
+    /// written (one final exponentiation for all the pairs).
+    ///
+    /// ```
+    /// use arrabbiata_bn254::Bn254;
+    /// use arrabbiata_curve::{Pairing, Projective};
+    /// let (p, q) = (Projective::generator(), Projective::generator());
+    /// assert!(!Bn254::pairing_product_is_one(&[(p, q)]));
+    /// ```
+    fn pairing_product_is_one(pairs: &[PairingInput<Self>]) -> bool;
+}
+
+/// A pair `(P, Q)` in `G1 x G2`, an input of the pairing `E`.
+pub type PairingInput<E> = (
+    Projective<<E as Pairing>::G1>,
+    Projective<<E as Pairing>::G2>,
+);

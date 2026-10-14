@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "crates/field",
   "crates/curve",
+  "crates/bn254",
   "crates/pasta",
   "crates/poseidon",
   "crates/poly",
@@ -25,6 +26,7 @@ authors = ["Danny Willems <danny@badaas.be>"]
 [workspace.dependencies]
 arrabbiata-field = { path = "crates/field" }
 arrabbiata-curve = { path = "crates/curve" }
+arrabbiata-bn254 = { path = "crates/bn254" }
 arrabbiata-pasta = { path = "crates/pasta" }
 arrabbiata-poseidon = { path = "crates/poseidon" }
 arrabbiata-poly = { path = "crates/poly" }
