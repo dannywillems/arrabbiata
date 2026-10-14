@@ -437,3 +437,25 @@ fn vesta_is_a_different_instance() {
     vesta_base().permute_state(&mut x);
     assert_ne!(x, [Fq::ZERO, Fq::ONE, Fq::from_u64(2)]);
 }
+
+/// The Goldilocks sponge binds every absorbed element, across several
+/// permutations of its rate-8 duplex.
+#[test]
+fn goldilocks_sponge_binds_its_input() {
+    use arrabbiata_field::Goldilocks;
+    use arrabbiata_poseidon::goldilocks_sponge;
+    let squeeze = |values: &[u64]| {
+        let mut sponge = goldilocks_sponge(3);
+        for v in values {
+            sponge.absorb(Goldilocks::new(*v));
+        }
+        sponge.squeeze()
+    };
+    let base: Vec<u64> = (0..20).collect();
+    for i in 0..base.len() {
+        let mut other = base.clone();
+        other[i] += 1;
+        assert_ne!(squeeze(&base), squeeze(&other), "element {i}");
+    }
+    assert_ne!(squeeze(&base), squeeze(&base[..19]));
+}

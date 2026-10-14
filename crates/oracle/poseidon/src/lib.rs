@@ -10,7 +10,9 @@
 //!
 //! [`pallas_base`] and [`vesta_base`] are the instances of Halo 2 and Orchard
 //! (`P128Pow5T3`: width 3, 8 full and 56 partial rounds, `x^5`) over the two
-//! Pasta fields, checked against the Zcash test vectors.
+//! Pasta fields, checked against the Zcash test vectors. [`bn254_scalar`],
+//! [`bn254_base`] and [`goldilocks`] cover the other fields of the
+//! workspace.
 //!
 //! ```
 //! use arrabbiata_field::Field;
@@ -33,7 +35,7 @@ pub mod grain;
 use alloc::vec::Vec;
 
 use arrabbiata_bn254::{Fq as Bn254Fq, Fr as Bn254Fr};
-use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_field::{Field, Goldilocks, PrimeField};
 use arrabbiata_pasta::{Fp, Fq};
 use arrabbiata_transcript::{Duplex, Permutation};
 
@@ -361,4 +363,38 @@ pub fn bn254_scalar_sponge(domain: u64) -> PoseidonSponge<Bn254Fr> {
 #[must_use]
 pub fn bn254_base_sponge(domain: u64) -> PoseidonSponge<Bn254Fq> {
     Duplex::new(bn254_base(), domain)
+}
+
+/// Poseidon over the Goldilocks field: width 12, 8 full and 22 partial
+/// rounds, `x^7` (the shape of Plonky2's instance; `x^5` is not a
+/// permutation here since 5 divides `p - 1`). Constants are Grain-generated,
+/// so the permutation is not Plonky2's.
+///
+/// A 64-bit field needs a wide state: with rate 8 and capacity 4, the
+/// capacity holds 256 bits, which is what a 128-bit security level asks of a
+/// sponge. A width-3 sponge over this field would leave 64 bits of capacity.
+///
+/// ```
+/// use arrabbiata_poseidon::goldilocks;
+/// assert_eq!(goldilocks().round_constants().len(), 30);
+/// ```
+#[must_use]
+pub fn goldilocks() -> Poseidon<Goldilocks, 12> {
+    Poseidon::new(8, 22, 7)
+}
+
+/// A duplex sponge over the Goldilocks Poseidon: width 12, rate 8, capacity 4.
+pub type GoldilocksSponge = Duplex<Goldilocks, Poseidon<Goldilocks, 12>, 12, 8>;
+
+/// A Poseidon sponge over Goldilocks, separated by `domain`.
+///
+/// ```
+/// use arrabbiata_poseidon::goldilocks_sponge;
+/// use arrabbiata_transcript::Transcript;
+/// assert_eq!(goldilocks_sponge(1).squeeze(), goldilocks_sponge(1).squeeze());
+/// assert_ne!(goldilocks_sponge(1).squeeze(), goldilocks_sponge(2).squeeze());
+/// ```
+#[must_use]
+pub fn goldilocks_sponge(domain: u64) -> GoldilocksSponge {
+    Duplex::new(goldilocks(), domain)
 }
