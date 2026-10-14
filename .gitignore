@@ -19,6 +19,11 @@ Thumbs.db
 .env.local
 *.local
 
+# Mutation testing (cargo-mutants)
+mutants.out/
+mutants.out.old/
+mutants.diff
+
 # Logs
 *.log
 

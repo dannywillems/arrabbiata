@@ -1,5 +1,8 @@
 NIGHTLY_RUST_VERSION ?= nightly
 TAPLO_CLI_VERSION ?= 0.9.3
+CARGO_MUTANTS_VERSION ?= 27.1.0
+# The base of `make mutants-diff`: mutate only what changed since it.
+BASE ?= origin/main
 
 # Crates extracted to Lean with Charon/Aeneas. They must stay inside the
 # subset of Rust Aeneas supports (no unsafe, no closures or dyn, no iterator
@@ -54,7 +57,7 @@ test: ## Run all tests, including doctests and compile-fail examples
 	cargo test --workspace
 
 .PHONY: test-curve
-test-curve: ## Property-test the curve laws on CURVE (pallas, vesta, bn254_g1, bn254_g2)
+test-curve: ## Curve laws on CURVE (pallas, vesta, bn254_g{1,2}, grumpkin)
 	cargo test -p arrabbiata-curve --test laws -- --exact $(CURVE)
 
 .PHONY: test-release
@@ -74,6 +77,18 @@ doc-examples: ## Require a code example on every public item (nightly)
 doc-site: ## Build the documentation site (all crates, with an index page)
 	RUSTDOCFLAGS="--enable-index-page -Z unstable-options -D warnings" \
 		cargo +$(NIGHTLY_RUST_VERSION) doc --workspace --no-deps
+
+.PHONY: mutants
+mutants: ## Mutation testing (optional: PACKAGE=crate, SHARD=k/n, FILE=path)
+	cargo mutants --no-shuffle \
+		$(if $(PACKAGE),--package $(PACKAGE)) \
+		$(if $(SHARD),--shard $(SHARD)) \
+		$(if $(FILE),--file $(FILE))
+
+.PHONY: mutants-diff
+mutants-diff: ## Mutation testing of the code changed since BASE
+	git diff $(BASE) -- '*.rs' > mutants.diff
+	cargo mutants --no-shuffle --in-diff mutants.diff
 
 .PHONY: deny
 deny: ## Check licenses, advisories, bans and sources
@@ -108,6 +123,16 @@ setup-taplo: ## Install the taplo TOML formatter
 	else \
 		cargo +$(NIGHTLY_RUST_VERSION) install taplo-cli \
 			--version $(TAPLO_CLI_VERSION) --force; \
+	fi
+
+.PHONY: setup-mutants
+setup-mutants: ## Install cargo-mutants
+	@if cargo mutants --version 2>/dev/null | \
+		grep -q $(CARGO_MUTANTS_VERSION); then \
+		echo "cargo-mutants $(CARGO_MUTANTS_VERSION) already installed"; \
+	else \
+		cargo install cargo-mutants --version $(CARGO_MUTANTS_VERSION) \
+			--locked; \
 	fi
 
 .PHONY: clean
