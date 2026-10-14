@@ -1,74 +1,130 @@
-//! Vanilla PlonK, as a toy end-to-end example of the Arrabbiata stack.
+//! PlonK over any number of witness columns, fixed columns and selectors.
 //!
-//! This crate compiles the PlonK polynomial IOP (Gabizon, Williamson,
-//! Ciobotaru, ePrint 2019/953) with any univariate
-//! [`PolynomialCommitment`], over any [`TwoAdicField`], with the typed
-//! transcript of [`arrabbiata_transcript::typed`] on a sponge `S` that is
-//! part of the protocol type: `Plonk<F, PC, S>`. Fiat-Shamir runs on Poseidon
-//! ([`arrabbiata_poseidon`]) in every instantiation of the crate. Circuits come from
-//! [`arrabbiata_frontend`].
+//! The arithmetization is the PlonKish one of the original Arrabbiata
+//! circuits: a table of `W` witness columns and `X` fixed columns, a set of
+//! [gadgets](gate::Gadget) each turned on by its own selector, at most one
+//! gadget per row, constraints that read the current and the next row, copy
+//! constraints between any two witness cells, and public inputs in witness
+//! column 0. The gate set is a type ([`gate::GateSet`]), so the index of a
+//! selector is the position of its gadget in the type, and the protocol
+//! type [`Plonk`] fixes the gate set, the scheme and the sponge.
+//!
+//! The protocol compiles this polynomial IOP (Gabizon, Williamson,
+//! Ciobotaru, ePrint 2019/953, generalized to custom gates) with any
+//! univariate [`PolynomialCommitment`], over any [`TwoAdicField`], on the
+//! typed transcript of [`arrabbiata_transcript::typed`]. Vanilla PlonK is
+//! the instance with three witness columns, five fixed columns and one
+//! gadget ([`vanilla`]).
 //!
 //! ```
 //! use arrabbiata_field::Field;
 //! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_frontend::build;
-//! use arrabbiata_plonk::{prove, setup, verify};
-//! use arrabbiata_plonk::ipa;
+//! use arrabbiata_plonk::{
+//!     circuit::{Builder, Cell},
+//!     gate::Gadget,
+//!     ipa, prove, setup, verify,
+//! };
+//! use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
 //!
-//! // x^3 + x + 5 = 35, with x = 3 private and 35 public.
-//! let (circuit, witness, ()) = build::<F, _, _>(|b| {
-//!     let x = b.witness(F::from_u64(3));
-//!     let x2 = b.mul(&x, &x);
-//!     let x3 = b.mul(&x2, &x);
-//!     let sum = b.add(&x3, &x);
-//!     let lhs = b.add_constant(&sum, F::from_u64(5));
-//!     let rhs = b.public_input(F::from_u64(35));
-//!     b.assert_equal(&lhs, &rhs);
-//! });
+//! /// The Poseidon S-box, `b = a^5`.
+//! struct SBox;
+//! impl Gadget<F, 2, 0> for SBox {
+//!     const NAME: &'static str = "sbox";
+//!     fn constraints() -> Vec<Expr<F, 2, 0>> {
+//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::Curr);
+//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+//!         let a2 = a.clone() * a.clone();
+//!         vec![b - a2.clone() * a2 * a]
+//!     }
+//! }
+//!
+//! /// `a' = b`: the output of a row is the input of the next.
+//! struct Chain;
+//! impl Gadget<F, 2, 0> for Chain {
+//!     const NAME: &'static str = "chain";
+//!     fn constraints() -> Vec<Expr<F, 2, 0>> {
+//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+//!         let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::Next);
+//!         vec![next - b]
+//!     }
+//! }
+//!
+//! // 2 -> 2^5 -> 2^25, with 2 and 2^25 public.
+//! type Gates = (SBox, (Chain, ()));
+//! let mut b = Builder::<F, Gates, 2, 0, 2>::new();
+//! let x = F::from_u64(2);
+//! let y = x.pow(5);
+//! let z = y.pow(5);
+//! let input = b.plain_row([x, F::ZERO], []);
+//! let r0 = b.row::<SBox, _>([x, y], []);
+//! let r1 = b.row::<SBox, _>([y, z], []);
+//! let output = b.plain_row([z, F::ZERO], []);
+//! let (a, c) = (WitnessColumn::new::<0>(), WitnessColumn::new::<1>());
+//! b.copy(Cell::new(a, input), Cell::new(a, r0));
+//! b.copy(Cell::new(c, r0), Cell::new(a, r1));
+//! b.copy(Cell::new(c, r1), Cell::new(a, output));
+//! b.public(input);
+//! b.public(output);
+//! let (circuit, witness) = b.build().unwrap();
 //!
 //! let pcs = ipa::pallas(&circuit);
 //! let (pk, vk) = setup(&circuit, &pcs).unwrap();
 //! let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
-//! verify(&vk, &pcs, ipa::pallas_transcript(), witness.public_inputs(), proof).unwrap();
+//! verify(&vk, &pcs, ipa::pallas_transcript(), &[x, z], proof).unwrap();
 //! ```
 //!
 //! # The protocol
 //!
-//! The rounds, in the order of [`PlonkTranscript`]:
+//! With `n` rows, `H` the subgroup of order `n`, `w_k` the witness, `f_k`
+//! the fixed and `q_g` the selector polynomials, the rounds follow
+//! [`PlonkTranscript`]:
 //!
-//! 1. the prover commits to the wire polynomials `a, b, c`;
+//! 1. the prover commits to `w_0, ..., w_(W-1)`;
 //! 2. the verifier sends `beta, gamma`; the prover commits to the grand
-//!    product `z` of the copy-constraint argument;
-//! 3. the verifier sends `alpha`; the prover commits to the quotient
-//!    `t = (gate + PI + alpha * perm + alpha^2 * (z - 1) L_1) / Z_H`;
-//! 4. the verifier sends `zeta`; the prover sends the evaluations at `zeta`
-//!    (and `z` at `zeta * w`) with their opening proofs;
+//!    product `z` of the copy-constraint argument over the `W` columns,
+//!    with the cosets `g^k H` labelling column `k`;
+//! 3. the verifier sends `alpha`; the prover commits to the quotient `t`
+//!    of
+//!    `sum_j alpha^j q_g(j) C_j + alpha^J (L_P w_0 - PI)
+//!     + alpha^(J+1) perm + alpha^(J+2) L_1 (z - 1)` by `Z_H`, where `C_j`
+//!    ranges over the `J` constraints of all gadgets, `L_P` is 1 on the
+//!    public rows and 0 elsewhere, and `PI` interpolates the public inputs;
+//! 4. the verifier sends `zeta`; the prover sends every polynomial at
+//!    `zeta`, `z` and the columns read at the next row at `zeta w`, with
+//!    their opening proofs ([`Opened`]);
 //! 5. the verifier checks the openings and the identity at `zeta`.
+//!
+//! The quotient is computed on a coset of a domain of size at least
+//! `quotient_factor() * n`, pointwise, so a gadget of any degree costs one
+//! NTT per column rather than polynomial products.
 //!
 //! # Deviations from the paper (why this is a toy)
 //!
 //! - No blinding factors: the proof is not zero-knowledge.
 //! - No linearization and no batched openings: every polynomial is opened
-//!   at `zeta` separately, selectors and permutation polynomials included.
-//!   This changes the cost, not the soundness argument.
-//! - The quotient is committed as one polynomial rather than three, which
-//!   matters only for schemes with a degree bound (KZG).
-//! - Polynomial products are computed by schoolbook multiplication.
+//!   separately. This changes the cost, not the soundness argument.
+//! - The quotient is committed as one polynomial rather than in chunks,
+//!   which matters only for schemes with a degree bound (KZG).
 
 #![no_std]
 
 extern crate alloc;
 
+pub mod circuit;
+pub mod gate;
 pub mod ipa;
 pub mod kzg;
+pub mod vanilla;
 
 use alloc::{vec, vec::Vec};
-use core::{fmt, marker::PhantomData};
+use core::{array, fmt, iter, marker::PhantomData};
 
 use arrabbiata_commit::{PolynomialCommitment, Univariate};
 use arrabbiata_field::{Field, TwoAdicField};
-use arrabbiata_frontend::{Circuit, Witness};
-use arrabbiata_poly::{Domain, UniPoly};
+use arrabbiata_poly::{
+    Assignment, Domain, Expr, FixedColumn, Rotation, Scalars, UniPoly, Variable, WitnessColumn,
+    evaluate,
+};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_length, absorb_slice,
     typed::{
@@ -76,11 +132,20 @@ use arrabbiata_transcript::{
     },
 };
 
+pub use crate::{
+    circuit::{Builder, Cell, Circuit, Witness},
+    gate::{Gadget, GateSet, Member},
+};
+
 /// The commitment type of a scheme.
 type Com<F, PC> = <PC as PolynomialCommitment<F>>::Commitment;
 
+/// The opening proof type of a scheme.
+type Prf<F, PC> = <PC as PolynomialCommitment<F>>::Proof;
+
 /// The keys produced by [`setup`].
-pub type Keys<F, PC> = (ProverKey<F, PC>, VerifierKey<F, PC>);
+pub type Keys<F, PC, G, const W: usize, const X: usize, const Q: usize> =
+    (ProverKey<F, PC, G, W, X, Q>, VerifierKey<F, PC, G, W, X, Q>);
 
 /// A value of type `T` produced by the polynomial commitment scheme `PC`.
 ///
@@ -105,7 +170,7 @@ pub type Keys<F, PC> = (ProverKey<F, PC>, VerifierKey<F, PC>);
 /// use arrabbiata_field::Field;
 /// use arrabbiata_frontend::build;
 /// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{ipa, ipa::PallasIpa, prove, setup, verify};
+/// use arrabbiata_plonk::{ipa, ipa::PallasIpa, prove, setup, vanilla, verify};
 /// use arrabbiata_transcript::typed::Label;
 ///
 /// type Point = <PallasIpa as PolynomialCommitment<F>>::Commitment;
@@ -123,9 +188,10 @@ pub type Keys<F, PC> = (ProverKey<F, PC>, VerifierKey<F, PC>);
 ///     fn verify(&self, c: &Point, x: &F, v: F, pr: &IpaProof) -> bool { self.0.verify(c, x, v, pr) }
 /// }
 ///
-/// let (circuit, witness, ()) = build::<F, _, _>(|b| {
+/// let (c, w, ()) = build::<F, _, _>(|b| {
 ///     b.witness(F::from_u64(1));
 /// });
+/// let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
 /// let pcs = ipa::pallas(&circuit);
 /// let twin = Twin(ipa::pallas(&circuit));
 /// let (pk, _) = setup(&circuit, &pcs).unwrap();
@@ -224,21 +290,21 @@ where
 /// ```
 ///
 /// A proof made on the Poseidon sponge is not accepted by a verifier running
-/// another sponge, even over the same field and scheme. Here the verifier runs
-/// Poseidon of width 3 at rate 1 instead of rate 2:
+/// another sponge, even over the same field and scheme. Here the verifier
+/// runs Poseidon of width 3 at rate 1 instead of rate 2:
 ///
 /// ```compile_fail
 /// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
-/// use arrabbiata_plonk::{prove, setup, verify};
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
 /// use arrabbiata_poseidon::{Poseidon, vesta_base};
 /// use arrabbiata_transcript::Duplex;
 ///
-/// let (circuit, witness, ()) = build::<F, _, _>(|b| {
+/// let (c, w, ()) = build::<F, _, _>(|b| {
 ///     b.witness(F::from_u64(1));
 /// });
+/// let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
 /// let pcs = ipa::pallas(&circuit);
 /// let (pk, vk) = setup(&circuit, &pcs).unwrap();
 /// let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
@@ -255,28 +321,31 @@ where
     const LABEL: u64 = PC::LABEL;
 }
 
-/// Commitments to the wire polynomials `a, b, c`.
-pub type Wires<F, PC, S> = Scheme<With<PC, S>, Triple<Com<F, PC>>, 0x7769>;
+/// Commitments to the `W` witness polynomials.
+pub type Wires<F, PC, S, const W: usize> = Scheme<With<PC, S>, Columns<Com<F, PC>, W>, 0x7769>;
 /// Commitment to the grand product `z`.
 pub type GrandProduct<F, PC, S> = Scheme<With<PC, S>, Com<F, PC>, 0x7a7a>;
 /// Commitment to the quotient `t`.
 pub type Quotient<F, PC, S> = Scheme<With<PC, S>, Com<F, PC>, 0x7474>;
+/// The claimed evaluations.
+pub type Evaluations<F, const W: usize, const X: usize, const Q: usize> = Opened<F, W, X, Q>;
 /// The opening proofs.
-pub type Openings<F, PC, S> =
-    Scheme<With<PC, S>, OpeningProofs<<PC as PolynomialCommitment<F>>::Proof>, 0x6f70>;
+pub type Openings<F, PC, S, const W: usize, const X: usize, const Q: usize> =
+    Scheme<With<PC, S>, Opened<Prf<F, PC>, W, X, Q>, 0x6f70>;
 /// The verifier key: the preprocessed circuit, committed with `PC`.
-pub type VerifierKey<F, PC> = Scheme<PC, Preprocessed<F, Com<F, PC>>, 0x766b>;
+pub type VerifierKey<F, PC, G, const W: usize, const X: usize, const Q: usize> =
+    Scheme<PC, Preprocessed<F, Com<F, PC>, G, W, X, Q>, 0x766b>;
 
-/// Three values of the same type, absorbed in order.
+/// `N` values of the same type, absorbed in order.
 ///
 /// ```
-/// use arrabbiata_plonk::Triple;
-/// assert_eq!(Triple([1, 2, 3]).0[2], 3);
+/// use arrabbiata_plonk::Columns;
+/// assert_eq!(Columns([1, 2, 3]).0[2], 3);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Triple<C>(pub [C; 3]);
+pub struct Columns<C, const N: usize>(pub [C; N]);
 
-impl<F, C> Absorb<F> for Triple<C>
+impl<F, C, const N: usize> Absorb<F> for Columns<C, N>
 where
     F: Field,
     C: Absorb<F>,
@@ -285,9 +354,9 @@ where
     where
         T: Transcript<F>,
     {
-        self.0[0].absorb_into(transcript);
-        self.0[1].absorb_into(transcript);
-        self.0[2].absorb_into(transcript);
+        for c in &self.0 {
+            c.absorb_into(transcript);
+        }
     }
 }
 
@@ -317,186 +386,430 @@ where
     }
 }
 
-/// The claimed evaluations at `zeta` (and `z` at `zeta * w`).
+/// One value per opening: an evaluation (`T = F`) or an opening proof.
+///
+/// The order, used by [`Opened::iter`] and [`PlonkError::Opening`], is:
+/// the witness, fixed, selector and permutation polynomials, `z` and `t`
+/// at `zeta`; then `z`, the witness columns of [`Opened::next_witness`]
+/// and the fixed columns of [`Opened::next_fixed`] at `zeta w`.
 ///
 /// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_plonk::Evaluations;
-/// let e = Evaluations { values: [F::ZERO; 13], z_shifted: F::ONE };
-/// assert_eq!(e.z_shifted, F::ONE);
+/// use arrabbiata_plonk::Opened;
+/// let o = Opened::<u8, 1, 1, 1> {
+///     witness: [0], fixed: [1], selectors: [2], sigmas: [3], z: 4, t: 5,
+///     z_next: 6, witness_next: vec![], fixed_next: vec![],
+/// };
+/// assert_eq!(o.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5, 6]);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Evaluations<F> {
-    /// `a, b, c, q_L, q_R, q_O, q_M, q_C, S_1, S_2, S_3, z, t` at `zeta`,
-    /// in the order of [`OPENED`].
-    pub values: [F; 13],
-    /// `z(zeta * w)`.
-    pub z_shifted: F,
+pub struct Opened<T, const W: usize, const X: usize, const Q: usize> {
+    /// The witness polynomials at `zeta`.
+    pub witness: [T; W],
+    /// The fixed polynomials at `zeta`.
+    pub fixed: [T; X],
+    /// The selector polynomials at `zeta`.
+    pub selectors: [T; Q],
+    /// The permutation polynomials at `zeta`.
+    pub sigmas: [T; W],
+    /// The grand product at `zeta`.
+    pub z: T,
+    /// The quotient at `zeta`.
+    pub t: T,
+    /// The grand product at `zeta w`.
+    pub z_next: T,
+    /// The witness polynomials read at the next row, at `zeta w`.
+    pub witness_next: Vec<T>,
+    /// The fixed polynomials read at the next row, at `zeta w`.
+    pub fixed_next: Vec<T>,
 }
 
-impl<F> Label for Evaluations<F> {
-    const LABEL: u64 = 0x6576;
-}
-
-impl<F> Absorb<F> for Evaluations<F>
-where
-    F: Field,
-{
-    fn absorb_into<T>(&self, transcript: &mut T)
-    where
-        T: Transcript<F>,
-    {
-        let mut i = 0;
-        while i < 13 {
-            transcript.absorb(self.values[i]);
-            i += 1;
-        }
-        transcript.absorb(self.z_shifted);
+impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
+    /// Every value, in the order of the openings.
+    ///
+    /// ```
+    /// use arrabbiata_plonk::Opened;
+    /// let o = Opened::<u8, 2, 0, 0> {
+    ///     witness: [1, 2], fixed: [], selectors: [], sigmas: [3, 4], z: 5, t: 6,
+    ///     z_next: 7, witness_next: vec![8], fixed_next: vec![],
+    /// };
+    /// assert_eq!(o.iter().count(), 8);
+    /// ```
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.witness
+            .iter()
+            .chain(&self.fixed)
+            .chain(&self.selectors)
+            .chain(&self.sigmas)
+            .chain(iter::once(&self.z))
+            .chain(iter::once(&self.t))
+            .chain(iter::once(&self.z_next))
+            .chain(&self.witness_next)
+            .chain(&self.fixed_next)
     }
-}
 
-/// The names of the polynomials opened at `zeta`, in order.
-///
-/// ```
-/// assert_eq!(arrabbiata_plonk::OPENED[11], "z");
-/// ```
-pub const OPENED: [&str; 13] = [
-    "a", "b", "c", "q_L", "q_R", "q_O", "q_M", "q_C", "S_1", "S_2", "S_3", "z", "t",
-];
-
-/// The opening proofs of the evaluations.
-///
-/// ```
-/// use arrabbiata_plonk::OpeningProofs;
-/// let o = OpeningProofs { at_zeta: [0u8; 13], at_zeta_shifted: 1u8 };
-/// assert_eq!(o.at_zeta_shifted, 1);
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OpeningProofs<P> {
-    /// Proofs at `zeta`, in the order of [`OPENED`].
-    pub at_zeta: [P; 13],
-    /// Proof of `z` at `zeta * w`.
-    pub at_zeta_shifted: P,
-}
-
-impl<F, P> Absorb<F> for OpeningProofs<P>
-where
-    F: Field,
-    P: Absorb<F>,
-{
-    fn absorb_into<T>(&self, transcript: &mut T)
-    where
-        T: Transcript<F>,
-    {
-        let mut i = 0;
-        while i < 13 {
-            self.at_zeta[i].absorb_into(transcript);
-            i += 1;
-        }
-        self.at_zeta_shifted.absorb_into(transcript);
+    /// Every value, mutably, in the order of the openings.
+    ///
+    /// ```
+    /// use arrabbiata_plonk::Opened;
+    /// let mut o = Opened::<u8, 1, 0, 0> {
+    ///     witness: [1], fixed: [], selectors: [], sigmas: [2], z: 3, t: 4,
+    ///     z_next: 5, witness_next: vec![], fixed_next: vec![],
+    /// };
+    /// *o.iter_mut().nth(4).unwrap() = 9;
+    /// assert_eq!(o.z_next, 9);
+    /// ```
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.witness
+            .iter_mut()
+            .chain(&mut self.fixed)
+            .chain(&mut self.selectors)
+            .chain(&mut self.sigmas)
+            .chain(iter::once(&mut self.z))
+            .chain(iter::once(&mut self.t))
+            .chain(iter::once(&mut self.z_next))
+            .chain(&mut self.witness_next)
+            .chain(&mut self.fixed_next)
     }
-}
 
-/// The verifier's view of a circuit: the domain, the coset shifts of the
-/// permutation argument, and the commitments to the selectors and to the
-/// permutation polynomials. Wrapped with its scheme as a [`VerifierKey`].
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::ipa;
-/// use arrabbiata_frontend::build;
-/// let (circuit, _, ()) = build::<F, _, _>(|b| {
-///     b.witness(F::from_u64(1));
-/// });
-/// let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
-/// assert_eq!(vk.value.num_rows(), 2);
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Preprocessed<F, C> {
-    log_size: u32,
-    shifts: [F; 3],
-    selectors: [C; 5],
-    sigmas: [C; 3],
-    public_rows: Vec<usize>,
-}
-
-impl<F, C> Preprocessed<F, C> {
-    /// The number of rows of the circuit.
+    /// The witness columns opened at `zeta w`: those some constraint of
+    /// `G` reads at the next row, in increasing order.
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::ipa;
+    /// use arrabbiata_plonk::{Opened, vanilla::Vanilla};
+    /// // Vanilla PlonK reads only the current row.
+    /// assert!(Opened::<F, 3, 5, 1>::next_witness::<F, Vanilla>().is_empty());
+    /// ```
+    #[must_use]
+    pub fn next_witness<F, G>() -> Vec<usize>
+    where
+        F: Field,
+        G: GateSet<F, W, X>,
+    {
+        rotations::<F, G, W, X>().0
+    }
+
+    /// The fixed columns opened at `zeta w`: those some constraint of `G`
+    /// reads at the next row, in increasing order.
+    ///
+    /// ```
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::{Opened, vanilla::Vanilla};
+    /// assert!(Opened::<F, 3, 5, 1>::next_fixed::<F, Vanilla>().is_empty());
+    /// ```
+    #[must_use]
+    pub fn next_fixed<F, G>() -> Vec<usize>
+    where
+        F: Field,
+        G: GateSet<F, W, X>,
+    {
+        rotations::<F, G, W, X>().1
+    }
+
+    fn map<U>(self, mut f: impl FnMut(T) -> U) -> Opened<U, W, X, Q> {
+        Opened {
+            witness: self.witness.map(&mut f),
+            fixed: self.fixed.map(&mut f),
+            selectors: self.selectors.map(&mut f),
+            sigmas: self.sigmas.map(&mut f),
+            z: f(self.z),
+            t: f(self.t),
+            z_next: f(self.z_next),
+            witness_next: self.witness_next.into_iter().map(&mut f).collect(),
+            fixed_next: self.fixed_next.into_iter().map(&mut f).collect(),
+        }
+    }
+}
+
+impl<T, const W: usize, const X: usize, const Q: usize> Label for Opened<T, W, X, Q> {
+    const LABEL: u64 = 0x6576;
+}
+
+impl<F, T, const W: usize, const X: usize, const Q: usize> Absorb<F> for Opened<T, W, X, Q>
+where
+    F: Field,
+    T: Absorb<F>,
+{
+    fn absorb_into<Tr>(&self, transcript: &mut Tr)
+    where
+        Tr: Transcript<F>,
+    {
+        absorb_length(transcript, self.witness_next.len());
+        absorb_length(transcript, self.fixed_next.len());
+        for value in self.iter() {
+            value.absorb_into(transcript);
+        }
+    }
+}
+
+/// The witness and fixed columns some constraint of `G` reads at the next
+/// row, each in increasing order.
+fn rotations<F, G, const W: usize, const X: usize>() -> (Vec<usize>, Vec<usize>)
+where
+    F: Field,
+    G: GateSet<F, W, X>,
+{
+    let mut witness = [false; W];
+    let mut fixed = [false; X];
+    let mut gadget = 0;
+    while gadget < G::SELECTORS {
+        for c in G::constraints(gadget) {
+            let mut vars = Vec::new();
+            gate::variables(&c, &mut vars);
+            for v in vars {
+                match v {
+                    Variable::Witness(col, Rotation::Next) => witness[col.index()] = true,
+                    Variable::Fixed(col, Rotation::Next) => fixed[col.index()] = true,
+                    _ => {}
+                }
+            }
+        }
+        gadget += 1;
+    }
+    let pick = |flags: &[bool]| {
+        flags
+            .iter()
+            .enumerate()
+            .filter(|(_, on)| **on)
+            .map(|(i, _)| i)
+            .collect()
+    };
+    (pick(&witness), pick(&fixed))
+}
+
+/// The verifier's view of a circuit: the domain, the coset shifts of the
+/// permutation argument, and the commitments to the fixed, selector and
+/// permutation polynomials. Wrapped with its scheme as a [`VerifierKey`].
+///
+/// Its absorption also absorbs the constraints of the gate set `G`, so the
+/// transcript is bound to the relation, not only to the columns.
+///
+/// ```
+/// use arrabbiata_field::Field;
+/// use arrabbiata_frontend::build;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{ipa, vanilla};
+/// let (c, _, ()) = build::<F, _, _>(|b| {
+///     b.witness(F::from_u64(1));
+/// });
+/// let circuit = vanilla::circuit(&c).unwrap();
+/// let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
+/// assert_eq!(vk.value.num_rows(), 2);
+/// ```
+pub struct Preprocessed<F, C, G, const W: usize, const X: usize, const Q: usize> {
+    log_size: u32,
+    shifts: [F; W],
+    fixed: [C; X],
+    selectors: [C; Q],
+    sigmas: [C; W],
+    public_rows: Vec<usize>,
+    gates: PhantomData<fn() -> G>,
+}
+
+impl<F, C, G, const W: usize, const X: usize, const Q: usize> Preprocessed<F, C, G, W, X, Q> {
+    /// The number of rows of the circuit.
+    ///
+    /// ```
     /// use arrabbiata_frontend::build;
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::{ipa, vanilla};
     /// let (c, _, ()) = build::<F, _, _>(|_| ());
-    /// let (_, vk) = arrabbiata_plonk::setup(&c, &ipa::pallas(&c)).unwrap();
-    /// assert_eq!(vk.value.num_rows(), c.num_rows());
+    /// let circuit = vanilla::circuit(&c).unwrap();
+    /// let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
+    /// assert_eq!(vk.value.num_rows(), circuit.num_rows());
     /// ```
     #[must_use]
     pub const fn num_rows(&self) -> usize {
         1 << self.log_size
     }
+
+    /// The rows whose witness column 0 is a public input.
+    ///
+    /// ```
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_frontend::build;
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::{ipa, vanilla};
+    /// let (c, _, ()) = build::<F, _, _>(|b| {
+    ///     b.public_input(F::ONE);
+    /// });
+    /// let circuit = vanilla::circuit(&c).unwrap();
+    /// let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
+    /// assert_eq!(vk.value.public_rows(), circuit.public_rows());
+    /// ```
+    #[must_use]
+    pub fn public_rows(&self) -> &[usize] {
+        &self.public_rows
+    }
 }
 
-impl<F, C> Absorb<F> for Preprocessed<F, C>
+impl<F, C, G, const W: usize, const X: usize, const Q: usize> Clone
+    for Preprocessed<F, C, G, W, X, Q>
+where
+    F: Clone,
+    C: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            log_size: self.log_size,
+            shifts: self.shifts.clone(),
+            fixed: self.fixed.clone(),
+            selectors: self.selectors.clone(),
+            sigmas: self.sigmas.clone(),
+            public_rows: self.public_rows.clone(),
+            gates: PhantomData,
+        }
+    }
+}
+
+impl<F, C, G, const W: usize, const X: usize, const Q: usize> fmt::Debug
+    for Preprocessed<F, C, G, W, X, Q>
+where
+    F: fmt::Debug,
+    C: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Preprocessed")
+            .field("log_size", &self.log_size)
+            .field("shifts", &self.shifts)
+            .field("fixed", &self.fixed)
+            .field("selectors", &self.selectors)
+            .field("sigmas", &self.sigmas)
+            .field("public_rows", &self.public_rows)
+            .finish()
+    }
+}
+
+impl<F, C, G, const W: usize, const X: usize, const Q: usize> PartialEq
+    for Preprocessed<F, C, G, W, X, Q>
+where
+    F: PartialEq,
+    C: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.log_size == other.log_size
+            && self.shifts == other.shifts
+            && self.fixed == other.fixed
+            && self.selectors == other.selectors
+            && self.sigmas == other.sigmas
+            && self.public_rows == other.public_rows
+    }
+}
+
+impl<F, C, G, const W: usize, const X: usize, const Q: usize> Eq for Preprocessed<F, C, G, W, X, Q>
+where
+    F: Eq,
+    C: Eq,
+{
+}
+
+impl<F, C, G, const W: usize, const X: usize, const Q: usize> Absorb<F>
+    for Preprocessed<F, C, G, W, X, Q>
 where
     F: Field,
     C: Absorb<F>,
+    G: GateSet<F, W, X>,
 {
     fn absorb_into<T>(&self, transcript: &mut T)
     where
         T: Transcript<F>,
     {
         absorb_length(transcript, self.log_size as usize);
-        let mut i = 0;
-        while i < 3 {
-            transcript.absorb(self.shifts[i]);
-            i += 1;
+        absorb_length(transcript, W);
+        absorb_length(transcript, X);
+        absorb_length(transcript, Q);
+        let mut gadget = 0;
+        while gadget < Q {
+            let constraints = G::constraints(gadget);
+            absorb_length(transcript, constraints.len());
+            for c in &constraints {
+                absorb_expr(c, transcript);
+            }
+            gadget += 1;
         }
-        let mut s = 0;
-        while s < 5 {
-            self.selectors[s].absorb_into(transcript);
-            s += 1;
+        for shift in &self.shifts {
+            transcript.absorb(*shift);
         }
-        let mut k = 0;
-        while k < 3 {
-            self.sigmas[k].absorb_into(transcript);
-            k += 1;
+        for c in self.fixed.iter().chain(&self.selectors).chain(&self.sigmas) {
+            c.absorb_into(transcript);
         }
         absorb_length(transcript, self.public_rows.len());
-        let mut r = 0;
-        while r < self.public_rows.len() {
-            absorb_length(transcript, self.public_rows[r]);
-            r += 1;
+        for row in &self.public_rows {
+            absorb_length(transcript, *row);
         }
     }
 }
 
-/// The prover's view of a circuit: the verifier key and the polynomials it
-/// commits to.
+/// Absorb `e` in prefix form, one tag per node: an injective encoding of
+/// the expression tree.
+fn absorb_expr<F, T, const W: usize, const X: usize>(e: &Expr<F, W, X>, transcript: &mut T)
+where
+    F: Field,
+    T: Transcript<F>,
+{
+    let rotation = |r: Rotation| match r {
+        Rotation::Curr => 0,
+        Rotation::Next => 1,
+    };
+    match e {
+        Expr::Constant(c) => {
+            absorb_length(transcript, 0);
+            transcript.absorb(*c);
+        }
+        Expr::Variable(Variable::Witness(col, r)) => {
+            absorb_length(transcript, 1);
+            absorb_length(transcript, col.index());
+            absorb_length(transcript, rotation(*r));
+        }
+        Expr::Variable(Variable::Fixed(col, r)) => {
+            absorb_length(transcript, 2);
+            absorb_length(transcript, col.index());
+            absorb_length(transcript, rotation(*r));
+        }
+        Expr::Neg(a) => {
+            absorb_length(transcript, 3);
+            absorb_expr(a, transcript);
+        }
+        Expr::Add(a, b) => {
+            absorb_length(transcript, 4);
+            absorb_expr(a, transcript);
+            absorb_expr(b, transcript);
+        }
+        Expr::Mul(a, b) => {
+            absorb_length(transcript, 5);
+            absorb_expr(a, transcript);
+            absorb_expr(b, transcript);
+        }
+    }
+}
+
+/// The prover's view of a circuit: the verifier key, the circuit, and the
+/// polynomials it commits to.
 ///
 /// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
-/// let (circuit, _, ()) = build::<F, _, _>(|_| ());
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{ipa, vanilla};
+/// let (c, _, ()) = build::<F, _, _>(|_| ());
+/// let circuit = vanilla::circuit(&c).unwrap();
 /// let (pk, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
 /// assert_eq!(pk.verifier_key(), &vk);
 /// ```
-pub struct ProverKey<F, PC>
+pub struct ProverKey<F, PC, G, const W: usize, const X: usize, const Q: usize>
 where
     F: Field,
     PC: PolynomialCommitment<F>,
 {
-    vk: VerifierKey<F, PC>,
+    vk: VerifierKey<F, PC, G, W, X, Q>,
+    circuit: Circuit<F, G, W, X, Q>,
     domain: Domain<F>,
-    selectors: [UniPoly<F>; 5],
-    sigmas: [UniPoly<F>; 3],
-    sigma_values: [Vec<F>; 3],
+    fixed: [UniPoly<F>; X],
+    selectors: [UniPoly<F>; Q],
+    sigmas: [UniPoly<F>; W],
+    sigma_values: [Vec<F>; W],
 }
 
-impl<F, PC> ProverKey<F, PC>
+impl<F, PC, G, const W: usize, const X: usize, const Q: usize> ProverKey<F, PC, G, W, X, Q>
 where
     F: Field,
     PC: PolynomialCommitment<F>,
@@ -504,27 +817,28 @@ where
     /// The verifier key.
     ///
     /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::ipa;
     /// use arrabbiata_frontend::build;
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::{ipa, vanilla};
     /// let (c, _, ()) = build::<F, _, _>(|_| ());
-    /// let (pk, _) = arrabbiata_plonk::setup(&c, &ipa::pallas(&c)).unwrap();
+    /// let circuit = vanilla::circuit(&c).unwrap();
+    /// let (pk, _) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
     /// assert_eq!(pk.verifier_key().value.num_rows(), 2);
     /// ```
-    pub const fn verifier_key(&self) -> &VerifierKey<F, PC> {
+    pub const fn verifier_key(&self) -> &VerifierKey<F, PC, G, W, X, Q> {
         &self.vk
     }
 }
 
-/// The transcript of vanilla PlonK compiled with the scheme `PC`, on the
-/// sponge `S`. The prover
-/// and the verifier both follow it, through [`Plonk`].
-pub type PlonkTranscript<F, PC, S> = Public<
-    VerifierKey<F, PC>,
+/// The transcript of PlonK over the gate set `G`, compiled with the scheme
+/// `PC`, on the sponge `S`. The prover and the verifier both follow it,
+/// through [`Plonk`].
+pub type PlonkTranscript<F, PC, S, G, const W: usize, const X: usize, const Q: usize> = Public<
+    VerifierKey<F, PC, G, W, X, Q>,
     Public<
         PublicInputs<F>,
         Message<
-            Wires<F, PC, S>,
+            Wires<F, PC, S, W>,
             Challenge<
                 Challenge<
                     Message<
@@ -533,7 +847,10 @@ pub type PlonkTranscript<F, PC, S> = Public<
                             Message<
                                 Quotient<F, PC, S>,
                                 Challenge<
-                                    Message<Evaluations<F>, Message<Openings<F, PC, S>, End>>,
+                                    Message<
+                                        Evaluations<F, W, X, Q>,
+                                        Message<Openings<F, PC, S, W, X, Q>, End>,
+                                    >,
                                 >,
                             >,
                         >,
@@ -544,30 +861,39 @@ pub type PlonkTranscript<F, PC, S> = Public<
     >,
 >;
 
-/// Vanilla PlonK over `F`, compiled with the univariate scheme `PC`.
+/// PlonK over `F` for the gate set `G` with `W` witness columns, `X` fixed
+/// columns and `Q` selectors, compiled with the univariate scheme `PC`, on
+/// the sponge `S`.
 ///
 /// ```
 /// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{Plonk, ipa::PallasIpa};
+/// use arrabbiata_plonk::{Plonk, ipa::PallasIpa, vanilla::Vanilla};
 /// use arrabbiata_poseidon::PoseidonSponge;
 /// use arrabbiata_transcript::typed::{Pattern, Protocol};
-/// type P = <Plonk<F, PallasIpa, PoseidonSponge<F>> as Protocol>::Transcript;
+/// type P = <Plonk<F, PallasIpa, PoseidonSponge<F>, Vanilla, 3, 5, 1> as Protocol>::Transcript;
 /// assert_eq!(<P as Pattern>::MESSAGES, 5);
 /// assert_eq!(<P as Pattern>::CHALLENGES, 4);
 /// ```
 #[derive(Debug)]
-pub struct Plonk<F, PC, S>(PhantomData<(F, PC, S)>);
+pub struct Plonk<F, PC, S, G, const W: usize, const X: usize, const Q: usize>(
+    PhantomData<Parameters<F, PC, S, G>>,
+);
 
-impl<F, PC, S> Protocol for Plonk<F, PC, S>
+/// The type parameters of [`Plonk`], as a marker that owns none of them.
+type Parameters<F, PC, S, G> = fn() -> (F, PC, S, G);
+
+impl<F, PC, S, G, const W: usize, const X: usize, const Q: usize> Protocol
+    for Plonk<F, PC, S, G, W, X, Q>
 where
     F: Field,
     PC: PolynomialCommitment<F, Family = Univariate>,
     S: Transcript<F>,
+    G: GateSet<F, W, X>,
 {
-    type Transcript = PlonkTranscript<F, PC, S>;
+    type Transcript = PlonkTranscript<F, PC, S, G, W, X, Q>;
 }
 
-/// Why setup, proving or verification failed.
+/// Why building a circuit, setup, proving or verification failed.
 ///
 /// ```
 /// use arrabbiata_plonk::PlonkError;
@@ -575,21 +901,24 @@ where
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlonkError {
-    /// The field has no domain of the circuit's size.
+    /// The field has no domain of the size the circuit needs.
     DomainTooLarge,
-    /// The witness does not satisfy the circuit (the quotient does not
-    /// exist).
+    /// The witness does not satisfy the circuit.
     Unsatisfied,
     /// The number of public inputs does not match the circuit.
     PublicInputs,
-    /// An opening proof does not verify; the index is into [`OPENED`], or 13
-    /// for `z` at `zeta * w`.
+    /// An opening proof does not verify; the index is in the order of
+    /// [`Opened::iter`].
     Opening(usize),
     /// The PlonK identity does not hold at `zeta`.
     IdentityFailed,
-    /// The coset shifts `1, g, g^2` of the permutation argument do not give
-    /// three disjoint cosets of the domain (`g^n = 1` or `g^(2n) = 1`).
+    /// The coset shifts `g^k` of the permutation argument do not give `W`
+    /// disjoint cosets of the domain.
     CosetShifts,
+    /// A circuit, a witness or a proof has the wrong shape.
+    Shape,
+    /// A selector value is not 0 or 1, or two gadgets are on in one row.
+    Selectors,
 }
 
 impl fmt::Display for PlonkError {
@@ -601,97 +930,120 @@ impl fmt::Display for PlonkError {
             Self::Opening(i) => write!(f, "opening proof {i} does not verify"),
             Self::IdentityFailed => write!(f, "the PlonK identity does not hold at zeta"),
             Self::CosetShifts => write!(f, "the coset shifts are not in distinct cosets"),
+            Self::Shape => write!(f, "a circuit, witness or proof has the wrong shape"),
+            Self::Selectors => write!(f, "the selectors are not one-hot"),
         }
     }
 }
 
 impl core::error::Error for PlonkError {}
 
-/// Preprocess a circuit: interpolate and commit to the selectors and to the
-/// permutation.
+fn interpolate<F>(domain: &Domain<F>, values: &[F]) -> Result<UniPoly<F>, PlonkError>
+where
+    F: TwoAdicField,
+{
+    domain.interpolate(values).ok_or(PlonkError::DomainTooLarge)
+}
+
+/// A vector of exactly `N` elements, as an array.
+fn into_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
+    match v.try_into() {
+        Ok(array) => array,
+        Err(_) => unreachable!("built with exactly N elements"),
+    }
+}
+
+/// Interpolate every column on `domain`.
+fn interpolate_all<F, const N: usize>(
+    domain: &Domain<F>,
+    columns: &[Vec<F>; N],
+) -> Result<[UniPoly<F>; N], PlonkError>
+where
+    F: TwoAdicField,
+{
+    let mut polys = Vec::with_capacity(N);
+    for column in columns {
+        polys.push(interpolate(domain, column)?);
+    }
+    Ok(into_array(polys))
+}
+
+/// Preprocess a circuit: interpolate and commit to the fixed, selector and
+/// permutation polynomials.
 ///
 /// # Errors
 ///
 /// [`PlonkError::DomainTooLarge`] if the field has no domain of the circuit
-/// size.
+/// size, and [`PlonkError::CosetShifts`] if the field has no `W` disjoint
+/// cosets of it generated by powers of its multiplicative generator.
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{ipa, vanilla};
 /// let (c, _, ()) = build::<F, _, _>(|b| {
 ///     b.constant(F::from_u64(2));
 /// });
-/// assert!(arrabbiata_plonk::setup(&c, &ipa::pallas(&c)).is_ok());
+/// let circuit = vanilla::circuit(&c).unwrap();
+/// assert!(arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).is_ok());
 /// ```
-pub fn setup<F, PC>(circuit: &Circuit<F>, pcs: &PC) -> Result<Keys<F, PC>, PlonkError>
+pub fn setup<F, PC, G, const W: usize, const X: usize, const Q: usize>(
+    circuit: &Circuit<F, G, W, X, Q>,
+    pcs: &PC,
+) -> Result<Keys<F, PC, G, W, X, Q>, PlonkError>
 where
     F: TwoAdicField,
     PC: PolynomialCommitment<F, Family = Univariate>,
+    G: GateSet<F, W, X>,
 {
     let n = circuit.num_rows();
     let domain = Domain::<F>::containing(n).ok_or(PlonkError::DomainTooLarge)?;
     let g = F::MULTIPLICATIVE_GENERATOR;
-    let shifts = [F::ONE, g, g * g];
-    // H, gH and g^2 H are disjoint iff g and g^2 are not in H.
+    let shifts: [F; W] = array::from_fn(|k| g.pow(k as u64));
+    // g^i H and g^j H are disjoint iff g^(i - j) is not in H, that is
+    // g^((i - j) n) != 1.
     let gn = g.pow(n as u64);
-    if gn == F::ONE || gn * gn == F::ONE {
-        return Err(PlonkError::CosetShifts);
+    let mut power = gn;
+    let mut m = 1;
+    while m < W {
+        if power == F::ONE {
+            return Err(PlonkError::CosetShifts);
+        }
+        power = power * gn;
+        m += 1;
     }
 
-    let gates = circuit.gates();
-    let mut columns = [
-        vec![F::ZERO; n],
-        vec![F::ZERO; n],
-        vec![F::ZERO; n],
-        vec![F::ZERO; n],
-        vec![F::ZERO; n],
-    ];
-    let mut row = 0;
-    while row < n {
-        columns[0][row] = gates[row].q_l;
-        columns[1][row] = gates[row].q_r;
-        columns[2][row] = gates[row].q_o;
-        columns[3][row] = gates[row].q_m;
-        columns[4][row] = gates[row].q_c;
-        row += 1;
-    }
-    let selectors = columns.map(|column| {
-        domain
-            .interpolate(&column)
-            .ok_or(PlonkError::DomainTooLarge)
-    });
-    let [s0, s1, s2, s3, s4] = selectors;
-    let selectors = [s0?, s1?, s2?, s3?, s4?];
-
+    let fixed = interpolate_all(&domain, circuit.fixed())?;
+    let selectors = interpolate_all(&domain, circuit.selectors())?;
     // sigma_k(i) is the identity label of the cell sigma maps (k, i) to:
     // shift_(column) * w^(row).
     let sigma = circuit.sigma();
-    let mut sigma_values = [vec![F::ZERO; n], vec![F::ZERO; n], vec![F::ZERO; n]];
-    let mut cell = 0;
-    while cell < 3 * n {
-        let target = sigma[cell];
-        sigma_values[cell / n][cell % n] = shifts[target / n] * domain.element(target % n);
-        cell += 1;
-    }
-    let [p0, p1, p2] = sigma_values.clone().map(|values| {
-        domain
-            .interpolate(&values)
-            .ok_or(PlonkError::DomainTooLarge)
+    let sigma_values: [Vec<F>; W] = array::from_fn(|k| {
+        (0..n)
+            .map(|i| {
+                let target = sigma[k * n + i];
+                shifts[target / n] * domain.element(target % n)
+            })
+            .collect()
     });
-    let sigmas = [p0?, p1?, p2?];
+    let sigmas = interpolate_all(&domain, &sigma_values)?;
 
+    let commit = |p: &UniPoly<F>| pcs.commit(p.coefficients());
     let vk = VerifierKey::new(Preprocessed {
         log_size: domain.log_size(),
         shifts,
-        selectors: selectors.clone().map(|p| pcs.commit(p.coefficients())),
-        sigmas: sigmas.clone().map(|p| pcs.commit(p.coefficients())),
+        fixed: array::from_fn(|i| commit(&fixed[i])),
+        selectors: array::from_fn(|i| commit(&selectors[i])),
+        sigmas: array::from_fn(|i| commit(&sigmas[i])),
         public_rows: circuit.public_rows().to_vec(),
+        gates: PhantomData,
     });
     let pk = ProverKey {
         vk: vk.clone(),
+        circuit: circuit.clone(),
         domain,
+        fixed,
         selectors,
         sigmas,
         sigma_values,
@@ -699,156 +1051,338 @@ where
     Ok((pk, vk))
 }
 
+/// The evaluations of `p` on the coset `shift H_E` of the domain `ext`.
+fn coset_evaluations<F>(p: &UniPoly<F>, ext: &Domain<F>, shift: F) -> Result<Vec<F>, PlonkError>
+where
+    F: TwoAdicField,
+{
+    let mut scaled = p.coefficients().to_vec();
+    let mut power = F::ONE;
+    for c in &mut scaled {
+        *c = *c * power;
+        power = power * shift;
+    }
+    ext.evaluate(&UniPoly::new(scaled))
+        .ok_or(PlonkError::DomainTooLarge)
+}
+
+/// The values of the columns at one point of the extended coset, and at the
+/// point one row later.
+struct CosetView<'a, F, const W: usize, const X: usize> {
+    witness: &'a [Vec<F>; W],
+    fixed: &'a [Vec<F>; X],
+    point: usize,
+    step: usize,
+}
+
+impl<F, const W: usize, const X: usize> CosetView<'_, F, W, X>
+where
+    F: Copy,
+{
+    fn at(&self, values: &[F], rotation: Rotation) -> F {
+        match rotation {
+            Rotation::Curr => values[self.point],
+            Rotation::Next => values[(self.point + self.step) % values.len()],
+        }
+    }
+}
+
+impl<F, const W: usize, const X: usize> Assignment<F, Scalars<F>, W, X> for CosetView<'_, F, W, X>
+where
+    F: Field,
+{
+    fn witness(&self, _: &Scalars<F>, column: WitnessColumn<W>, rotation: Rotation) -> F {
+        self.at(&self.witness[column.index()], rotation)
+    }
+
+    fn fixed(&self, column: FixedColumn<X>, rotation: Rotation) -> F {
+        self.at(&self.fixed[column.index()], rotation)
+    }
+}
+
 /// Prove that `witness` satisfies the circuit of `pk`.
 ///
 /// # Errors
 ///
-/// [`PlonkError::Unsatisfied`] if it does not (the quotient polynomial does
-/// not exist), and [`PlonkError::PublicInputs`] if the public inputs do not
-/// match the circuit.
+/// [`PlonkError::PublicInputs`] if the number of public inputs does not
+/// match the circuit, [`PlonkError::Shape`] if a witness column does not
+/// have one value per row, and [`PlonkError::Unsatisfied`] if the witness
+/// does not satisfy the circuit.
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
-/// use arrabbiata_plonk::{PlonkError, prove, setup};
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{PlonkError, ipa, prove, setup, vanilla};
 ///
 /// // A false statement: 2 * 2 = 5.
-/// let (circuit, witness, ()) = build::<F, _, _>(|b| {
+/// let (c, w, ()) = build::<F, _, _>(|b| {
 ///     let x = b.witness(F::from_u64(2));
 ///     let y = b.mul(&x, &x);
 ///     let five = b.public_input(F::from_u64(5));
 ///     b.assert_equal(&y, &five);
 /// });
+/// let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
 /// let pcs = ipa::pallas(&circuit);
 /// let (pk, _) = setup(&circuit, &pcs).unwrap();
 /// assert_eq!(prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap_err(), PlonkError::Unsatisfied);
 /// ```
-pub fn prove<F, PC, S>(
-    pk: &ProverKey<F, PC>,
+pub fn prove<F, PC, S, G, const W: usize, const X: usize, const Q: usize>(
+    pk: &ProverKey<F, PC, G, W, X, Q>,
     pcs: &PC,
     transcript: S,
-    witness: &Witness<F>,
-) -> Result<ProofOf<Plonk<F, PC, S>>, PlonkError>
+    witness: &Witness<F, W>,
+) -> Result<ProofOf<Plonk<F, PC, S, G, W, X, Q>>, PlonkError>
 where
     F: TwoAdicField,
     PC: PolynomialCommitment<F, Family = Univariate>,
     S: Transcript<F>,
+    G: GateSet<F, W, X>,
 {
-    let domain = &pk.domain;
-    let n = domain.size();
-    if witness.public_inputs().len() != pk.vk.value.public_rows.len() {
+    prove_with(pk, pcs, transcript, witness, Prover::Honest)
+}
+
+/// Whether the prover refuses an unsatisfied witness.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Prover {
+    /// Check the witness, and the degree of the quotient.
+    Honest,
+    /// Run the rounds on any witness, truncating the quotient to its
+    /// degree bound: the strongest generic cheating prover, against which
+    /// the tests show that the verifier's identity check is load-bearing.
+    #[cfg(test)]
+    Cheating,
+}
+
+fn prove_with<F, PC, S, G, const W: usize, const X: usize, const Q: usize>(
+    pk: &ProverKey<F, PC, G, W, X, Q>,
+    pcs: &PC,
+    transcript: S,
+    witness: &Witness<F, W>,
+    prover: Prover,
+) -> Result<ProofOf<Plonk<F, PC, S, G, W, X, Q>>, PlonkError>
+where
+    F: TwoAdicField,
+    PC: PolynomialCommitment<F, Family = Univariate>,
+    S: Transcript<F>,
+    G: GateSet<F, W, X>,
+{
+    let key = &pk.vk.value;
+    if witness.public_inputs().len() != key.public_rows.len() {
         return Err(PlonkError::PublicInputs);
     }
-    let wires = witness.wires();
+    if witness
+        .columns()
+        .iter()
+        .any(|c| c.len() != pk.domain.size())
+    {
+        return Err(PlonkError::Shape);
+    }
+    let honest = prover == Prover::Honest;
+    if honest && !pk.circuit.is_satisfied(witness) {
+        return Err(PlonkError::Unsatisfied);
+    }
+    let domain = &pk.domain;
+    let n = domain.size();
+    let columns = witness.columns();
+    let commit = |p: &UniPoly<F>| pcs.commit(p.coefficients());
 
-    // Round 1: wires.
-    let [a, b, c] = [&wires[0], &wires[1], &wires[2]]
-        .map(|column| domain.interpolate(column).ok_or(PlonkError::DomainTooLarge));
-    let (a, b, c) = (a?, b?, c?);
-    let wire_commitments = Triple([&a, &b, &c].map(|p| pcs.commit(p.coefficients())));
-    let tape = prover_tape::<F, S, Plonk<F, PC, S>>(transcript)
+    // Round 1: the witness columns.
+    let wires = interpolate_all(domain, columns)?;
+    let tape = prover_tape::<F, S, Plonk<F, PC, S, G, W, X, Q>>(transcript)
         .public(&pk.vk)
         .public(&PublicInputs(witness.public_inputs().to_vec()))
-        .send(Scheme::new(wire_commitments));
+        .send(Scheme::new(Columns(array::from_fn(|k| commit(&wires[k])))));
     let (beta, tape) = tape.challenge();
     let (gamma, tape) = tape.challenge();
 
     // Round 2: grand product z(w^0) = 1, z(w^(i+1)) = z(w^i) * num_i / den_i.
     let mut z_values = vec![F::ONE; n];
-    for i in 0..n - 1 {
+    let mut i = 0;
+    while i + 1 < n {
         let x = domain.element(i);
         let mut num = F::ONE;
         let mut den = F::ONE;
-        for ((column, shift), sigma) in wires.iter().zip(pk.vk.value.shifts).zip(&pk.sigma_values) {
-            num = num * (column[i] + beta * shift * x + gamma);
+        for ((column, shift), sigma) in columns.iter().zip(&key.shifts).zip(&pk.sigma_values) {
+            num = num * (column[i] + beta * *shift * x + gamma);
             den = den * (column[i] + beta * sigma[i] + gamma);
         }
-        // den is zero only with probability about 3n / |F| over gamma.
+        // den is zero only with probability about W n / |F| over gamma.
         z_values[i + 1] = z_values[i] * num * den.inverse().ok_or(PlonkError::Unsatisfied)?;
+        i += 1;
     }
-    let z = domain
-        .interpolate(&z_values)
-        .ok_or(PlonkError::DomainTooLarge)?;
-    let tape = tape.send(Scheme::new(pcs.commit(z.coefficients())));
+    let z = interpolate(domain, &z_values)?;
+    let tape = tape.send(Scheme::new(commit(&z)));
     let (alpha, tape) = tape.challenge();
 
-    // Round 3: quotient.
-    let pi = domain
-        .interpolate(&circuit_public_column(
-            &pk.vk.value,
-            witness.public_inputs(),
-            n,
-        ))
+    // Round 3: the quotient, pointwise on the coset g H_E.
+    let factor = pk.circuit.quotient_factor();
+    let ext = Domain::<F>::containing(factor * n).ok_or(PlonkError::DomainTooLarge)?;
+    let size = ext.size();
+    let step = size / n;
+    let shift = F::MULTIPLICATIVE_GENERATOR;
+    let on_coset = |p: &UniPoly<F>| coset_evaluations(p, &ext, shift);
+    let on_coset_all = |polys: &[UniPoly<F>]| -> Result<Vec<Vec<F>>, PlonkError> {
+        let mut values = Vec::with_capacity(polys.len());
+        for p in polys {
+            values.push(on_coset(p)?);
+        }
+        Ok(values)
+    };
+    let wire_values: [Vec<F>; W] = into_array(on_coset_all(&wires)?);
+    let fixed_values: [Vec<F>; X] = into_array(on_coset_all(&pk.fixed)?);
+    let selector_values = on_coset_all(&pk.selectors)?;
+    let sigma_values = on_coset_all(&pk.sigmas)?;
+    let z_coset = on_coset(&z)?;
+    let mut first = vec![F::ZERO; n];
+    first[0] = F::ONE;
+    let l1 = on_coset(&interpolate(domain, &first)?)?;
+    let mut public_indicator = vec![F::ZERO; n];
+    let mut public_values = vec![F::ZERO; n];
+    for (row, value) in key.public_rows.iter().zip(witness.public_inputs()) {
+        public_indicator[*row] = F::ONE;
+        public_values[*row] = *value;
+    }
+    let lp = on_coset(&interpolate(domain, &public_indicator)?)?;
+    let pi = on_coset(&interpolate(domain, &public_values)?)?;
+    let constraints: Vec<Vec<Expr<F, W, X>>> = (0..Q).map(|g| G::constraints(g)).collect();
+
+    // x_i = shift w_E^i, and Z_H(x_i) = x_i^n - 1 has period E / n in i.
+    let shift_n = shift.pow(n as u64);
+    let root_n = ext.generator().pow(n as u64);
+    let mut vanishing_inverse = Vec::with_capacity(step);
+    let mut power = F::ONE;
+    for _ in 0..step {
+        let zh = shift_n * power - F::ONE;
+        vanishing_inverse.push(zh.inverse().ok_or(PlonkError::CosetShifts)?);
+        power = power * root_n;
+    }
+    let ring = Scalars::new();
+    let mut t_values = vec![F::ZERO; size];
+    let mut x = shift;
+    let mut point = 0;
+    while point < size {
+        let view = CosetView {
+            witness: &wire_values,
+            fixed: &fixed_values,
+            point,
+            step,
+        };
+        let mut acc = F::ZERO;
+        let mut power = F::ONE;
+        for (selector, gadget) in selector_values.iter().zip(&constraints) {
+            for c in gadget {
+                acc = acc + power * selector[point] * evaluate(&ring, c, &view);
+                power = power * alpha;
+            }
+        }
+        if W > 0 {
+            acc = acc + power * (lp[point] * wire_values[0][point] - pi[point]);
+        }
+        power = power * alpha;
+        let next = (point + step) % size;
+        let mut left = z_coset[point];
+        let mut right = z_coset[next];
+        for k in 0..W {
+            let w = wire_values[k][point];
+            left = left * (w + beta * key.shifts[k] * x + gamma);
+            right = right * (w + beta * sigma_values[k][point] + gamma);
+        }
+        acc = acc + power * (left - right);
+        power = power * alpha;
+        acc = acc + power * l1[point] * (z_coset[point] - F::ONE);
+        t_values[point] = acc * vanishing_inverse[point % step];
+        x = x * ext.generator();
+        point += 1;
+    }
+    let t_shifted = ext
+        .interpolate(&t_values)
         .ok_or(PlonkError::DomainTooLarge)?;
-    let [q_l, q_r, q_o, q_m, q_c] = &pk.selectors;
-    let gate =
-        &(&(&(&(q_l * &a) + &(q_r * &b)) + &(q_o * &c)) + &(&(q_m * &a) * &b)) + &(q_c + &pi);
-    let x = UniPoly::x();
-    let term = |w: &UniPoly<F>, s: &UniPoly<F>| &(w + &s.scale(beta)) + &UniPoly::constant(gamma);
-    let identity = |k: usize| x.scale(pk.vk.value.shifts[k]);
-    let perm_left =
-        &(&(&term(&a, &identity(0)) * &term(&b, &identity(1))) * &term(&c, &identity(2))) * &z;
-    let z_shifted = z.dilate(domain.generator());
-    let perm_right = &(&(&term(&a, &pk.sigmas[0]) * &term(&b, &pk.sigmas[1]))
-        * &term(&c, &pk.sigmas[2]))
-        * &z_shifted;
-    let mut l1_values = vec![F::ZERO; n];
-    l1_values[0] = F::ONE;
-    let l1 = domain
-        .interpolate(&l1_values)
-        .ok_or(PlonkError::DomainTooLarge)?;
-    let boundary = &(&z - &UniPoly::constant(F::ONE)) * &l1;
-    let numerator =
-        &(&gate + &(&perm_left - &perm_right).scale(alpha)) + &boundary.scale(alpha * alpha);
-    let t = numerator
-        .divide_by_vanishing(n)
-        .ok_or(PlonkError::Unsatisfied)?;
-    let tape = tape.send(Scheme::new(pcs.commit(t.coefficients())));
+    let shift_inverse = shift.inverse().ok_or(PlonkError::CosetShifts)?;
+    let degree_bound = (factor - 1) * n;
+    let mut t_coefficients = Vec::with_capacity(degree_bound);
+    let mut power = F::ONE;
+    for (k, c) in t_shifted.coefficients().iter().enumerate() {
+        let value = *c * power;
+        if k < degree_bound {
+            t_coefficients.push(value);
+        } else if honest && !value.is_zero() {
+            // Not reached for a satisfied circuit: the numerator vanishes
+            // on H and has degree below factor * n.
+            return Err(PlonkError::Unsatisfied);
+        }
+        power = power * shift_inverse;
+    }
+    let t = UniPoly::new(t_coefficients);
+    let tape = tape.send(Scheme::new(commit(&t)));
     let (zeta, tape) = tape.challenge();
 
     // Round 4: evaluations and openings.
-    let opened: [&UniPoly<F>; 13] = [
-        &a,
-        &b,
-        &c,
-        q_l,
-        q_r,
-        q_o,
-        q_m,
-        q_c,
-        &pk.sigmas[0],
-        &pk.sigmas[1],
-        &pk.sigmas[2],
-        &z,
-        &t,
-    ];
-    let openings = opened.map(|p| pcs.open(p.coefficients(), &zeta));
-    let (z_shifted_value, z_shifted_proof) =
-        pcs.open(z.coefficients(), &(zeta * domain.generator()));
-    let evaluations = Evaluations {
-        values: openings.clone().map(|(v, _)| v),
-        z_shifted: z_shifted_value,
+    let zeta_w = zeta * domain.generator();
+    let (next_witness, next_fixed) = rotations::<F, G, W, X>();
+    let at = |p: &UniPoly<F>, point: &F| pcs.open(p.coefficients(), point);
+    let opened = Opened::<(F, Prf<F, PC>), W, X, Q> {
+        witness: array::from_fn(|k| at(&wires[k], &zeta)),
+        fixed: array::from_fn(|k| at(&pk.fixed[k], &zeta)),
+        selectors: array::from_fn(|k| at(&pk.selectors[k], &zeta)),
+        sigmas: array::from_fn(|k| at(&pk.sigmas[k], &zeta)),
+        z: at(&z, &zeta),
+        t: at(&t, &zeta),
+        z_next: at(&z, &zeta_w),
+        witness_next: next_witness
+            .iter()
+            .map(|k| at(&wires[*k], &zeta_w))
+            .collect(),
+        fixed_next: next_fixed
+            .iter()
+            .map(|k| at(&pk.fixed[*k], &zeta_w))
+            .collect(),
     };
-    let proofs = OpeningProofs {
-        at_zeta: openings.map(|(_, p)| p),
-        at_zeta_shifted: z_shifted_proof,
-    };
+    let evaluations = opened.clone().map(|(v, _)| v);
+    let proofs = opened.map(|(_, p)| p);
     let (_, proof) = tape.send(evaluations).send(Scheme::new(proofs)).finish();
     Ok(proof)
 }
 
-/// The public input column for the verifier key's rows.
-fn circuit_public_column<F, C>(vk: &Preprocessed<F, C>, public_inputs: &[F], n: usize) -> Vec<F>
+/// The claimed evaluations, as an assignment of the variables of a
+/// constraint at `zeta`.
+struct OpenedView<'a, F, const W: usize, const X: usize, const Q: usize> {
+    opened: &'a Opened<F, W, X, Q>,
+    next_witness: &'a [usize],
+    next_fixed: &'a [usize],
+}
+
+/// The value of `column` among the `columns` opened at the next row.
+fn lookup<F>(columns: &[usize], values: &[F], column: usize) -> F
 where
     F: Field,
 {
-    let mut column = vec![F::ZERO; n];
-    for (row, value) in vk.public_rows.iter().zip(public_inputs) {
-        column[*row] = -*value;
+    match columns.iter().position(|c| *c == column) {
+        Some(i) => values[i],
+        // Not reached: the columns read at the next row are computed from
+        // the gate set that produced the constraint.
+        None => F::ZERO,
     }
-    column
+}
+
+impl<F, const W: usize, const X: usize, const Q: usize> Assignment<F, Scalars<F>, W, X>
+    for OpenedView<'_, F, W, X, Q>
+where
+    F: Field,
+{
+    fn witness(&self, _: &Scalars<F>, column: WitnessColumn<W>, rotation: Rotation) -> F {
+        match rotation {
+            Rotation::Curr => self.opened.witness[column.index()],
+            Rotation::Next => lookup(self.next_witness, &self.opened.witness_next, column.index()),
+        }
+    }
+
+    fn fixed(&self, column: FixedColumn<X>, rotation: Rotation) -> F {
+        match rotation {
+            Rotation::Curr => self.opened.fixed[column.index()],
+            Rotation::Next => lookup(self.next_fixed, &self.opened.fixed_next, column.index()),
+        }
+    }
 }
 
 /// Verify `proof` for the statement `public_inputs` against `vk`.
@@ -856,23 +1390,24 @@ where
 /// # Errors
 ///
 /// [`PlonkError::PublicInputs`] if the number of public inputs is wrong,
-/// [`PlonkError::Opening`] if an opening proof fails, and
+/// [`PlonkError::Shape`] if the proof opens the wrong number of columns at
+/// the next row, [`PlonkError::Opening`] if an opening proof fails, and
 /// [`PlonkError::IdentityFailed`] if the PlonK identity does not hold at
 /// `zeta`.
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
-/// use arrabbiata_plonk::{PlonkError, prove, setup, verify};
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
 ///
-/// let (circuit, witness, ()) = build::<F, _, _>(|b| {
+/// let (c, w, ()) = build::<F, _, _>(|b| {
 ///     let x = b.witness(F::from_u64(4));
 ///     let y = b.mul(&x, &x);
 ///     let out = b.public_input(F::from_u64(16));
 ///     b.assert_equal(&y, &out);
 /// });
+/// let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
 /// let pcs = ipa::pallas(&circuit);
 /// let (pk, vk) = setup(&circuit, &pcs).unwrap();
 /// let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
@@ -880,111 +1415,208 @@ where
 /// assert!(verify(&vk, &pcs, ipa::pallas_transcript(), &[F::from_u64(17)], proof.clone()).is_err());
 /// assert!(verify(&vk, &pcs, ipa::pallas_transcript(), &[F::from_u64(16)], proof).is_ok());
 /// ```
-pub fn verify<F, PC, S>(
-    vk: &VerifierKey<F, PC>,
+pub fn verify<F, PC, S, G, const W: usize, const X: usize, const Q: usize>(
+    vk: &VerifierKey<F, PC, G, W, X, Q>,
     pcs: &PC,
     transcript: S,
     public_inputs: &[F],
-    proof: ProofOf<Plonk<F, PC, S>>,
+    proof: ProofOf<Plonk<F, PC, S, G, W, X, Q>>,
 ) -> Result<(), PlonkError>
 where
     F: TwoAdicField,
     PC: PolynomialCommitment<F, Family = Univariate>,
     S: Transcript<F>,
+    G: GateSet<F, W, X>,
 {
     let key = &vk.value;
     if public_inputs.len() != key.public_rows.len() {
         return Err(PlonkError::PublicInputs);
     }
     let domain = Domain::<F>::new(key.log_size).ok_or(PlonkError::DomainTooLarge)?;
-    let (wires, tape) = verifier_tape::<F, S, Plonk<F, PC, S>>(transcript, proof)
+    let (wires, tape) = verifier_tape::<F, S, Plonk<F, PC, S, G, W, X, Q>>(transcript, proof)
         .public(vk)
         .public(&PublicInputs(public_inputs.to_vec()))
         .read();
     let (beta, tape) = tape.challenge();
     let (gamma, tape) = tape.challenge();
-    let (
-        Scheme {
-            value: z_commitment,
-            ..
-        },
-        tape,
-    ) = tape.read();
+    let (z_commitment, tape) = tape.read();
     let (alpha, tape) = tape.challenge();
-    let (
-        Scheme {
-            value: t_commitment,
-            ..
-        },
-        tape,
-    ) = tape.read();
+    let (t_commitment, tape) = tape.read();
     let (zeta, tape) = tape.challenge();
     let (evaluations, tape) = tape.read();
-    let (
-        Scheme {
-            value: openings, ..
-        },
-        tape,
-    ) = tape.read();
+    let (proofs, tape) = tape.read();
     let _ = tape.finish();
+    let (wires, z_commitment, t_commitment, proofs) = (
+        wires.value.0,
+        z_commitment.value,
+        t_commitment.value,
+        proofs.value,
+    );
 
-    // Openings.
-    let commitments: [&Com<F, PC>; 13] = [
-        &wires.value.0[0],
-        &wires.value.0[1],
-        &wires.value.0[2],
-        &key.selectors[0],
-        &key.selectors[1],
-        &key.selectors[2],
-        &key.selectors[3],
-        &key.selectors[4],
-        &key.sigmas[0],
-        &key.sigmas[1],
-        &key.sigmas[2],
-        &z_commitment,
-        &t_commitment,
-    ];
-    for (i, ((commitment, value), proof)) in commitments
+    let (next_witness, next_fixed) = rotations::<F, G, W, X>();
+    if evaluations.witness_next.len() != next_witness.len()
+        || evaluations.fixed_next.len() != next_fixed.len()
+        || proofs.witness_next.len() != next_witness.len()
+        || proofs.fixed_next.len() != next_fixed.len()
+    {
+        return Err(PlonkError::Shape);
+    }
+
+    // Openings, in the order of `Opened::iter`.
+    let zeta_w = zeta * domain.generator();
+    let at_zeta = wires
         .iter()
-        .zip(evaluations.values)
-        .zip(&openings.at_zeta)
+        .chain(&key.fixed)
+        .chain(&key.selectors)
+        .chain(&key.sigmas)
+        .chain(iter::once(&z_commitment))
+        .chain(iter::once(&t_commitment))
+        .map(|c| (c, zeta));
+    let at_zeta_w = iter::once(&z_commitment)
+        .chain(next_witness.iter().map(|k| &wires[*k]))
+        .chain(next_fixed.iter().map(|k| &key.fixed[*k]))
+        .map(|c| (c, zeta_w));
+    for (i, ((commitment, point), (value, proof))) in at_zeta
+        .chain(at_zeta_w)
+        .zip(evaluations.iter().zip(proofs.iter()))
         .enumerate()
     {
-        if !pcs.verify(commitment, &zeta, value, proof) {
+        if !pcs.verify(commitment, &point, *value, proof) {
             return Err(PlonkError::Opening(i));
         }
     }
-    let zeta_w = zeta * domain.generator();
-    if !pcs.verify(
-        &z_commitment,
-        &zeta_w,
-        evaluations.z_shifted,
-        &openings.at_zeta_shifted,
-    ) {
-        return Err(PlonkError::Opening(13));
-    }
 
     // The identity at zeta.
-    let [a, b, c, q_l, q_r, q_o, q_m, q_c, s1, s2, s3, z, t] = evaluations.values;
-    let mut pi = F::ZERO;
-    for (row, value) in key.public_rows.iter().zip(public_inputs) {
-        pi = pi - *value * domain.lagrange_at(*row, zeta);
+    let view = OpenedView {
+        opened: &evaluations,
+        next_witness: &next_witness,
+        next_fixed: &next_fixed,
+    };
+    let ring = Scalars::new();
+    let mut lhs = F::ZERO;
+    let mut power = F::ONE;
+    let mut gadget = 0;
+    while gadget < Q {
+        for c in G::constraints(gadget) {
+            lhs = lhs + power * evaluations.selectors[gadget] * evaluate(&ring, &c, &view);
+            power = power * alpha;
+        }
+        gadget += 1;
     }
-    let gate = q_l * a + q_r * b + q_o * c + q_m * a * b + q_c + pi;
-    let [k0, k1, k2] = key.shifts;
-    let perm = (a + beta * k0 * zeta + gamma)
-        * (b + beta * k1 * zeta + gamma)
-        * (c + beta * k2 * zeta + gamma)
-        * z
-        - (a + beta * s1 + gamma)
-            * (b + beta * s2 + gamma)
-            * (c + beta * s3 + gamma)
-            * evaluations.z_shifted;
-    let boundary = (z - F::ONE) * domain.first_lagrange_at(zeta);
-    let lhs = gate + alpha * perm + alpha * alpha * boundary;
-    if lhs == t * domain.vanishing_at(zeta) {
+    if W > 0 {
+        let mut lp = F::ZERO;
+        let mut pi = F::ZERO;
+        for (row, value) in key.public_rows.iter().zip(public_inputs) {
+            let l = domain.lagrange_at(*row, zeta);
+            lp = lp + l;
+            pi = pi + *value * l;
+        }
+        lhs = lhs + power * (lp * evaluations.witness[0] - pi);
+    }
+    power = power * alpha;
+    let mut left = evaluations.z;
+    let mut right = evaluations.z_next;
+    for k in 0..W {
+        let w = evaluations.witness[k];
+        left = left * (w + beta * key.shifts[k] * zeta + gamma);
+        right = right * (w + beta * evaluations.sigmas[k] + gamma);
+    }
+    lhs = lhs + power * (left - right);
+    power = power * alpha;
+    lhs = lhs + power * domain.first_lagrange_at(zeta) * (evaluations.z - F::ONE);
+    if lhs == evaluations.t * domain.vanishing_at(zeta) {
         Ok(())
     } else {
         Err(PlonkError::IdentityFailed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Soundness of the verifier against a cheating prover: one that runs
+    //! the rounds on an unsatisfied witness. Every opening then verifies (the
+    //! prover commits to and opens real polynomials), so only the identity
+    //! at `zeta` can reject; these tests show that it does, for each part
+    //! of the relation.
+
+    use arrabbiata_field::Field;
+    use arrabbiata_frontend::build;
+    use arrabbiata_pasta::Fq as F;
+
+    use super::*;
+
+    /// A satisfied vanilla circuit: 3 * 4 + 5 = 17, with 17 public, and the
+    /// product copied to the addition.
+    fn statement() -> (vanilla::VanillaCircuit<F>, Witness<F, 3>) {
+        let (c, w, ()) = build::<F, _, _>(|b| {
+            let x = b.witness(F::from_u64(3));
+            let y = b.witness(F::from_u64(4));
+            let p = b.mul(&x, &y);
+            let s = b.add_constant(&p, F::from_u64(5));
+            let out = b.public_input(F::from_u64(17));
+            b.assert_equal(&s, &out);
+        });
+        (vanilla::circuit(&c).unwrap(), vanilla::witness(&w))
+    }
+
+    fn cheat(
+        circuit: &vanilla::VanillaCircuit<F>,
+        witness: &Witness<F, 3>,
+        public: &[F],
+    ) -> Result<(), PlonkError> {
+        let pcs = ipa::pallas(circuit);
+        let (pk, vk) = setup(circuit, &pcs).unwrap();
+        let proof = prove_with(
+            &pk,
+            &pcs,
+            ipa::pallas_transcript(),
+            witness,
+            Prover::Cheating,
+        )
+        .unwrap();
+        verify(&vk, &pcs, ipa::pallas_transcript(), public, proof)
+    }
+
+    #[test]
+    fn honest_run_of_the_cheating_prover_verifies() {
+        let (circuit, witness) = statement();
+        assert_eq!(cheat(&circuit, &witness, &[F::from_u64(17)]), Ok(()));
+    }
+
+    /// Every cell changed alone breaks a gate, a copy or the public input:
+    /// the identity rejects each one.
+    #[test]
+    fn every_broken_cell_fails_the_identity() {
+        let (circuit, witness) = statement();
+        let n = circuit.num_rows();
+        let mut checked = 0;
+        for k in 0..3 {
+            for row in 0..n {
+                let mut columns = witness.columns().clone();
+                columns[k][row] = columns[k][row] + F::ONE;
+                let broken = Witness::new(columns, witness.public_inputs().to_vec());
+                if circuit.is_satisfied(&broken) {
+                    continue;
+                }
+                checked += 1;
+                assert_eq!(
+                    cheat(&circuit, &broken, &[F::from_u64(17)]),
+                    Err(PlonkError::IdentityFailed),
+                    "cell ({k}, {row})"
+                );
+            }
+        }
+        assert!(checked > 0);
+    }
+
+    /// A true witness for one statement does not prove another.
+    #[test]
+    fn wrong_public_input_fails_the_identity() {
+        let (circuit, witness) = statement();
+        let lie = Witness::new(witness.columns().clone(), vec![F::from_u64(18)]);
+        assert_eq!(
+            cheat(&circuit, &lie, &[F::from_u64(18)]),
+            Err(PlonkError::IdentityFailed)
+        );
     }
 }

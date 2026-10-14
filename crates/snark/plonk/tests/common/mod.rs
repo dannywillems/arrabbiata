@@ -3,7 +3,11 @@
 #![allow(dead_code)]
 
 use arrabbiata_field::Field;
-use arrabbiata_frontend::{Builder, Circuit, Wire, Witness, build};
+use arrabbiata_frontend::{Builder, Wire, build};
+use arrabbiata_plonk::{
+    Witness,
+    vanilla::{self, VanillaCircuit},
+};
 use proptest::prelude::*;
 
 /// One step of a program over the wires built so far.
@@ -69,10 +73,13 @@ where
 
 /// The circuit of `program`, its last wire exposed as a public output that
 /// claims the right value, or a wrong one when `lie` is set.
-pub fn circuit<F>(program: &[Op], lie: bool) -> (Circuit<F>, Witness<F>)
+pub fn circuit<F>(program: &[Op], lie: bool) -> (VanillaCircuit<F>, Witness<F, 3>)
 where
     F: Field,
 {
     let (circuit, witness, ()) = build::<F, _, _>(|b| run(b, program, lie));
-    (circuit, witness)
+    (
+        vanilla::circuit(&circuit).unwrap(),
+        vanilla::witness(&witness),
+    )
 }

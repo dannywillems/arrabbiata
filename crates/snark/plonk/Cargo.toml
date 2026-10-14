@@ -1,6 +1,6 @@
 [package]
 name = "arrabbiata-plonk"
-description = "Vanilla PlonK, as a toy end-to-end example of the Arrabbiata stack"
+description = "PlonK with custom gates over any number of columns and selectors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

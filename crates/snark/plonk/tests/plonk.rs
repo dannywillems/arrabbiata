@@ -12,9 +12,15 @@
 
 use arrabbiata_commit::{PolynomialCommitment, Univariate};
 use arrabbiata_field::Field;
-use arrabbiata_frontend::{Builder, Circuit, Wire, Witness, build};
+use arrabbiata_frontend::{Builder, Wire, build};
 use arrabbiata_pasta::Fq as F;
-use arrabbiata_plonk::{PlonkError, ipa, ipa::PallasIpa, prove, setup, verify};
+use arrabbiata_plonk::{
+    PlonkError, Witness, ipa,
+    ipa::PallasIpa,
+    prove, setup,
+    vanilla::{self, VanillaCircuit},
+    verify,
+};
 use arrabbiata_poseidon::vesta_sponge;
 use arrabbiata_transcript::typed::Label;
 use proptest::prelude::*;
@@ -86,12 +92,15 @@ fn run<'id>(b: &mut Builder<'id, F>, program: &[Op], lie: bool) {
     b.assert_equal(&last, &output);
 }
 
-fn circuit_of(program: &[Op], lie: bool) -> (Circuit<F>, Witness<F>) {
+fn circuit_of(program: &[Op], lie: bool) -> (VanillaCircuit<F>, Witness<F, 3>) {
     let (circuit, witness, ()) = build::<F, _, _>(|b| run(b, program, lie));
-    (circuit, witness)
+    (
+        vanilla::circuit(&circuit).unwrap(),
+        vanilla::witness(&witness),
+    )
 }
 
-fn honest(program: &[Op]) -> (Circuit<F>, Witness<F>) {
+fn honest(program: &[Op]) -> (VanillaCircuit<F>, Witness<F, 3>) {
     circuit_of(program, false)
 }
 
@@ -148,7 +157,7 @@ proptest! {
         corrupt_public in any::<bool>(),
     ) {
         let (circuit, honest_witness) = honest(&program);
-        let mut wires = honest_witness.wires().clone();
+        let mut wires = honest_witness.columns().clone();
         let mut public = honest_witness.public_inputs().to_vec();
         if corrupt_public {
             let i = row % public.len();
@@ -185,13 +194,14 @@ proptest! {
 
     /// Changing any claimed evaluation is caught by its opening.
     #[test]
-    fn tampered_evaluation_is_rejected(program in arb_program(), index in 0usize..13, delta in 1u64..1000) {
+    fn tampered_evaluation_is_rejected(program in arb_program(), index in 0usize..15, delta in 1u64..1000) {
         let (circuit, witness) = honest(&program);
         let pcs = ipa::pallas(&circuit);
         let (pk, vk) = setup(&circuit, &pcs).unwrap();
         let mut proof = prove(&pk, &pcs, vesta_sponge(0), &witness).unwrap();
         let evaluations = &mut proof.tail.tail.tail.head;
-        evaluations.values[index] = evaluations.values[index] + F::from_u64(delta);
+        let value = evaluations.iter_mut().nth(index).unwrap();
+        *value = *value + F::from_u64(delta);
         prop_assert_eq!(
             verify(&vk, &pcs, vesta_sponge(0), witness.public_inputs(), proof),
             Err(PlonkError::Opening(index))
@@ -206,10 +216,10 @@ proptest! {
         let (pk, vk) = setup(&circuit, &pcs).unwrap();
         let mut proof = prove(&pk, &pcs, vesta_sponge(0), &witness).unwrap();
         let evaluations = &mut proof.tail.tail.tail.head;
-        evaluations.z_shifted = evaluations.z_shifted + F::from_u64(delta);
+        evaluations.z_next = evaluations.z_next + F::from_u64(delta);
         prop_assert_eq!(
             verify(&vk, &pcs, vesta_sponge(0), witness.public_inputs(), proof),
-            Err(PlonkError::Opening(13))
+            Err(PlonkError::Opening(14))
         );
     }
 
@@ -334,6 +344,10 @@ fn every_size_verifies() {
             let out = b.public_input(acc.value());
             b.assert_equal(&acc, &out);
         });
+        let (circuit, witness) = (
+            vanilla::circuit(&circuit).unwrap(),
+            vanilla::witness(&witness),
+        );
         let pcs = ipa::pallas(&circuit);
         let (pk, vk) = setup(&circuit, &pcs).unwrap();
         let proof = prove(&pk, &pcs, vesta_sponge(rows), &witness).unwrap();
@@ -371,6 +385,11 @@ fn proof_is_bound_to_its_circuit() {
     };
     let (mul_circuit, mul_witness, ()) = make(true);
     let (add_circuit, _, ()) = make(false);
+    let (mul_circuit, mul_witness) = (
+        vanilla::circuit(&mul_circuit).unwrap(),
+        vanilla::witness(&mul_witness),
+    );
+    let add_circuit = vanilla::circuit(&add_circuit).unwrap();
     assert_eq!(mul_circuit.num_rows(), add_circuit.num_rows());
     let pcs = ipa::pallas(&mul_circuit);
     let (mul_pk, mul_vk) = setup(&mul_circuit, &pcs).unwrap();
@@ -394,7 +413,7 @@ fn proof_is_bound_to_its_circuit() {
 #[test]
 fn cubic_known_answer() {
     let statement = |x: u64, y: u64| {
-        build::<F, _, _>(move |b| {
+        let (c, w, ()) = build::<F, _, _>(move |b| {
             let x = b.witness(F::from_u64(x));
             let x2 = b.mul(&x, &x);
             let x3 = b.mul(&x2, &x);
@@ -402,15 +421,16 @@ fn cubic_known_answer() {
             let lhs = b.add_constant(&sum, F::from_u64(5));
             let rhs = b.public_input(F::from_u64(y));
             b.assert_equal(&lhs, &rhs);
-        })
+        });
+        (vanilla::circuit(&c).unwrap(), vanilla::witness(&w))
     };
-    let (circuit, witness, ()) = statement(3, 35);
+    let (circuit, witness) = statement(3, 35);
     let pcs = ipa::pallas(&circuit);
     let (pk, vk) = setup(&circuit, &pcs).unwrap();
     let proof = prove(&pk, &pcs, vesta_sponge(0), &witness).unwrap();
     assert!(verify(&vk, &pcs, vesta_sponge(0), &[F::from_u64(35)], proof).is_ok());
     // x = 2 gives 15, not 35.
-    let (circuit, witness, ()) = statement(2, 35);
+    let (circuit, witness) = statement(2, 35);
     let (pk, _) = setup(&circuit, &pcs).unwrap();
     assert_eq!(
         prove(&pk, &pcs, vesta_sponge(0), &witness).unwrap_err(),

@@ -35,12 +35,13 @@ proptest! {
 
     /// A changed evaluation fails its KZG opening.
     #[test]
-    fn tampered_evaluation(program in arb_program(12), index in 0usize..13) {
+    fn tampered_evaluation(program in arb_program(12), index in 0usize..15) {
         let (circuit, witness) = circuit::<Fr>(&program, false);
         let pcs = kzg::insecure_srs(&circuit, Fr::from_u64(TAU));
         let (pk, vk) = setup(&circuit, &pcs).unwrap();
         let mut proof = prove(&pk, &pcs, kzg::transcript(), &witness).unwrap();
-        proof.tail.tail.tail.head.values[index] = proof.tail.tail.tail.head.values[index] + Fr::ONE;
+        let value = proof.tail.tail.tail.head.iter_mut().nth(index).unwrap();
+        *value = *value + Fr::ONE;
         prop_assert_eq!(
             verify(&vk, &pcs, kzg::transcript(), witness.public_inputs(), proof),
             Err(PlonkError::Opening(index))
@@ -49,13 +50,14 @@ proptest! {
 
     /// A changed opening proof is rejected.
     #[test]
-    fn tampered_opening(program in arb_program(12), index in 0usize..13) {
+    fn tampered_opening(program in arb_program(12), index in 0usize..15) {
         let (circuit, witness) = circuit::<Fr>(&program, false);
         let pcs = kzg::insecure_srs(&circuit, Fr::from_u64(TAU));
         let (pk, vk) = setup(&circuit, &pcs).unwrap();
         let mut proof = prove(&pk, &pcs, kzg::transcript(), &witness).unwrap();
         let openings = &mut proof.tail.tail.tail.tail.head.value;
-        openings.at_zeta[index] = openings.at_zeta[index] + Projective::<G1>::generator();
+        let opening = openings.iter_mut().nth(index).unwrap();
+        *opening = *opening + Projective::<G1>::generator();
         prop_assert_eq!(
             verify(&vk, &pcs, kzg::transcript(), witness.public_inputs(), proof),
             Err(PlonkError::Opening(index))

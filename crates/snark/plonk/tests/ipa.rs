@@ -44,12 +44,13 @@ proptest! {
 
     /// A changed evaluation fails its IPA opening.
     #[test]
-    fn tampered_evaluation(program in arb_program(12), index in 0usize..13) {
+    fn tampered_evaluation(program in arb_program(12), index in 0usize..15) {
         let (circuit, witness) = circuit::<Fq>(&program, false);
         let pcs = ipa::pallas(&circuit);
         let (pk, vk) = setup(&circuit, &pcs).unwrap();
         let mut proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
-        proof.tail.tail.tail.head.values[index] = proof.tail.tail.tail.head.values[index] + Fq::ONE;
+        let value = proof.tail.tail.tail.head.iter_mut().nth(index).unwrap();
+        *value = *value + Fq::ONE;
         prop_assert_eq!(
             verify(&vk, &pcs, ipa::pallas_transcript(), witness.public_inputs(), proof),
             Err(PlonkError::Opening(index))
@@ -58,15 +59,15 @@ proptest! {
 
     /// A changed opening proof (its final scalar) is rejected.
     #[test]
-    fn tampered_opening(program in arb_program(12), index in 0usize..13) {
+    fn tampered_opening(program in arb_program(12), index in 0usize..15) {
         let (circuit, witness) = circuit::<Fq>(&program, false);
         let pcs = ipa::pallas(&circuit);
         let (pk, vk) = setup(&circuit, &pcs).unwrap();
         let mut proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
         let openings = &mut proof.tail.tail.tail.tail.head.value;
-        let original = openings.at_zeta[index].clone();
-        openings.at_zeta[index] =
-            IpaProof::from_parts(original.rounds().to_vec(), original.scalar() + Fq::ONE);
+        let opening = openings.iter_mut().nth(index).unwrap();
+        let original = opening.clone();
+        *opening = IpaProof::from_parts(original.rounds().to_vec(), original.scalar() + Fq::ONE);
         prop_assert_eq!(
             verify(&vk, &pcs, ipa::pallas_transcript(), witness.public_inputs(), proof),
             Err(PlonkError::Opening(index))
