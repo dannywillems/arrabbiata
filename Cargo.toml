@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/field",
+  "crates/poly",
+  "crates/transcript",
+  "crates/commit",
+  "crates/relation",
+  "crates/folding",
+  "crates/frontend",
+  "crates/plonk",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+repository = "https://github.com/dannywillems/arrabbiata"
+authors = ["Danny Willems <danny@badaas.be>"]
+
+[workspace.dependencies]
+arrabbiata-field = { path = "crates/field" }
+arrabbiata-poly = { path = "crates/poly" }
+arrabbiata-transcript = { path = "crates/transcript" }
+arrabbiata-commit = { path = "crates/commit" }
+arrabbiata-relation = { path = "crates/relation" }
+arrabbiata-folding = { path = "crates/folding" }
+arrabbiata-frontend = { path = "crates/frontend" }
+arrabbiata-plonk = { path = "crates/plonk" }
+
+# Dev-only. Never in a library crate's [dependencies]: the extracted crates
+# must stay dependency-free so that Charon/Aeneas see only our code.
+proptest = "1.9"
+
+[workspace.lints.rust]
+# Aeneas only handles safe Rust. Forbid, not deny: no crate may opt out.
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

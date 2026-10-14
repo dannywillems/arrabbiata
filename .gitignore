@@ -1,0 +1,34 @@
+# Build artifacts
+/target/
+/lean/.lake/
+/lean/extracted/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.local
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+
+# Notes and plans (symlinks into notes-plans)
+.notes
+.plans
+
+# Harness scratch directories
+/lean/.claude
