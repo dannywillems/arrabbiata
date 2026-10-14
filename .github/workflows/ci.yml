@@ -74,7 +74,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        curve: [pallas, vesta, bn254_g1, bn254_g2]
+        curve: [pallas, vesta, bn254_g1, bn254_g2, grumpkin]
     env:
       CURVE: ${{ matrix.curve }}
     steps:

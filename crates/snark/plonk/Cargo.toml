@@ -22,6 +22,7 @@ arrabbiata-poseidon = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 
 [dev-dependencies]
+arrabbiata-grumpkin = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

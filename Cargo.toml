@@ -17,6 +17,7 @@ arrabbiata-curve = { path = "crates/ec/curve" }
 arrabbiata-field = { path = "crates/algebra/field" }
 arrabbiata-folding = { path = "crates/accumulation/folding" }
 arrabbiata-frontend = { path = "crates/arithmetization/frontend" }
+arrabbiata-grumpkin = { path = "crates/ec/grumpkin" }
 arrabbiata-ipa = { path = "crates/commitment/ipa" }
 arrabbiata-kzg = { path = "crates/commitment/kzg" }
 arrabbiata-pasta = { path = "crates/ec/pasta" }

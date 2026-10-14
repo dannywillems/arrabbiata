@@ -31,6 +31,7 @@ version = "0.0.0"
 dependencies = [
  "arrabbiata-bn254",
  "arrabbiata-field",
+ "arrabbiata-grumpkin",
  "arrabbiata-pasta",
  "arrabbiata-poseidon",
  "arrabbiata-transcript",
@@ -68,6 +69,16 @@ dependencies = [
  "arrabbiata-field",
  "arrabbiata-poly",
  "arrabbiata-relation",
+ "proptest",
+]
+
+[[package]]
+name = "arrabbiata-grumpkin"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-bn254",
+ "arrabbiata-curve",
+ "arrabbiata-field",
  "proptest",
 ]
 
@@ -114,6 +125,7 @@ dependencies = [
  "arrabbiata-curve",
  "arrabbiata-field",
  "arrabbiata-frontend",
+ "arrabbiata-grumpkin",
  "arrabbiata-ipa",
  "arrabbiata-kzg",
  "arrabbiata-pasta",

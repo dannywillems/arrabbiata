@@ -5,6 +5,7 @@
 use arrabbiata_bn254::{G1, G2};
 use arrabbiata_curve::{Curve, Projective, laws};
 use arrabbiata_field::Field;
+use arrabbiata_grumpkin::Grumpkin;
 use arrabbiata_pasta::{Pallas, Vesta};
 use proptest::{
     prelude::*,
@@ -123,4 +124,9 @@ fn bn254_g1() {
 #[test]
 fn bn254_g2() {
     check_laws::<G2>(CASES);
+}
+
+#[test]
+fn grumpkin() {
+    check_laws::<Grumpkin>(CASES);
 }

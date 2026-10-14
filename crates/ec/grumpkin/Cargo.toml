@@ -1,0 +1,20 @@
+[package]
+name = "arrabbiata-grumpkin"
+description = "Grumpkin, the curve forming a cycle with BN254"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-bn254 = { workspace = true }
+arrabbiata-curve = { workspace = true }
+arrabbiata-field = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
