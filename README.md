@@ -1,5 +1,7 @@
 # Arrabbiata
 
+Auto-research project.
+
 A library to write circuits in Rust and to fold them, designed so that the
 code can be extracted to Lean (with [Charon] and [Aeneas]) and reasoned about
 there.
