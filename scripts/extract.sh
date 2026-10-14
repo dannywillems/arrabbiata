@@ -16,8 +16,9 @@ out="$root/lean/extracted"
 mkdir -p "$out"
 
 for crate in "$@"; do
-    dir="$root/crates/${crate#arrabbiata-}"
-    if [ ! -d "$dir" ]; then
+    manifest=$(grep -rl --include=Cargo.toml "^name = \"$crate\"$" "$root/crates" | head -n 1)
+    dir=$(dirname "$manifest")
+    if [ -z "$manifest" ] || [ ! -d "$dir" ]; then
         echo "error: no crate directory for $crate" >&2
         exit 1
     fi

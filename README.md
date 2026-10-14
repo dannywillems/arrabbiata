@@ -37,24 +37,29 @@ performance work (the pairing, MSMs and polynomial products use the plain
 textbook algorithms). `IdentityCommitment` and `RevealCommitment` remain as
 reference schemes for tests: binding, but neither hiding nor succinct.
 
-## crates
+## layout
 
-| crate | contents | extracted to Lean |
-| --- | --- | --- |
-| `arrabbiata-field` | the `Field` traits; Montgomery prime fields; quadratic extensions; Goldilocks | yes |
-| `arrabbiata-poly` | typed columns, constraint expressions, graded evaluation and homogenization, NTT domains | yes |
-| `arrabbiata-transcript` | sponges over a permutation; typed Fiat-Shamir transcripts | yes |
-| `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family (univariate, multilinear) | yes |
-| `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
-| `arrabbiata-folding` | folding of homogeneous relations of any degree; Nova as a special case | yes |
-| `arrabbiata-curve` | short Weierstrass curves (complete formulas), MSM, the `Pairing` trait | not yet |
-| `arrabbiata-pasta` | Pallas, Vesta and their fields | not yet |
-| `arrabbiata-bn254` | BN254 fields, `G1`, `G2`, `Fq12`, the pairing | not yet |
-| `arrabbiata-poseidon` | Poseidon with Grain-generated constants; Pasta and BN254 instances | not yet |
-| `arrabbiata-ipa` | the inner-product argument polynomial commitment, over any curve | not yet |
-| `arrabbiata-kzg` | the KZG polynomial commitment, over any pairing | not yet |
-| `arrabbiata-frontend` | a typed circuit builder (vanilla PlonK arithmetization) | no |
-| `arrabbiata-plonk` | vanilla PlonK, with KZG (`kzg`) and IPA (`ipa`) | no |
+Crates are grouped by the abstraction they implement; each group has a
+README, and each crate a single responsibility. An abstraction (a trait
+crate) sits beside its instances, so a new scheme or curve is a new crate in
+the right group.
+
+| directory | crate | contents | extracted to Lean |
+| --- | --- | --- | --- |
+| `crates/algebra` | `arrabbiata-field` | the `Field` traits; Montgomery prime fields; quadratic extensions; Goldilocks | yes |
+| | `arrabbiata-poly` | typed columns, constraint expressions, graded evaluation and homogenization, univariate polynomials, NTT domains | yes |
+| `crates/ec` | `arrabbiata-curve` | the `Curve` and `Pairing` traits, complete formulas, MSM, the group laws | not yet |
+| | `arrabbiata-pasta` | Pallas, Vesta and their fields | not yet |
+| | `arrabbiata-bn254` | BN254 fields, `G1`, `G2`, `Fq12`, the pairing | not yet |
+| `crates/oracle` | `arrabbiata-transcript` | sponges over a permutation; the typed Fiat-Shamir transcript | yes |
+| | `arrabbiata-poseidon` | Poseidon with Grain-generated constants; Pasta and BN254 instances | not yet |
+| `crates/commitment` | `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family; reference schemes | yes |
+| | `arrabbiata-ipa` | the inner-product argument, over any curve | not yet |
+| | `arrabbiata-kzg` | KZG, over any pairing | not yet |
+| `crates/arithmetization` | `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
+| | `arrabbiata-frontend` | a typed circuit builder (vanilla PlonK arithmetization) | no |
+| `crates/accumulation` | `arrabbiata-folding` | folding of homogeneous relations of any degree; Nova as a special case | yes |
+| `crates/snark` | `arrabbiata-plonk` | vanilla PlonK, with KZG (`kzg`) and IPA (`ipa`) | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in

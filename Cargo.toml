@@ -1,21 +1,6 @@
 [workspace]
 resolver = "3"
-members = [
-  "crates/field",
-  "crates/curve",
-  "crates/bn254",
-  "crates/pasta",
-  "crates/poseidon",
-  "crates/poly",
-  "crates/transcript",
-  "crates/commit",
-  "crates/ipa",
-  "crates/kzg",
-  "crates/relation",
-  "crates/folding",
-  "crates/frontend",
-  "crates/plonk",
-]
+members = ["crates/*/*"]
 
 [workspace.package]
 version = "0.0.0"
@@ -26,20 +11,20 @@ repository = "https://github.com/dannywillems/arrabbiata"
 authors = ["Danny Willems <danny@badaas.be>"]
 
 [workspace.dependencies]
-arrabbiata-field = { path = "crates/field" }
-arrabbiata-curve = { path = "crates/curve" }
-arrabbiata-bn254 = { path = "crates/bn254" }
-arrabbiata-pasta = { path = "crates/pasta" }
-arrabbiata-poseidon = { path = "crates/poseidon" }
-arrabbiata-poly = { path = "crates/poly" }
-arrabbiata-transcript = { path = "crates/transcript" }
-arrabbiata-commit = { path = "crates/commit" }
-arrabbiata-ipa = { path = "crates/ipa" }
-arrabbiata-kzg = { path = "crates/kzg" }
-arrabbiata-relation = { path = "crates/relation" }
-arrabbiata-folding = { path = "crates/folding" }
-arrabbiata-frontend = { path = "crates/frontend" }
-arrabbiata-plonk = { path = "crates/plonk" }
+arrabbiata-bn254 = { path = "crates/ec/bn254" }
+arrabbiata-commit = { path = "crates/commitment/commit" }
+arrabbiata-curve = { path = "crates/ec/curve" }
+arrabbiata-field = { path = "crates/algebra/field" }
+arrabbiata-folding = { path = "crates/accumulation/folding" }
+arrabbiata-frontend = { path = "crates/arithmetization/frontend" }
+arrabbiata-ipa = { path = "crates/commitment/ipa" }
+arrabbiata-kzg = { path = "crates/commitment/kzg" }
+arrabbiata-pasta = { path = "crates/ec/pasta" }
+arrabbiata-plonk = { path = "crates/snark/plonk" }
+arrabbiata-poly = { path = "crates/algebra/poly" }
+arrabbiata-poseidon = { path = "crates/oracle/poseidon" }
+arrabbiata-relation = { path = "crates/arithmetization/relation" }
+arrabbiata-transcript = { path = "crates/oracle/transcript" }
 
 # Dev-only. Never in a library crate's [dependencies]: the extracted crates
 # must stay dependency-free so that Charon/Aeneas see only our code.

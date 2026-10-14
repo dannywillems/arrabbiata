@@ -37,6 +37,10 @@ theorem. Which of the two each law currently gets is recorded below.
 
 ## the crates
 
+The crates live under `crates/<abstraction>/<crate>`: `algebra`, `ec`,
+`oracle`, `commitment`, `arithmetization`, `accumulation` and `snark` (see
+the README of each directory). The sections below follow the crates.
+
 ### `arrabbiata-field`
 
 `Field` is a finite field with total operations (`inverse` returns an

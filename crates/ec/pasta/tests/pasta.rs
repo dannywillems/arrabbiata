@@ -1,5 +1,5 @@
 //! Pasta-specific checks. The group laws of Pallas and Vesta are tested by
-//! the generic curve laws (`crates/curve/tests/laws.rs`).
+//! the generic curve laws (`crates/ec/curve/tests/laws.rs`).
 
 use arrabbiata_field::{Field, MontField, MontgomeryConfig, PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_pasta::{FpConfig, FqConfig};

@@ -4,7 +4,7 @@
 //! Each function returns whether one family of laws holds on the given
 //! points and scalars. They are written once, generic over [`Curve`], and
 //! checked by the property tests of every curve of the workspace (see
-//! `crates/curve/tests/laws.rs`, run per curve in CI), so a new curve is
+//! `crates/ec/curve/tests/laws.rs`, run per curve in CI), so a new curve is
 //! held to exactly the same laws.
 //!
 //! ```
