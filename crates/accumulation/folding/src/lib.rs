@@ -79,7 +79,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use arrabbiata_commit::HomomorphicCommitment;
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, powers};
 use arrabbiata_poly::{Assignment, FixedColumn, Polynomials, Rotation, UniPoly, WitnessColumn};
 use arrabbiata_relation::{
     ConstraintSystem, RelaxedInstance, RelaxedWitness,
@@ -403,15 +403,17 @@ where
             column += 1;
         }
         // [E] = [E1] + sum_k r^k [T_k] + r^(T+1) [E2]
+        let r_powers = powers(r, T + 2);
         let mut error = acc.error().clone();
-        let mut power = r;
         let mut k = 0;
         while k < T {
-            error = ck.add(&error, &ck.scale(&cross_terms.commitments()[k], power));
-            power = power * r;
+            error = ck.add(
+                &error,
+                &ck.scale(&cross_terms.commitments()[k], r_powers[k + 1]),
+            );
             k += 1;
         }
-        error = ck.add(&error, &ck.scale(fresh.error(), power));
+        error = ck.add(&error, &ck.scale(fresh.error(), r_powers[T + 1]));
         RelaxedInstance::new(
             acc.u() + r * fresh.u(),
             A::fold(acc.coefficients(), fresh.coefficients(), r),
@@ -588,17 +590,16 @@ where
         }
         column += 1;
     }
+    let r_powers = powers(r, T + 2);
     let mut error = acc.error().to_vec();
     let mut row = 0;
     while row < error.len() {
-        let mut power = r;
         let mut k = 0;
         while k < T {
-            error[row] = error[row] + power * cross_terms[k][row];
-            power = power * r;
+            error[row] = error[row] + r_powers[k + 1] * cross_terms[k][row];
             k += 1;
         }
-        error[row] = error[row] + power * fresh.error()[row];
+        error[row] = error[row] + r_powers[T + 1] * fresh.error()[row];
         row += 1;
     }
     RelaxedWitness::new(columns, error)

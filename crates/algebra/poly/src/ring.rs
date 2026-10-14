@@ -18,7 +18,7 @@ use core::{
     ops::{Add, Mul, Sub},
 };
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, powers};
 
 /// The operations of a commutative `F`-algebra `A`, with structure map
 /// [`Algebra::embed`] from `F`.
@@ -325,12 +325,11 @@ where
     /// ```
     #[must_use]
     pub fn dilate(&self, w: F) -> Self {
+        let w_powers = powers(w, self.coefficients.len());
         let mut out = Vec::with_capacity(self.coefficients.len());
-        let mut power = F::ONE;
         let mut k = 0;
         while k < self.coefficients.len() {
-            out.push(self.coefficients[k] * power);
-            power = power * w;
+            out.push(self.coefficients[k] * w_powers[k]);
             k += 1;
         }
         Self::new(out)

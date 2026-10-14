@@ -40,7 +40,7 @@
 
 use core::fmt::Debug;
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, powers};
 use arrabbiata_transcript::{Absorb, Transcript, absorb_length, tag};
 
 /// An aggregation strategy for `M` constraints over `F`.
@@ -196,10 +196,11 @@ where
     /// ```
     #[must_use]
     pub fn powers(alpha: F) -> Self {
+        let alphas = powers(alpha, M);
         let mut coefficients = [F::ONE; M];
-        let mut j = 1;
+        let mut j = 0;
         while j < M {
-            coefficients[j] = coefficients[j - 1] * alpha;
+            coefficients[j] = alphas[j];
             j += 1;
         }
         Self(coefficients)

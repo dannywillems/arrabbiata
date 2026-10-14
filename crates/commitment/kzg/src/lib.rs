@@ -42,7 +42,7 @@ use alloc::vec::Vec;
 
 use arrabbiata_commit::{HomomorphicCommitment, PolynomialCommitment, Univariate};
 use arrabbiata_curve::{Curve, Pairing, Projective, msm};
-use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_field::{Field, PrimeField, powers};
 use arrabbiata_transcript::typed::Label;
 
 /// The scalar field of the pairing groups.
@@ -94,16 +94,15 @@ where
     pub fn insecure_setup(size: usize, tau: Scalar<E>) -> Self {
         let g = Projective::<E::G1>::generator();
         let h = Projective::<E::G2>::generator();
-        let mut powers = Vec::with_capacity(size);
-        let mut acc = Scalar::<E>::ONE;
+        let taus = powers(tau, size);
+        let mut points = Vec::with_capacity(size);
         let mut i = 0;
         while i < size {
-            powers.push(g * acc);
-            acc = acc * tau;
+            points.push(g * taus[i]);
             i += 1;
         }
         Self {
-            powers,
+            powers: points,
             h,
             tau_h: h * tau,
         }
