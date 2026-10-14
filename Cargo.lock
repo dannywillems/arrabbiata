@@ -12,6 +12,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-curve"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-field",
+ "arrabbiata-pasta",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-field"
 version = "0.0.0"
 dependencies = [
@@ -41,6 +51,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-pasta"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-curve",
+ "arrabbiata-field",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-plonk"
 version = "0.0.0"
 dependencies = [
@@ -57,6 +76,16 @@ name = "arrabbiata-poly"
 version = "0.0.0"
 dependencies = [
  "arrabbiata-field",
+ "proptest",
+]
+
+[[package]]
+name = "arrabbiata-poseidon"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-field",
+ "arrabbiata-pasta",
+ "arrabbiata-transcript",
  "proptest",
 ]
 
