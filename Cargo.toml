@@ -4,6 +4,7 @@ members = [
   "crates/field",
   "crates/curve",
   "crates/pasta",
+  "crates/poseidon",
   "crates/poly",
   "crates/transcript",
   "crates/commit",
@@ -25,6 +26,7 @@ authors = ["Danny Willems <danny@badaas.be>"]
 arrabbiata-field = { path = "crates/field" }
 arrabbiata-curve = { path = "crates/curve" }
 arrabbiata-pasta = { path = "crates/pasta" }
+arrabbiata-poseidon = { path = "crates/poseidon" }
 arrabbiata-poly = { path = "crates/poly" }
 arrabbiata-transcript = { path = "crates/transcript" }
 arrabbiata-commit = { path = "crates/commit" }
