@@ -252,15 +252,38 @@ transcript: `Plonk<F, PC, S, G, W, X, Q>` with `W` witness columns, `X`
 fixed columns and a gate set `G` of `Q` gadgets.
 
 The arithmetization follows the original Arrabbiata gadgets: each gadget is
-a list of constraints over the current and the next row, turned on by its
-own selector, with at most one gadget per row; the protocol multiplies every
-constraint by its gadget's selector. The gate set is a type-level list
-`(G0, (G1, ()))`, so the index of a selector is the position of its gadget,
-computed by the compiler (`Member<G, I>`, with the position `I` inferred),
-and a builder cannot turn on a gadget outside the gate set. `Q` is checked
-against the length of the list at compile time. Copy constraints range over
-all `W n` witness cells, with the cosets `g^k H` labelling the columns;
-public inputs are bound to witness column 0 by the term `L_P w_0 - PI`.
+a list of constraints turned on by its own selector, the protocol
+multiplying every constraint by its gadget's selector. The gate set is a
+type-level list `(G0, (G1, ()))`, so the index of a selector is the
+position of its gadget, computed by the compiler (`Member<G, I>`, with the
+position `I` inferred), and a builder cannot turn on a gadget outside the
+gate set. `Q` is checked against the length of the list at compile time.
+
+- **One gadget per row, by construction.** A row stores an
+  `Option<Selector<Q>>`, an element of the coproduct `1 + Q`, and the
+  selector columns are derived from it, so they are one-hot in every
+  circuit that can be written down. This is a design choice, not a
+  requirement of the protocol: every gated constraint has its own power of
+  `alpha`, so the identity would hold term by term for any selector values.
+  On `H` the one-hot selectors are orthogonal idempotents of
+  `F[X]/(X^n - 1)`, and the gated identity is a case split.
+- **Rotations.** A constraint reads a column at any offset `k` in `Z` from
+  the constrained row (`Rotation`), acting on the rows `Z/n` by
+  translation, i.e. the automorphism `X |-> w^k X` of `F[X]/(X^n - 1)`.
+  Each pair `(column, k)` a gate set reads is opened at `zeta w^k`.
+- **Rows: a cycle for the protocol, a path for the builder.** The protocol
+  reads rows on `Z/n`, so a rotation past the last row wraps to the first.
+  `Builder::new` lays rows on a path and rejects a gadget reading a row
+  outside the ones added, so padding to a power of two is never observed
+  and adding rows never changes what existing ones mean. `Builder::cyclic`
+  opts into the cycle (and needs a power of two rows); there the relation
+  is invariant under rotating all rows, as for a shift of finite type.
+- **Copies** range over all `W n` witness cells, with the cosets `g^k H`
+  labelling the columns. `sigma` is a function of the partition the copies
+  generate, and a witness satisfies them iff it is constant on the
+  classes.
+- **Public inputs** are bound to witness column 0 by the term
+  `L_P w_0 - PI`; a circuit with no witness column has none.
 
 The quotient is computed pointwise on a coset of a domain of size at least
 `d n`, where `d` bounds the total degree of a gated constraint (fixed
@@ -268,6 +291,11 @@ columns included) and of the permutation term (`W + 1`), so a gate of any
 degree costs one NTT per column. Vanilla PlonK is the instance `W = 3`,
 `X = 5`, one arithmetic gadget (`vanilla`), which circuits of
 `arrabbiata-frontend` compile to.
+
+The tests build Poseidon (one row per round, against the Zcash and the
+reference vectors) and elliptic-curve scalar multiplication on Vesta and
+Grumpkin (against the native curves) as gate sets, and prove them with IPA
+and KZG.
 
 It is a toy: no blinding (not zero-knowledge), no linearization, unbatched
 openings, the quotient committed in one piece.
@@ -285,8 +313,7 @@ openings, the quotient committed in one piece.
 - **Performance.** Tate pairing over the bits of `r` (not optimal ate),
   final exponentiation without Frobenius, schoolbook polynomial products in
   folding, unbatched PlonK openings.
-- **PlonK beyond custom gates.** Lookups, and rotations other than the next
-  row.
+- **PlonK beyond custom gates.** Lookups.
 - **Extraction.** Charon and Aeneas are not run yet. The first pilot is
   `arrabbiata-poly` (recursion over boxed expressions, generic algebras), to
   measure what extracts before relying on it.
@@ -302,7 +329,10 @@ openings, the quotient committed in one piece.
 | field axioms (Goldilocks, Montgomery fields) | yes, against a long-division reference | by Mathlib for `ZMod p` |
 | curve group laws, complete formulas = affine | yes | no |
 | pairing bilinearity, non-degeneracy, order | yes | no |
-| Poseidon = reference permutation | yes, Zcash test vectors | no |
+| BN254 add, scalar multiplication, pairing check = EIP-196/197 | yes, the 49 vectors shipped with go-ethereum | no |
+| Grumpkin has the order of the BN254 base field | yes, `[r - 1] G = -G` | no |
+| rotations act on rows as `Z` on `Z/n` | yes | no |
+| Poseidon = reference permutation | yes, Zcash vectors (Pasta) and the authors' `hadeshash` vectors (BN254, widths 3 and 5) | no |
 | IPA and KZG completeness, binding, morphism | yes | no |
 | graded and homogeneous evaluation | yes | no |
 | folding identity | yes, on arbitrary relaxed pairs | yes, `fold_complete` (built in CI) |
@@ -312,5 +342,9 @@ openings, the quotient committed in one piece.
 | PlonK completeness | yes, random circuits, vanilla and custom gates, KZG and IPA | no |
 | folding with Pedersen and KZG commitments | yes | no |
 | PlonK rejects tampered evaluations, statements, transcripts | yes | no |
-| PlonK identity rejects a cheating prover (gates, copies, public inputs) | yes, every single-cell violation, and mutation-checked | no |
+| PlonK identity rejects a cheating prover (gates, copies, public inputs) | yes, every single-cell violation, with and without rotations, mutation-checked | no |
+| copies: `sigma` depends only on the partition; satisfied iff constant on classes | yes | no |
+| vanilla compilation preserves and reflects satisfaction | yes | no |
+| path circuits ignore padding; cyclic circuits are rotation-invariant | yes | no |
+| Poseidon and curve scalar multiplication as gate sets = native | yes | no |
 | folding knowledge soundness | sanity tests only | no |

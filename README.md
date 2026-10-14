@@ -20,9 +20,11 @@ Early, but end to end. Implemented and tested:
 - prime fields in Montgomery form, generic over the modulus (Goldilocks,
   the Pasta fields, the BN254 fields), and quadratic extensions;
 - elliptic curves with complete addition formulas: the Pasta cycle (Pallas,
-  Vesta) and BN254 (`G1`, `G2`) with its pairing;
+  Vesta), BN254 (`G1`, `G2`) with its pairing (checked against the
+  EIP-196/197 vectors), and Grumpkin, which forms a cycle with BN254;
 - the Poseidon permutation over any prime field, matching the Zcash test
-  vectors on the Pasta fields;
+  vectors on the Pasta fields and the reference vectors of its authors on
+  BN254;
 - two real polynomial commitment schemes: IPA over any curve (no trusted
   setup) and KZG over any pairing;
 - constraint systems, the relaxed relation, and folding of homogeneous
@@ -30,7 +32,7 @@ Early, but end to end. Implemented and tested:
   (Pedersen or KZG) commitments;
 - the typed Fiat-Shamir transcript;
 - PlonK over any number of witness columns, fixed columns and selectors
-  (custom gates of any degree, reading the current and the next row), with
+  (custom gates of any degree, reading any row at a fixed offset), with
   vanilla PlonK as an instance; instantiated with KZG on BN254 and with IPA
   on Pallas and on BN254;
 - the Lean statement and proof of completeness of folding.
@@ -54,6 +56,7 @@ the right group.
 | `crates/ec` | `arrabbiata-curve` | the `Curve` and `Pairing` traits, complete formulas, MSM, the group laws | not yet |
 | | `arrabbiata-pasta` | Pallas, Vesta and their fields | not yet |
 | | `arrabbiata-bn254` | BN254 fields, `G1`, `G2`, `Fq12`, the pairing | not yet |
+| | `arrabbiata-grumpkin` | Grumpkin, the curve forming a cycle with BN254 | not yet |
 | `crates/oracle` | `arrabbiata-transcript` | sponges over a permutation; the typed Fiat-Shamir transcript | yes |
 | | `arrabbiata-poseidon` | Poseidon with Grain-generated constants; Pasta and BN254 instances | not yet |
 | `crates/commitment` | `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family | yes |
@@ -122,11 +125,15 @@ make test          # unit, property, doc and compile-fail tests
 make lint          # clippy, warnings denied
 make doc-examples  # require an example on every public item (nightly)
 make check-format  # nightly rustfmt and taplo
+make mutants       # mutation testing (PACKAGE=, FILE=, SHARD=k/n)
+make mutants-diff  # mutation testing of the changes since BASE (origin/main)
 make lean-setup    # fetch Mathlib (once)
 make lean-build    # build the Lean library and check its axioms
 ```
 
-CI runs the same targets, on stable and beta.
+CI runs the same targets, on stable and beta. Mutation testing
+([cargo-mutants](https://mutants.rs)) runs in its own workflow: on the
+changed code of each pull request, and on the whole workspace weekly.
 
 ## license
 
