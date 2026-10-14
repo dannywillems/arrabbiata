@@ -63,14 +63,14 @@ use crate::Plonk;
 /// IPA on Pallas, polynomials over `Fq`.
 pub type PallasIpa = Ipa<Pallas, PoseidonSponge<Fq>>;
 
-/// PlonK over `Fq` with IPA on Pallas.
-pub type PlonkPallasIpa = Plonk<Fq, PallasIpa>;
+/// PlonK over `Fq` with IPA on Pallas, on a Poseidon sponge over `Fq`.
+pub type PlonkPallasIpa = Plonk<Fq, PallasIpa, PoseidonSponge<Fq>>;
 
 /// IPA on BN254 `G1`, polynomials over `Fr`.
 pub type Bn254Ipa = Ipa<G1, PoseidonSponge<Fr>>;
 
-/// PlonK over `Fr` with IPA on BN254 `G1`.
-pub type PlonkBn254Ipa = Plonk<Fr, Bn254Ipa>;
+/// PlonK over `Fr` with IPA on BN254 `G1`, on a Poseidon sponge over `Fr`.
+pub type PlonkBn254Ipa = Plonk<Fr, Bn254Ipa, PoseidonSponge<Fr>>;
 
 const GENERATORS: u64 = 0x6970_615f_6765_6e73;
 const OPENINGS: u64 = 0x6970_615f_6f70_656e;

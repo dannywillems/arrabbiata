@@ -17,6 +17,7 @@ arrabbiata-transcript = { workspace = true }
 # which Cargo allows).
 arrabbiata-bn254 = { workspace = true }
 arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

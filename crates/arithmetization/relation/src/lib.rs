@@ -15,17 +15,21 @@
 //! [`aggregation::Aggregation`].
 //!
 //! ```
-//! use arrabbiata_commit::IdentityCommitment;
+//! use arrabbiata_ipa::Ipa;
+//! use arrabbiata_pasta::{Fq, Pallas};
+//! use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
 //! use arrabbiata_relation::examples;
-//! use arrabbiata_transcript::toy_sponge;
+//!
+//! // Pedersen commitments on Pallas, Poseidon for Fiat-Shamir.
+//! let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
 //!
 //! // Arithmetize, commit, relax, check.
-//! let cs = examples::fibonacci(8);
+//! let cs = examples::fibonacci::<Fq>(8);
 //! let trace = examples::fibonacci_trace(&cs, 1, 2);
 //! cs.check_trace(&trace).unwrap();
-//! let instance = cs.commit(&IdentityCommitment, &trace, &mut toy_sponge(0));
-//! let (instance, witness) = cs.relax(&IdentityCommitment, instance, trace);
-//! cs.check_relaxed(&IdentityCommitment, &instance, &witness).unwrap();
+//! let instance = cs.commit(&ck, &trace, &mut vesta_sponge(2));
+//! let (instance, witness) = cs.relax(&ck, instance, trace);
+//! cs.check_relaxed(&ck, &instance, &witness).unwrap();
 //! ```
 
 #![no_std]

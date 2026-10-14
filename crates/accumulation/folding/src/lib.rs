@@ -43,29 +43,30 @@
 //! against the relation's degree at compile time.
 //!
 //! ```
-//! use arrabbiata_commit::IdentityCommitment;
+//! use arrabbiata_ipa::Ipa;
+//! use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
 //! use arrabbiata_folding::Fold;
 //! use arrabbiata_relation::{aggregation::Powers, examples};
-//! use arrabbiata_transcript::toy_sponge;
-//! use arrabbiata_field::Goldilocks as F;
+//! use arrabbiata_field::Field;
+//! use arrabbiata_pasta::{Fq as F, Pallas};
 //!
 //! // Fibonacci: degree 2 constraints, two of them, combined with Powers,
 //! // so the relation has degree 3 and a fold has 2 cross-terms.
-//! type Scheme = Fold<F, IdentityCommitment, Powers, 2, 1, 2, 2, 2>;
+//! type Scheme = Fold<F, Ipa<Pallas, PoseidonSponge<F>>, Powers, 2, 1, 2, 2, 2>;
 //!
-//! let cs = examples::fibonacci(8);
-//! let ck = IdentityCommitment;
+//! let cs = examples::fibonacci::<F>(8);
+//! let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
 //! let fresh = |x, y| {
 //!     let trace = examples::fibonacci_trace(&cs, x, y);
-//!     let instance = cs.commit(&ck, &trace, &mut toy_sponge(1));
+//!     let instance = cs.commit(&ck, &trace, &mut vesta_sponge(3));
 //!     cs.relax(&ck, instance, trace)
 //! };
 //! let (acc, acc_w) = fresh(1, 2);
 //! let (new, new_w) = fresh(3, 4);
 //!
 //! let (folded, folded_w, proof, _) =
-//!     Scheme::prove(&cs, &ck, toy_sponge(0), (&acc, &acc_w), (&new, &new_w)).unwrap();
-//! let (verified, _) = Scheme::verify(&cs, &ck, toy_sponge(0), &acc, &new, proof);
+//!     Scheme::prove(&cs, &ck, vesta_sponge(2), (&acc, &acc_w), (&new, &new_w)).unwrap();
+//! let (verified, _) = Scheme::verify(&cs, &ck, vesta_sponge(2), &acc, &new, proof);
 //!
 //! assert_eq!(folded, verified);
 //! cs.check_relaxed(&ck, &verified, &folded_w).unwrap();
@@ -199,13 +200,15 @@ pub type Accumulator<F, PC, A, const W: usize, const M: usize> = RelaxedInstance
 /// excluded by the type.
 ///
 /// ```
-/// use arrabbiata_commit::{IdentityCommitment, Opened};
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_ipa::Ipa;
+/// use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_folding::FoldingTranscript;
 /// use arrabbiata_relation::aggregation::Single;
 /// use arrabbiata_transcript::typed::Pattern;
 ///
-/// type P = FoldingTranscript<F, IdentityCommitment, Single, 1, 1, 1, 2, 1>;
+/// type P = FoldingTranscript<F, Ipa<Pallas, PoseidonSponge<F>>, Single, 1, 1, 1, 2, 1>;
 /// assert_eq!(<P as Pattern>::MESSAGES, 1);
 /// assert_eq!(<P as Pattern>::CHALLENGES, 1);
 /// ```
@@ -253,37 +256,39 @@ pub type FoldingTranscript<
 ///   `d = D + A::EXTRA_DEGREE` (checked at compile time where `Fold` is used).
 ///
 /// ```
-/// use arrabbiata_commit::IdentityCommitment;
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_ipa::Ipa;
+/// use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_folding::Fold;
 /// use arrabbiata_relation::{aggregation::Powers, examples};
-/// use arrabbiata_transcript::toy_sponge;
 ///
-/// type Scheme = Fold<F, IdentityCommitment, Powers, 2, 1, 2, 2, 2>;
-/// let cs = examples::fibonacci(4);
-/// let ck = IdentityCommitment;
+/// type Scheme = Fold<F, Ipa<Pallas, PoseidonSponge<F>>, Powers, 2, 1, 2, 2, 2>;
+/// let cs = examples::fibonacci::<F>(4);
+/// let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
 /// let trace = examples::fibonacci_trace(&cs, 1, 1);
-/// let (i, w) = cs.relax(&ck, cs.commit(&ck, &trace, &mut toy_sponge(0)), trace);
-/// let (folded, _, proof, _) = Scheme::prove(&cs, &ck, toy_sponge(0), (&i, &w), (&i, &w)).unwrap();
-/// assert_eq!(Scheme::verify(&cs, &ck, toy_sponge(0), &i, &i, proof).0, folded);
+/// let (i, w) = cs.relax(&ck, cs.commit(&ck, &trace, &mut vesta_sponge(2)), trace);
+/// let (folded, _, proof, _) = Scheme::prove(&cs, &ck, vesta_sponge(2), (&i, &w), (&i, &w)).unwrap();
+/// assert_eq!(Scheme::verify(&cs, &ck, vesta_sponge(2), &i, &i, proof).0, folded);
 /// ```
 ///
 /// A wrong number of cross-terms is a compile-time error. Here a degree-2
 /// relation with no combiner (Nova) is declared with two cross-terms:
 ///
 /// ```compile_fail
-/// use arrabbiata_commit::IdentityCommitment;
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_ipa::Ipa;
+/// use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_folding::Fold;
 /// use arrabbiata_relation::{aggregation::Single, examples};
-/// use arrabbiata_transcript::toy_sponge;
 ///
-/// type Wrong = Fold<F, IdentityCommitment, Single, 1, 1, 1, 2, 2>;
-/// let cs = examples::squaring(4);
-/// let ck = IdentityCommitment;
+/// type Wrong = Fold<F, Ipa<Pallas, PoseidonSponge<F>>, Single, 1, 1, 1, 2, 2>;
+/// let cs = examples::squaring::<F>(4);
+/// let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
 /// let trace = examples::squaring_trace(&cs, 2);
-/// let (i, w) = cs.relax(&ck, cs.commit(&ck, &trace, &mut toy_sponge(0)), trace);
-/// let _ = Wrong::prove(&cs, &ck, toy_sponge(0), (&i, &w), (&i, &w));
+/// let (i, w) = cs.relax(&ck, cs.commit(&ck, &trace, &mut vesta_sponge(2)), trace);
+/// let _ = Wrong::prove(&cs, &ck, vesta_sponge(2), (&i, &w), (&i, &w));
 /// ```
 #[derive(Debug)]
 pub struct Fold<
@@ -314,24 +319,25 @@ pub struct Fold<
 /// Nova's `T = a1 b2 + a2 b1 - u1 c2 - u2 c1`.
 ///
 /// ```
-/// use arrabbiata_commit::IdentityCommitment;
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_ipa::Ipa;
+/// use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_folding::Nova;
 /// use arrabbiata_relation::examples;
-/// use arrabbiata_transcript::toy_sponge;
 ///
-/// let cs = examples::squaring(4);
-/// let ck = IdentityCommitment;
+/// let cs = examples::squaring::<F>(4);
+/// let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
 /// let relaxed = |x| {
 ///     let trace = examples::squaring_trace(&cs, x);
-///     cs.relax(&ck, cs.commit(&ck, &trace, &mut toy_sponge(0)), trace)
+///     cs.relax(&ck, cs.commit(&ck, &trace, &mut vesta_sponge(2)), trace)
 /// };
 /// let (a, aw) = relaxed(2);
 /// let (b, bw) = relaxed(3);
 /// let (_, w, _, _) =
-///     Nova::<F, IdentityCommitment, 1, 1>::prove(&cs, &ck, toy_sponge(0), (&a, &aw), (&b, &bw)).unwrap();
+///     Nova::<F, Ipa<Pallas, PoseidonSponge<F>>, 1, 1>::prove(&cs, &ck, vesta_sponge(2), (&a, &aw), (&b, &bw)).unwrap();
 /// // The folded error is no longer zero: the accumulator is relaxed.
-/// assert!(w.error().iter().any(|e| *e != F::new(0)));
+/// assert!(w.error().iter().any(|e| *e != F::from_u64(0)));
 /// ```
 pub type Nova<F, PC, const W: usize, const X: usize> = Fold<F, PC, Single, W, X, 1, 2, 1>;
 
@@ -496,18 +502,19 @@ where
     /// A [`ShapeError`] if a witness does not have the shape of the circuit.
     ///
     /// ```
-    /// use arrabbiata_commit::IdentityCommitment;
-    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_ipa::Ipa;
+    /// use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::{Fq as F, Pallas};
     /// use arrabbiata_folding::Nova;
     /// use arrabbiata_relation::examples;
-    /// use arrabbiata_transcript::toy_sponge;
     ///
-    /// let cs = examples::squaring(4);
-    /// let ck = IdentityCommitment;
+    /// let cs = examples::squaring::<F>(4);
+    /// let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
     /// let trace = examples::squaring_trace(&cs, 5);
-    /// let (inst, wit) = cs.relax(&ck, cs.commit(&ck, &trace, &mut toy_sponge(0)), trace);
+    /// let (inst, wit) = cs.relax(&ck, cs.commit(&ck, &trace, &mut vesta_sponge(2)), trace);
     /// let (folded, folded_w, _proof, _sponge) =
-    ///     Nova::<F, _, 1, 1>::prove(&cs, &ck, toy_sponge(0), (&inst, &wit), (&inst, &wit)).unwrap();
+    ///     Nova::<F, _, 1, 1>::prove(&cs, &ck, vesta_sponge(2), (&inst, &wit), (&inst, &wit)).unwrap();
     /// cs.check_relaxed(&ck, &folded, &folded_w).unwrap();
     /// ```
     #[allow(clippy::type_complexity)]
@@ -564,19 +571,20 @@ where
     /// accumulator.
     ///
     /// ```
-    /// use arrabbiata_commit::IdentityCommitment;
-    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_ipa::Ipa;
+    /// use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::{Fq as F, Pallas};
     /// use arrabbiata_folding::Nova;
     /// use arrabbiata_relation::examples;
-    /// use arrabbiata_transcript::toy_sponge;
     ///
-    /// let cs = examples::squaring(4);
-    /// let ck = IdentityCommitment;
+    /// let cs = examples::squaring::<F>(4);
+    /// let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
     /// let trace = examples::squaring_trace(&cs, 5);
-    /// let (inst, wit) = cs.relax(&ck, cs.commit(&ck, &trace, &mut toy_sponge(0)), trace);
+    /// let (inst, wit) = cs.relax(&ck, cs.commit(&ck, &trace, &mut vesta_sponge(2)), trace);
     /// let (p_inst, _, proof, _) =
-    ///     Nova::<F, _, 1, 1>::prove(&cs, &ck, toy_sponge(0), (&inst, &wit), (&inst, &wit)).unwrap();
-    /// let (v_inst, _) = Nova::<F, _, 1, 1>::verify(&cs, &ck, toy_sponge(0), &inst, &inst, proof);
+    ///     Nova::<F, _, 1, 1>::prove(&cs, &ck, vesta_sponge(2), (&inst, &wit), (&inst, &wit)).unwrap();
+    /// let (v_inst, _) = Nova::<F, _, 1, 1>::verify(&cs, &ck, vesta_sponge(2), &inst, &inst, proof);
     /// assert_eq!(p_inst, v_inst);
     /// ```
     pub fn verify<Tr>(

@@ -15,6 +15,11 @@ arrabbiata-poly = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 
 [dev-dependencies]
+# Doctests and tests use real commitments and sponges (dev-dependency
+# cycles, which Cargo allows).
+arrabbiata-ipa = { workspace = true }
+arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

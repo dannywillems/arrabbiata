@@ -559,8 +559,9 @@ where
 /// ```
 /// use arrabbiata_curve::{Projective, absorb_point};
 /// use arrabbiata_pasta::{Fq, Pallas};
-/// use arrabbiata_transcript::{Transcript, toy_sponge};
-/// let mut t = toy_sponge::<Fq>(0);
+/// use arrabbiata_poseidon::vesta_sponge;
+/// use arrabbiata_transcript::Transcript;
+/// let mut t = vesta_sponge(0);
 /// absorb_point(&Projective::<Pallas>::generator(), &mut t);
 /// let _ = t.squeeze();
 /// ```
@@ -612,14 +613,13 @@ where
 /// canonical value as `y`.
 ///
 /// Nobody knows a discrete-log relation between the points provided the
-/// transcript behaves as a random oracle; with the toy sponge this is a
-/// test fixture, not a setup.
+/// transcript behaves as a random oracle (a Poseidon sponge, for instance).
 ///
 /// ```
 /// use arrabbiata_curve::points_from_transcript;
-/// use arrabbiata_pasta::{Fp, Pallas};
-/// use arrabbiata_transcript::toy_sponge;
-/// let points = points_from_transcript::<Pallas, _>(&mut toy_sponge::<Fp>(0), 4);
+/// use arrabbiata_pasta::Pallas;
+/// use arrabbiata_poseidon::pallas_sponge;
+/// let points = points_from_transcript::<Pallas, _>(&mut pallas_sponge(0), 4);
 /// assert_eq!(points.len(), 4);
 /// assert!(points.iter().all(|p| p.is_on_curve() && !p.is_identity()));
 /// ```

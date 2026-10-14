@@ -22,29 +22,21 @@
 //! separate, stronger [`crate::HomomorphicCommitment`].
 //!
 //! ```
-//! use arrabbiata_commit::{Multilinear, PolynomialCommitment, RevealCommitment, Univariate};
+//! use arrabbiata_commit::{Multilinear, PolynomialFamily, Univariate};
 //! use arrabbiata_field::{Field, Goldilocks as F};
 //!
-//! // The same reference scheme, instantiated for both families.
-//! let uni = RevealCommitment::<Univariate>::new();
+//! // The reference semantics of the two families.
 //! let p = [F::new(1), F::new(2)]; // 1 + 2X
-//! let (v, proof) = uni.open(&p, &F::new(5));
-//! assert!(uni.verify(&uni.commit(&p), &F::new(5), v, &proof));
-//!
-//! let mle = RevealCommitment::<Multilinear>::new();
+//! assert_eq!(<Univariate as PolynomialFamily<F>>::evaluate(&p, &F::new(5)), F::new(11));
 //! let table = [F::new(3), F::new(7)]; // f(0) = 3, f(1) = 7
-//! let (v, _) = mle.open(&table, &[F::new(2)][..]);
+//! let v = <Multilinear as PolynomialFamily<F>>::evaluate(&table, &[F::new(2)][..]);
 //! assert_eq!(v, F::new(11)); // 3 + 2 * (7 - 3)
 //! ```
 
-use core::{fmt::Debug, marker::PhantomData};
+use core::fmt::Debug;
 
 use arrabbiata_field::Field;
-use arrabbiata_transcript::{Absorb, Transcript, typed::Label};
-
-use alloc::vec::Vec;
-
-use arrabbiata_transcript::absorb_slice;
+use arrabbiata_transcript::{Absorb, typed::Label};
 
 /// A family of polynomials over `F`: how a polynomial is represented and
 /// where it is evaluated.
@@ -177,17 +169,20 @@ where
 /// produce incompatible proofs, at the type level and in the transcript.
 ///
 /// ```
-/// use arrabbiata_commit::{PolynomialCommitment, RevealCommitment, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_bn254::{Bn254, Fr};
+/// use arrabbiata_commit::{PolynomialCommitment, Univariate};
+/// use arrabbiata_field::Field;
+/// use arrabbiata_kzg::Kzg;
 ///
-/// fn check<PC>(pc: &PC, p: &[F], x: F) -> bool
+/// fn check<PC>(pc: &PC, p: &[Fr], x: Fr) -> bool
 /// where
-///     PC: PolynomialCommitment<F, Family = Univariate>,
+///     PC: PolynomialCommitment<Fr, Family = Univariate>,
 /// {
 ///     let (v, proof) = pc.open(p, &x);
 ///     pc.verify(&pc.commit(p), &x, v, &proof)
 /// }
-/// assert!(check(&RevealCommitment::<Univariate>::new(), &[F::new(1), F::new(1)], F::new(3)));
+/// let kzg = Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(1234));
+/// assert!(check(&kzg, &[Fr::ONE, Fr::ONE], Fr::from_u64(3)));
 /// ```
 pub trait PolynomialCommitment<F>
 where
@@ -207,20 +202,28 @@ where
     /// Commit to `polynomial`.
     ///
     /// ```
-    /// use arrabbiata_commit::{PolynomialCommitment, RevealCommitment, Univariate};
-    /// use arrabbiata_field::Goldilocks as F;
-    /// let c = RevealCommitment::<Univariate>::new().commit(&[F::new(4)]);
-    /// assert_eq!(c.values(), &[F::new(4)]);
+    /// use arrabbiata_bn254::{Bn254, Fr};
+    /// use arrabbiata_commit::PolynomialCommitment;
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_kzg::Kzg;
+    /// // A test setup: its secret is known.
+    /// let pc = Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(1234));
+    /// // A constant polynomial commits to a multiple of the generator.
+    /// let c = pc.commit(&[Fr::from_u64(4)]);
+    /// assert_eq!(c, pc.commit(&[Fr::from_u64(4), Fr::ZERO]));
     /// ```
     fn commit(&self, polynomial: &[F]) -> Self::Commitment;
 
     /// The value of `polynomial` at `point`, with a proof.
     ///
     /// ```
-    /// use arrabbiata_commit::{PolynomialCommitment, RevealCommitment, Univariate};
-    /// use arrabbiata_field::Goldilocks as F;
-    /// let pc = RevealCommitment::<Univariate>::new();
-    /// assert_eq!(pc.open(&[F::new(1), F::new(1)], &F::new(9)).0, F::new(10));
+    /// use arrabbiata_bn254::{Bn254, Fr};
+    /// use arrabbiata_commit::PolynomialCommitment;
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_kzg::Kzg;
+    /// // A test setup: its secret is known.
+    /// let pc = Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(1234));
+    /// assert_eq!(pc.open(&[Fr::ONE, Fr::ONE], &Fr::from_u64(9)).0, Fr::from_u64(10));
     /// ```
     fn open(
         &self,
@@ -232,12 +235,16 @@ where
     /// `point`.
     ///
     /// ```
-    /// use arrabbiata_commit::{NoProof, PolynomialCommitment, RevealCommitment, Univariate};
-    /// use arrabbiata_field::Goldilocks as F;
-    /// let pc = RevealCommitment::<Univariate>::new();
-    /// let c = pc.commit(&[F::new(5)]);
-    /// assert!(pc.verify(&c, &F::new(0), F::new(5), &NoProof));
-    /// assert!(!pc.verify(&c, &F::new(0), F::new(6), &NoProof));
+    /// use arrabbiata_bn254::{Bn254, Fr};
+    /// use arrabbiata_commit::PolynomialCommitment;
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_kzg::Kzg;
+    /// // A test setup: its secret is known.
+    /// let pc = Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(1234));
+    /// let p = [Fr::from_u64(5)];
+    /// let (v, proof) = pc.open(&p, &Fr::ZERO);
+    /// assert!(pc.verify(&pc.commit(&p), &Fr::ZERO, v, &proof));
+    /// assert!(!pc.verify(&pc.commit(&p), &Fr::ZERO, v + Fr::ONE, &proof));
     /// ```
     fn verify(
         &self,
@@ -246,144 +253,6 @@ where
         value: F,
         proof: &Self::Proof,
     ) -> bool;
-}
-
-/// The reference polynomial commitment for any family: publish the
-/// polynomial, and let the verifier evaluate it.
-///
-/// Correct and perfectly binding, neither hiding nor succinct. A SNARK
-/// compiled with it is sound with a proof as large as the witness; it exists
-/// to test polynomial IOPs independently of the cryptography, and is the
-/// specification real schemes are tested against.
-///
-/// ```
-/// use arrabbiata_commit::{PolynomialCommitment, RevealCommitment, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
-/// let c = RevealCommitment::<Univariate>::new().commit(&[F::new(2), F::new(0)]);
-/// assert_eq!(c.values(), &[F::new(2), F::new(0)]);
-/// ```
-#[derive(Debug)]
-pub struct RevealCommitment<Family>(PhantomData<Family>);
-
-impl<Family> RevealCommitment<Family> {
-    /// The scheme.
-    ///
-    /// ```
-    /// use arrabbiata_commit::{Multilinear, RevealCommitment};
-    /// let _ = RevealCommitment::<Multilinear>::new();
-    /// ```
-    #[must_use]
-    pub const fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<Family> Clone for RevealCommitment<Family> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Family> Copy for RevealCommitment<Family> {}
-
-impl<Family> Default for RevealCommitment<Family> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// A polynomial published in full, exactly as committed (no normalization:
-/// the length of a multilinear table is its arity).
-///
-/// ```
-/// use arrabbiata_commit::{PolynomialCommitment, RevealCommitment, Univariate};
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// let c = RevealCommitment::<Univariate>::new().commit(&[F::new(2), F::ZERO]);
-/// assert_eq!(c.values(), &[F::new(2), F::ZERO]);
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Revealed<F>(Vec<F>);
-
-impl<F> Revealed<F> {
-    /// The published representation.
-    ///
-    /// ```
-    /// use arrabbiata_commit::{Multilinear, PolynomialCommitment, RevealCommitment};
-    /// use arrabbiata_field::Goldilocks as F;
-    /// let c = RevealCommitment::<Multilinear>::new().commit(&[F::new(1); 4]);
-    /// assert_eq!(c.values().len(), 4);
-    /// ```
-    #[must_use]
-    pub fn values(&self) -> &[F] {
-        &self.0
-    }
-}
-
-impl<F> Absorb<F> for Revealed<F>
-where
-    F: Field,
-{
-    fn absorb_into<T>(&self, transcript: &mut T)
-    where
-        T: Transcript<F>,
-    {
-        absorb_slice(transcript, &self.0);
-    }
-}
-
-/// The empty evaluation proof of [`RevealCommitment`].
-///
-/// ```
-/// use arrabbiata_commit::NoProof;
-/// assert_eq!(NoProof, NoProof::default());
-/// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct NoProof;
-
-impl<F> Absorb<F> for NoProof
-where
-    F: Field,
-{
-    fn absorb_into<T>(&self, _transcript: &mut T)
-    where
-        T: Transcript<F>,
-    {
-    }
-}
-
-impl<Family> Label for RevealCommitment<Family>
-where
-    Family: Label,
-{
-    const LABEL: u64 = 0x7265_7600_0000_0000 ^ Family::LABEL;
-}
-
-impl<F, Family> PolynomialCommitment<F> for RevealCommitment<Family>
-where
-    F: Field,
-    Family: PolynomialFamily<F> + Label,
-{
-    type Family = Family;
-    type Commitment = Revealed<F>;
-    type Proof = NoProof;
-
-    fn commit(&self, polynomial: &[F]) -> Revealed<F> {
-        Revealed(polynomial.to_vec())
-    }
-
-    fn open(&self, polynomial: &[F], point: &Family::Point) -> (F, NoProof) {
-        (Family::evaluate(polynomial, point), NoProof)
-    }
-
-    fn verify(
-        &self,
-        commitment: &Revealed<F>,
-        point: &Family::Point,
-        value: F,
-        _: &NoProof,
-    ) -> bool {
-        Family::evaluate(&commitment.0, point) == value
-    }
 }
 
 #[cfg(test)]
@@ -431,20 +300,6 @@ mod tests {
             };
             // f(x) affine in x: f(s + t) - f(s) = f(t) - f(0).
             prop_assert_eq!(eval(s + t) - eval(s), eval(t) - eval(F::ZERO));
-        }
-
-        /// Completeness and evaluation binding of the reference scheme.
-        #[test]
-        fn reveal_is_complete_and_binding(
-            table in prop::collection::vec(arb_f(), 4),
-            point in prop::collection::vec(arb_f(), 2),
-            delta in 1u64..1000,
-        ) {
-            let pc = RevealCommitment::<Multilinear>::new();
-            let c = pc.commit(&table);
-            let (v, proof) = pc.open(&table, &point);
-            prop_assert!(pc.verify(&c, &point, v, &proof));
-            prop_assert!(!pc.verify(&c, &point, v + F::new(delta), &proof));
         }
     }
 }

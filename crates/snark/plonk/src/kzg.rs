@@ -30,8 +30,8 @@ use crate::Plonk;
 /// KZG over BN254.
 pub type Kzg = arrabbiata_kzg::Kzg<Bn254>;
 
-/// PlonK over BN254 with KZG.
-pub type PlonkKzg = Plonk<Fr, Kzg>;
+/// PlonK over BN254 with KZG, on a Poseidon sponge over `Fr`.
+pub type PlonkKzg = Plonk<Fr, Kzg, PoseidonSponge<Fr>>;
 
 /// The domain separator of the PlonK transcript.
 const DOMAIN: u64 = 0x706c_6f6e_6b5f_6b7a;

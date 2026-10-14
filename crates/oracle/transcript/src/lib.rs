@@ -18,8 +18,7 @@
 //! heterogeneous list of prover messages and verifier challenges whose shape
 //! is known at the type level, and the permutation is a parameter.
 //!
-//! [`ToyPermutation`] is a deterministic stand-in for tests. It is NOT
-//! cryptographically secure.
+//! Protocols instantiate the sponge with Poseidon (`arrabbiata-poseidon`).
 
 #![no_std]
 
@@ -32,7 +31,8 @@ use arrabbiata_field::Field;
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{Transcript, toy_sponge};
+/// use arrabbiata_poseidon::goldilocks_sponge;
+/// use arrabbiata_transcript::{Transcript};
 /// fn challenge_after<T>(t: &mut T, x: F) -> F
 /// where
 ///     T: Transcript<F>,
@@ -40,8 +40,8 @@ use arrabbiata_field::Field;
 ///     t.absorb(x);
 ///     t.squeeze()
 /// }
-/// let c = challenge_after(&mut toy_sponge(0), F::new(1));
-/// assert_eq!(c, challenge_after(&mut toy_sponge(0), F::new(1)));
+/// let c = challenge_after(&mut goldilocks_sponge(0), F::new(1));
+/// assert_eq!(c, challenge_after(&mut goldilocks_sponge(0), F::new(1)));
 /// ```
 pub trait Transcript<F>
 where
@@ -51,8 +51,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{Transcript, toy_sponge};
-    /// let mut t = toy_sponge::<F>(0);
+    /// use arrabbiata_poseidon::goldilocks_sponge;
+    /// use arrabbiata_transcript::{Transcript};
+    /// let mut t = goldilocks_sponge(0);
     /// t.absorb(F::new(1));
     /// ```
     fn absorb(&mut self, value: F);
@@ -62,8 +63,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{Transcript, toy_sponge};
-    /// let mut t = toy_sponge::<F>(0);
+    /// use arrabbiata_poseidon::goldilocks_sponge;
+    /// use arrabbiata_transcript::{Transcript};
+    /// let mut t = goldilocks_sponge(0);
     /// let a = t.squeeze();
     /// let b = t.squeeze();
     /// assert_ne!(a, b);
@@ -79,7 +81,8 @@ where
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{Absorb, Transcript, toy_sponge};
+/// use arrabbiata_poseidon::goldilocks_sponge;
+/// use arrabbiata_transcript::{Absorb, Transcript};
 /// struct Point { x: F, y: F }
 /// impl Absorb<F> for Point {
 ///     fn absorb_into<T>(&self, t: &mut T)
@@ -90,7 +93,7 @@ where
 ///         t.absorb(self.y);
 ///     }
 /// }
-/// let mut t = toy_sponge::<F>(0);
+/// let mut t = goldilocks_sponge(0);
 /// Point { x: F::ONE, y: F::ZERO }.absorb_into(&mut t);
 /// ```
 pub trait Absorb<F>
@@ -101,8 +104,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{Absorb, Transcript, toy_sponge};
-    /// let mut t = toy_sponge::<F>(0);
+    /// use arrabbiata_poseidon::goldilocks_sponge;
+    /// use arrabbiata_transcript::{Absorb, Transcript};
+    /// let mut t = goldilocks_sponge(0);
     /// F::new(5).absorb_into(&mut t);
     /// let _ = t.squeeze();
     /// ```
@@ -127,8 +131,9 @@ where
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{Transcript, absorb_length, toy_sponge};
-/// let mut t = toy_sponge::<F>(0);
+/// use arrabbiata_poseidon::goldilocks_sponge;
+/// use arrabbiata_transcript::{Transcript, absorb_length};
+/// let mut t = goldilocks_sponge(0);
 /// absorb_length(&mut t, 3);
 /// ```
 pub fn absorb_length<F, T>(transcript: &mut T, length: usize)
@@ -143,8 +148,9 @@ where
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{Transcript, absorb_slice, toy_sponge};
-/// let mut t = toy_sponge::<F>(0);
+/// use arrabbiata_poseidon::goldilocks_sponge;
+/// use arrabbiata_transcript::{Transcript, absorb_slice};
+/// let mut t = goldilocks_sponge(0);
 /// absorb_slice(&mut t, &[F::ONE, F::ONE]);
 /// let _ = t.squeeze();
 /// ```
@@ -189,6 +195,7 @@ pub mod tag {
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
+/// use arrabbiata_poseidon::{};
 /// use arrabbiata_transcript::{Duplex, Permutation, Transcript};
 /// /// Rotate the state: a (useless) permutation of F^2.
 /// struct Swap;
@@ -209,10 +216,11 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{Permutation, ToyPermutation};
-    /// let mut state = [F::ZERO; 3];
-    /// ToyPermutation.permute(&mut state);
-    /// assert_ne!(state, [F::ZERO; 3]);
+    /// use arrabbiata_poseidon::goldilocks;
+    /// use arrabbiata_transcript::{Permutation};
+    /// let mut state = [F::ZERO; 12];
+    /// goldilocks().permute(&mut state);
+    /// assert_ne!(state, [F::ZERO; 12]);
     /// ```
     fn permute(&self, state: &mut [F; WIDTH]);
 }
@@ -222,8 +230,9 @@ where
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{Duplex, ToyPermutation, Transcript};
-/// let mut sponge = Duplex::<F, _, 3, 2>::new(ToyPermutation, 42);
+/// use arrabbiata_poseidon::goldilocks;
+/// use arrabbiata_transcript::{Duplex, Transcript};
+/// let mut sponge = Duplex::<F, _, 12, 8>::new(goldilocks(), 42);
 /// sponge.absorb(F::ONE);
 /// let _challenge = sponge.squeeze();
 /// ```
@@ -243,9 +252,10 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{Duplex, ToyPermutation, Transcript};
-    /// let mut a = Duplex::<F, _, 3, 2>::new(ToyPermutation, 1);
-    /// let mut b = Duplex::<F, _, 3, 2>::new(ToyPermutation, 2);
+    /// use arrabbiata_poseidon::goldilocks;
+    /// use arrabbiata_transcript::{Duplex, Transcript};
+    /// let mut a = Duplex::<F, _, 12, 8>::new(goldilocks(), 1);
+    /// let mut b = Duplex::<F, _, 12, 8>::new(goldilocks(), 2);
     /// assert_ne!(a.squeeze(), b.squeeze());
     /// ```
     #[must_use]
@@ -282,103 +292,5 @@ where
         self.permutation.permute(&mut self.state);
         self.position = 0;
         self.state[0]
-    }
-}
-
-/// A toy permutation of `F^3` for tests. NOT cryptographically secure, and
-/// not even a permutation unless `gcd(7, p - 1) = 1`.
-///
-/// Eight rounds of: add the round index plus one, raise to the 7th power,
-/// mix with the matrix `[[2,1,1],[1,2,1],[1,1,2]]`.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{Permutation, ToyPermutation};
-/// let mut s = [F::ONE, F::new(2), F::new(3)];
-/// ToyPermutation.permute(&mut s);
-/// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ToyPermutation;
-
-impl<F> Permutation<F, 3> for ToyPermutation
-where
-    F: Field,
-{
-    fn permute(&self, state: &mut [F; 3]) {
-        let mut round: u64 = 0;
-        while round < 8 {
-            let c = F::from_u64(round + 1);
-            let mut i = 0;
-            while i < 3 {
-                state[i] = (state[i] + c).pow(7);
-                i += 1;
-            }
-            let sum = state[0] + state[1] + state[2];
-            let mut j = 0;
-            while j < 3 {
-                state[j] = state[j] + sum;
-                j += 1;
-            }
-            round += 1;
-        }
-    }
-}
-
-/// The toy test transcript: a rate-2 duplex over [`ToyPermutation`].
-/// NOT cryptographically secure.
-pub type ToySponge<F> = Duplex<F, ToyPermutation, 3, 2>;
-
-/// A fresh [`ToySponge`] separated by `domain`.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{Transcript, toy_sponge};
-/// let mut t = toy_sponge::<F>(7);
-/// let _ = t.squeeze();
-/// ```
-#[must_use]
-pub fn toy_sponge<F>(domain: u64) -> ToySponge<F>
-where
-    F: Field,
-{
-    Duplex::new(ToyPermutation, domain)
-}
-
-#[cfg(test)]
-mod tests {
-    use arrabbiata_field::Goldilocks;
-
-    use super::*;
-
-    fn challenge(domain: u64, values: &[u64]) -> Goldilocks {
-        let mut t = toy_sponge::<Goldilocks>(domain);
-        for v in values {
-            t.absorb(Goldilocks::new(*v));
-        }
-        t.squeeze()
-    }
-
-    #[test]
-    fn deterministic() {
-        assert_eq!(challenge(1, &[5]), challenge(1, &[5]));
-    }
-
-    #[test]
-    fn sensitive_to_input_domain_and_order() {
-        let base = challenge(1, &[1, 2, 3]);
-        assert_ne!(base, challenge(2, &[1, 2, 3]));
-        assert_ne!(base, challenge(1, &[1, 2, 4]));
-        assert_ne!(base, challenge(1, &[2, 1, 3]));
-        assert_ne!(base, challenge(1, &[1, 2]));
-    }
-
-    #[test]
-    fn slices_absorb_with_length_prefix() {
-        let mut a = toy_sponge::<Goldilocks>(0);
-        absorb_slice(&mut a, &[Goldilocks::new(1)]);
-        absorb_slice(&mut a, &[Goldilocks::new(2)]);
-        let mut b = toy_sponge::<Goldilocks>(0);
-        absorb_slice(&mut b, &[Goldilocks::new(1), Goldilocks::new(2)]);
-        assert_ne!(a.squeeze(), b.squeeze());
     }
 }

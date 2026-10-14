@@ -96,10 +96,11 @@ where
     /// The coefficients of a fresh instance, drawn from the transcript.
     ///
     /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
+    /// use arrabbiata_poseidon::vesta_sponge;
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_relation::aggregation::{Aggregation, Powers};
-    /// use arrabbiata_transcript::toy_sponge;
-    /// let c = <Powers as Aggregation<F, 3>>::sample(&mut toy_sponge(0));
+    /// let c = <Powers as Aggregation<F, 3>>::sample(&mut vesta_sponge(2));
     /// let alpha = c.values()[1];
     /// assert_eq!(c.values(), &[F::ONE, alpha, alpha * alpha]);
     /// ```

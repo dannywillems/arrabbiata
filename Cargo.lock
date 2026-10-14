@@ -15,7 +15,12 @@ dependencies = [
 name = "arrabbiata-commit"
 version = "0.0.0"
 dependencies = [
+ "arrabbiata-bn254",
  "arrabbiata-field",
+ "arrabbiata-ipa",
+ "arrabbiata-kzg",
+ "arrabbiata-pasta",
+ "arrabbiata-poseidon",
  "arrabbiata-transcript",
  "proptest",
 ]
@@ -27,6 +32,7 @@ dependencies = [
  "arrabbiata-bn254",
  "arrabbiata-field",
  "arrabbiata-pasta",
+ "arrabbiata-poseidon",
  "arrabbiata-transcript",
  "proptest",
 ]
@@ -142,7 +148,10 @@ version = "0.0.0"
 dependencies = [
  "arrabbiata-commit",
  "arrabbiata-field",
+ "arrabbiata-ipa",
+ "arrabbiata-pasta",
  "arrabbiata-poly",
+ "arrabbiata-poseidon",
  "arrabbiata-transcript",
  "proptest",
 ]
@@ -152,6 +161,7 @@ name = "arrabbiata-transcript"
 version = "0.0.0"
 dependencies = [
  "arrabbiata-field",
+ "arrabbiata-poseidon",
  "proptest",
 ]
 

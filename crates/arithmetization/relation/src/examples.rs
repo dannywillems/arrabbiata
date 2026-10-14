@@ -1,10 +1,10 @@
-//! Small example circuits over [`Goldilocks`], used throughout the
-//! documentation and the tests of the workspace.
+//! Small example circuits over any field, used throughout the documentation
+//! and the tests of the workspace.
 //!
-//! - [`squaring`]: one constraint of degree 2, aggregated with
-//!   [`Single`]. Its relaxed relation is exactly Nova's relaxed R1CS for the
-//!   row-local constraint `next = curr^2`: the relation has degree 2 and a
-//!   fold has one cross-term.
+//! - [`squaring`]: one constraint of degree 2, aggregated with [`Single`].
+//!   Its relaxed relation is exactly Nova's relaxed R1CS for the row-local
+//!   constraint `next = curr^2`: the relation has degree 2 and a fold has one
+//!   cross-term.
 //! - [`fibonacci`]: two constraints of degree 2 (the "multiplicative
 //!   Fibonacci" sequence `(x, y) -> (y, x * y)`), aggregated with
 //!   [`Powers`]. The relation has degree 3 and a fold has two cross-terms.
@@ -13,9 +13,10 @@
 //! since [`Rotation::Next`] wraps around.
 //!
 //! ```
+//! use arrabbiata_pasta::Fq;
 //! use arrabbiata_relation::examples;
 //!
-//! let cs = examples::fibonacci(6);
+//! let cs = examples::fibonacci::<Fq>(6);
 //! let trace = examples::fibonacci_trace(&cs, 2, 3);
 //! assert!(cs.check_trace(&trace).is_ok());
 //! ```
@@ -23,7 +24,7 @@
 use alloc::{vec, vec::Vec};
 use core::num::NonZeroUsize;
 
-use arrabbiata_field::{Field, Goldilocks};
+use arrabbiata_field::Field;
 use arrabbiata_poly::{Expr, FixedColumn, Rotation, WitnessColumn};
 
 use crate::{
@@ -31,32 +32,37 @@ use crate::{
     system::{ConstraintSystem, Trace},
 };
 
-/// The squaring circuit: one witness column, one selector, one constraint
-/// `q * (next - curr^2)` of degree 2.
+/// The squaring circuit over `F`: one witness column, one selector, one
+/// constraint `q * (next - curr^2)` of degree 2.
 ///
 /// ```
+/// use arrabbiata_pasta::Fq;
 /// use arrabbiata_relation::examples::{Squaring, squaring};
-/// let cs: Squaring = squaring(4);
-/// assert_eq!(Squaring::CROSS_TERMS, 1);
+/// let cs: Squaring<Fq> = squaring(4);
+/// assert_eq!(Squaring::<Fq>::CROSS_TERMS, 1);
 /// # let _ = cs;
 /// ```
-pub type Squaring = ConstraintSystem<Goldilocks, Single, 1, 1, 1, 2>;
+pub type Squaring<F> = ConstraintSystem<F, Single, 1, 1, 1, 2>;
 
-/// The multiplicative Fibonacci circuit: two witness columns, one selector,
-/// constraints `q * (x_next - y)` and `q * (y_next - x * y)`.
+/// The multiplicative Fibonacci circuit over `F`: two witness columns, one
+/// selector, constraints `q * (x_next - y)` and `q * (y_next - x * y)`.
 ///
 /// ```
+/// use arrabbiata_pasta::Fq;
 /// use arrabbiata_relation::examples::{Fibonacci, fibonacci};
-/// let cs: Fibonacci = fibonacci(4);
-/// assert_eq!(Fibonacci::DEGREE, 3);
+/// let cs: Fibonacci<Fq> = fibonacci(4);
+/// assert_eq!(Fibonacci::<Fq>::DEGREE, 3);
 /// # let _ = cs;
 /// ```
-pub type Fibonacci = ConstraintSystem<Goldilocks, Powers, 2, 1, 2, 2>;
+pub type Fibonacci<F> = ConstraintSystem<F, Powers, 2, 1, 2, 2>;
 
 /// The selector `1, ..., 1, 0` of `num_rows` rows.
-fn selector(num_rows: usize) -> Vec<Goldilocks> {
-    let mut q = vec![Goldilocks::ONE; num_rows];
-    q[num_rows - 1] = Goldilocks::ZERO;
+fn selector<F>(num_rows: usize) -> Vec<F>
+where
+    F: Field,
+{
+    let mut q = vec![F::ONE; num_rows];
+    q[num_rows - 1] = F::ZERO;
     q
 }
 
@@ -74,15 +80,18 @@ fn rows(num_rows: usize) -> NonZeroUsize {
 /// If `num_rows` is zero.
 ///
 /// ```
+/// use arrabbiata_pasta::Fq;
 /// use arrabbiata_relation::examples::squaring;
-/// assert_eq!(squaring(16).num_rows(), 16);
+/// assert_eq!(squaring::<Fq>(16).num_rows(), 16);
 /// ```
 #[must_use]
-pub fn squaring(num_rows: usize) -> Squaring {
-    type E = Expr<Goldilocks, 1, 1>;
-    let q = E::fixed(FixedColumn::new::<0>(), Rotation::Curr);
-    let curr = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-    let next = E::witness(WitnessColumn::new::<0>(), Rotation::Next);
+pub fn squaring<F>(num_rows: usize) -> Squaring<F>
+where
+    F: Field,
+{
+    let q = Expr::<F, 1, 1>::fixed(FixedColumn::new::<0>(), Rotation::Curr);
+    let curr = Expr::<F, 1, 1>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
+    let next = Expr::<F, 1, 1>::witness(WitnessColumn::new::<0>(), Rotation::Next);
     let constraint = q * (next - curr.clone() * curr);
     match Squaring::new(rows(num_rows), [selector(num_rows)], [constraint]) {
         Ok(cs) => cs,
@@ -93,15 +102,20 @@ pub fn squaring(num_rows: usize) -> Squaring {
 /// The trace `x0, x0^2, x0^4, ...` of the squaring circuit.
 ///
 /// ```
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq;
 /// use arrabbiata_relation::examples::{squaring, squaring_trace};
-/// let cs = squaring(3);
-/// assert_eq!(squaring_trace(&cs, 3).columns()[0], vec![F::new(3), F::new(9), F::new(81)]);
+/// let cs = squaring::<Fq>(3);
+/// let expected = vec![Fq::from_u64(3), Fq::from_u64(9), Fq::from_u64(81)];
+/// assert_eq!(squaring_trace(&cs, 3).columns()[0], expected);
 /// ```
 #[must_use]
-pub fn squaring_trace(cs: &Squaring, x0: u64) -> Trace<Goldilocks, 1> {
+pub fn squaring_trace<F>(cs: &Squaring<F>, x0: u64) -> Trace<F, 1>
+where
+    F: Field,
+{
     let mut x = Vec::with_capacity(cs.num_rows());
-    x.push(Goldilocks::new(x0));
+    x.push(F::from_u64(x0));
     let mut row = 1;
     while row < cs.num_rows() {
         x.push(x[row - 1].square());
@@ -120,17 +134,21 @@ pub fn squaring_trace(cs: &Squaring, x0: u64) -> Trace<Goldilocks, 1> {
 /// If `num_rows` is zero.
 ///
 /// ```
+/// use arrabbiata_pasta::Fq;
 /// use arrabbiata_relation::examples::fibonacci;
-/// assert_eq!(fibonacci(5).constraints().len(), 2);
+/// assert_eq!(fibonacci::<Fq>(5).constraints().len(), 2);
 /// ```
 #[must_use]
-pub fn fibonacci(num_rows: usize) -> Fibonacci {
-    type E = Expr<Goldilocks, 2, 1>;
-    let q = E::fixed(FixedColumn::new::<0>(), Rotation::Curr);
-    let x = E::witness(WitnessColumn::new::<0>(), Rotation::Curr);
-    let y = E::witness(WitnessColumn::new::<1>(), Rotation::Curr);
-    let x_next = E::witness(WitnessColumn::new::<0>(), Rotation::Next);
-    let y_next = E::witness(WitnessColumn::new::<1>(), Rotation::Next);
+pub fn fibonacci<F>(num_rows: usize) -> Fibonacci<F>
+where
+    F: Field,
+{
+    type E<F> = Expr<F, 2, 1>;
+    let q = E::<F>::fixed(FixedColumn::new::<0>(), Rotation::Curr);
+    let x = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::Curr);
+    let y = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::Curr);
+    let x_next = E::<F>::witness(WitnessColumn::new::<0>(), Rotation::Next);
+    let y_next = E::<F>::witness(WitnessColumn::new::<1>(), Rotation::Next);
     let shift = q.clone() * (x_next - y.clone());
     let product = q * (y_next - x * y);
     match Fibonacci::new(rows(num_rows), [selector(num_rows)], [shift, product]) {
@@ -143,18 +161,22 @@ pub fn fibonacci(num_rows: usize) -> Fibonacci {
 /// circuit.
 ///
 /// ```
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq;
 /// use arrabbiata_relation::examples::{fibonacci, fibonacci_trace};
-/// let cs = fibonacci(3);
+/// let cs = fibonacci::<Fq>(3);
 /// let t = fibonacci_trace(&cs, 2, 3);
-/// assert_eq!(t.columns()[1], vec![F::new(3), F::new(6), F::new(18)]);
+/// assert_eq!(t.columns()[1], vec![Fq::from_u64(3), Fq::from_u64(6), Fq::from_u64(18)]);
 /// ```
 #[must_use]
-pub fn fibonacci_trace(cs: &Fibonacci, x0: u64, y0: u64) -> Trace<Goldilocks, 2> {
+pub fn fibonacci_trace<F>(cs: &Fibonacci<F>, x0: u64, y0: u64) -> Trace<F, 2>
+where
+    F: Field,
+{
     let mut x = Vec::with_capacity(cs.num_rows());
     let mut y = Vec::with_capacity(cs.num_rows());
-    x.push(Goldilocks::new(x0));
-    y.push(Goldilocks::new(y0));
+    x.push(F::from_u64(x0));
+    y.push(F::from_u64(y0));
     let mut row = 1;
     while row < cs.num_rows() {
         let (px, py) = (x[row - 1], y[row - 1]);

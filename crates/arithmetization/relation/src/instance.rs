@@ -15,14 +15,18 @@ use arrabbiata_transcript::{Absorb, Transcript, absorb_length, tag, typed::Label
 /// A fresh instance: column commitments and aggregation coefficients.
 ///
 /// ```
-/// use arrabbiata_commit::IdentityCommitment;
+/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
+/// use arrabbiata_pasta::{Fq, Pallas};
+/// use arrabbiata_ipa::Ipa;
 /// use arrabbiata_relation::examples;
-/// use arrabbiata_transcript::toy_sponge;
+/// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 16, vesta_sponge(1));
 ///
-/// let cs = examples::squaring(4);
+/// let cs = examples::squaring::<Fq>(4);
 /// let trace = examples::squaring_trace(&cs, 3);
-/// let instance = cs.commit(&IdentityCommitment, &trace, &mut toy_sponge(0));
-/// assert_eq!(instance.columns()[0].values()[0], arrabbiata_field::Goldilocks::new(3));
+/// let instance = cs.commit(&ck, &trace, &mut vesta_sponge(2));
+/// // The column commitment is the Pedersen commitment to the column.
+/// use arrabbiata_commit::HomomorphicCommitment;
+/// assert_eq!(instance.columns()[0], ck.commit(&trace.columns()[0]));
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instance<C, K, const W: usize> {

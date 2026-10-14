@@ -42,8 +42,8 @@
 //!
 //! ```
 //! use arrabbiata_field::Goldilocks as F;
+//! use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
 //! use arrabbiata_transcript::{
-//!     toy_sponge,
 //!     typed::{Challenge, End, Label, Message, Tape},
 //! };
 //!
@@ -63,7 +63,7 @@
 //! // Sigma-protocol shape: commitment, challenge, end.
 //! type Sigma = Message<Commitment, Challenge<End>>;
 //!
-//! let tape = Tape::<F, _, Sigma>::start(toy_sponge(0));
+//! let tape = Tape::<F, _, Sigma>::start(goldilocks_sponge(0));
 //! let tape = tape.send(&Commitment(F::new(42)));
 //! let (challenge, tape) = tape.challenge();
 //! let _sponge = tape.finish();
@@ -74,9 +74,10 @@
 //!
 //! ```compile_fail
 //! use arrabbiata_field::Goldilocks as F;
-//! use arrabbiata_transcript::{toy_sponge, typed::{Challenge, End, Message, Tape}};
+//! use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+//! use arrabbiata_transcript::{typed::{Challenge, End, Message, Tape}};
 //! type P = Message<F, Challenge<End>>;
-//! let tape = Tape::<F, _, P>::start(toy_sponge(0));
+//! let tape = Tape::<F, _, P>::start(goldilocks_sponge(0));
 //! let (_c, _tape) = tape.challenge();
 //! ```
 //!
@@ -84,9 +85,10 @@
 //!
 //! ```compile_fail
 //! use arrabbiata_field::Goldilocks as F;
-//! use arrabbiata_transcript::{toy_sponge, typed::{End, Message, Tape}};
+//! use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+//! use arrabbiata_transcript::{typed::{End, Message, Tape}};
 //! type P = Message<F, End>;
-//! let tape = Tape::<F, _, P>::start(toy_sponge(0));
+//! let tape = Tape::<F, _, P>::start(goldilocks_sponge(0));
 //! let _a = tape.send(&F::new(1));
 //! let _b = tape.send(&F::new(2));
 //! ```
@@ -108,7 +110,8 @@ use crate::{
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
 /// use arrabbiata_transcript::typed::Label;
 /// struct Opening;
 /// impl Label for Opening {
@@ -137,6 +140,7 @@ where
 ///
 /// ```
 /// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
 /// use arrabbiata_transcript::typed::{Label, Labeled};
 /// type Beta = Labeled<F, 0x6265>;
 /// assert_eq!(Beta::LABEL, 0x6265);
@@ -168,7 +172,8 @@ where
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
 /// assert_eq!(<End as Pattern>::MESSAGES, 0);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -179,7 +184,8 @@ pub struct End;
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
 /// type P = Message<F, Message<F, End>>;
 /// assert_eq!(<P as Pattern>::MESSAGES, 2);
 /// let _: <P as Pattern>::Proof = HCons::new(F::ONE, HCons::new(F::ZERO, HNil));
@@ -201,6 +207,7 @@ pub struct Challenge<Next>(PhantomData<Next>);
 ///
 /// ```
 /// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
 /// use arrabbiata_transcript::{hlist::HNil, typed::{End, Pattern, Public}};
 /// // A public value contributes nothing to the proof.
 /// let _: <Public<F, End> as Pattern>::Proof = HNil;
@@ -212,7 +219,8 @@ pub struct Public<M, Next>(PhantomData<(M, Next)>);
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
 /// type Sumcheck2 = Message<F, Challenge<Message<F, Challenge<End>>>>;
 /// assert_eq!(<Sumcheck2 as Pattern>::MESSAGES, 2);
 /// assert_eq!(<Sumcheck2 as Pattern>::CHALLENGES, 2);
@@ -233,10 +241,11 @@ pub trait Pattern {
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
     /// use arrabbiata_transcript::Transcript;
-    /// let mut a = toy_sponge::<F>(0);
-    /// let mut b = toy_sponge::<F>(0);
+    /// let mut a = goldilocks_sponge(0);
+    /// let mut b = goldilocks_sponge(0);
     /// <Message<F, End> as Pattern>::describe(&mut a);
     /// <Challenge<End> as Pattern>::describe(&mut b);
     /// assert_ne!(a.squeeze(), b.squeeze());
@@ -327,7 +336,8 @@ where
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
 /// use arrabbiata_transcript::typed::Then;
 /// type A = Message<F, End>;
 /// type B = Challenge<End>;
@@ -370,8 +380,9 @@ pub type Then<P, Q> = <P as Concat<Q>>::Output;
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// let tape = Tape::<F, _, Challenge<End>>::start(toy_sponge(0));
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+/// let tape = Tape::<F, _, Challenge<End>>::start(goldilocks_sponge(0));
 /// let (_c, tape) = tape.challenge();
 /// let _sponge = tape.finish();
 /// ```
@@ -392,8 +403,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let _tape = Tape::<F, _, End>::start(toy_sponge(0));
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// let _tape = Tape::<F, _, End>::start(goldilocks_sponge(0));
     /// ```
     #[must_use]
     pub fn start(mut transcript: T) -> Self {
@@ -423,8 +435,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let tape = Tape::<F, _, Message<F, End>>::start(toy_sponge(0));
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// let tape = Tape::<F, _, Message<F, End>>::start(goldilocks_sponge(0));
     /// let _ = tape.send(&F::ONE).finish();
     /// ```
     #[must_use]
@@ -439,8 +452,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let tape = Tape::<F, _, Message<F, End>>::start(toy_sponge(0));
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// let tape = Tape::<F, _, Message<F, End>>::start(goldilocks_sponge(0));
     /// let _ = tape.receive(&F::ONE).finish();
     /// ```
     #[must_use]
@@ -467,8 +481,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_transcript::{toy_sponge, typed::{End, Public, Tape}};
-    /// let tape = Tape::<F, _, Public<F, End>>::start(toy_sponge(0));
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{typed::{End, Public, Tape}};
+    /// let tape = Tape::<F, _, Public<F, End>>::start(goldilocks_sponge(0));
     /// let _ = tape.public(&F::new(1)).finish();
     /// ```
     #[must_use]
@@ -491,9 +506,10 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let (c, _) = Tape::<F, _, Challenge<End>>::start(toy_sponge(0)).challenge();
-    /// let (d, _) = Tape::<F, _, Challenge<End>>::start(toy_sponge(0)).challenge();
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// let (c, _) = Tape::<F, _, Challenge<End>>::start(goldilocks_sponge(0)).challenge();
+    /// let (d, _) = Tape::<F, _, Challenge<End>>::start(goldilocks_sponge(0)).challenge();
     /// assert_eq!(c, d);
     /// ```
     #[must_use]
@@ -516,9 +532,10 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
     /// use arrabbiata_transcript::Transcript;
-    /// let mut sponge = Tape::<F, _, End>::start(toy_sponge(0)).finish();
+    /// let mut sponge = Tape::<F, _, End>::start(goldilocks_sponge(0)).finish();
     /// let _ = sponge.squeeze();
     /// ```
     #[must_use]
@@ -536,9 +553,10 @@ where
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
 /// type P = Message<F, Challenge<End>>;
-/// let (_c, prover) = Prover::<F, _, P, P, HNil>::start(toy_sponge(0)).send(F::ONE).challenge();
+/// let (_c, prover) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).send(F::ONE).challenge();
 /// let (_, proof) = prover.finish();
 /// assert_eq!(proof, HCons::new(F::ONE, HNil));
 /// ```
@@ -559,9 +577,10 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
     /// type P = End;
-    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(toy_sponge(0)).finish();
+    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).finish();
     /// assert_eq!(proof, HNil);
     /// ```
     #[must_use]
@@ -585,9 +604,10 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
     /// type P = Message<F, End>;
-    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(toy_sponge(0)).send(F::new(3)).finish();
+    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).send(F::new(3)).finish();
     /// assert_eq!(proof.head, F::new(3));
     /// ```
     #[must_use]
@@ -612,9 +632,10 @@ where
     ///
     /// ```
     /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_transcript::{toy_sponge, hlist::HNil, typed::{End, Prover, Public}};
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::HNil, typed::{End, Prover, Public}};
     /// type P = Public<F, End>;
-    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(toy_sponge(0)).public(&F::new(1)).finish();
+    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).public(&F::new(1)).finish();
     /// assert_eq!(proof, HNil);
     /// ```
     #[must_use]
@@ -637,9 +658,10 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
     /// type P = Challenge<End>;
-    /// let (_c, prover) = Prover::<F, _, P, P, HNil>::start(toy_sponge(0)).challenge();
+    /// let (_c, prover) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).challenge();
     /// let _ = prover.finish();
     /// ```
     #[must_use]
@@ -665,9 +687,10 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
     /// type P = Message<F, Message<F, End>>;
-    /// let prover = Prover::<F, _, P, P, HNil>::start(toy_sponge(0)).send(F::new(1)).send(F::new(2));
+    /// let prover = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).send(F::new(1)).send(F::new(2));
     /// let (_, proof) = prover.finish();
     /// // In protocol order, not in reverse.
     /// assert_eq!((proof.head, proof.tail.head), (F::new(1), F::new(2)));
@@ -688,9 +711,10 @@ where
 ///
 /// ```
 /// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
 /// type P = Message<F, Challenge<End>>;
-/// let verifier = Verifier::<F, _, P>::start(toy_sponge(0), HCons::new(F::ONE, HNil));
+/// let verifier = Verifier::<F, _, P>::start(goldilocks_sponge(0), HCons::new(F::ONE, HNil));
 /// let (m, verifier) = verifier.read();
 /// let (_c, verifier) = verifier.challenge();
 /// let _ = verifier.finish();
@@ -714,8 +738,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let _ = Verifier::<F, _, End>::start(toy_sponge(0), HNil).finish();
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// let _ = Verifier::<F, _, End>::start(goldilocks_sponge(0), HNil).finish();
     /// ```
     #[must_use]
     pub fn start(transcript: T, proof: <Full as Pattern>::Proof) -> Self {
@@ -737,8 +762,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let verifier = Verifier::<F, _, Message<F, End>>::start(toy_sponge(0), HCons::new(F::new(8), HNil));
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// let verifier = Verifier::<F, _, Message<F, End>>::start(goldilocks_sponge(0), HCons::new(F::new(8), HNil));
     /// let (m, _) = verifier.read();
     /// assert_eq!(m, F::new(8));
     /// ```
@@ -761,8 +787,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_transcript::{toy_sponge, hlist::HNil, typed::{End, Public, Verifier}};
-    /// let verifier = Verifier::<F, _, Public<F, End>>::start(toy_sponge(0), HNil);
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::HNil, typed::{End, Public, Verifier}};
+    /// let verifier = Verifier::<F, _, Public<F, End>>::start(goldilocks_sponge(0), HNil);
     /// let _ = verifier.public(&F::new(1)).finish();
     /// ```
     #[must_use]
@@ -784,8 +811,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let (_c, v) = Verifier::<F, _, Challenge<End>>::start(toy_sponge(0), HNil).challenge();
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// let (_c, v) = Verifier::<F, _, Challenge<End>>::start(goldilocks_sponge(0), HNil).challenge();
     /// let _ = v.finish();
     /// ```
     #[must_use]
@@ -810,8 +838,9 @@ where
     ///
     /// ```
     /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_transcript::{toy_sponge, hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let _sponge = Verifier::<F, _, End>::start(toy_sponge(0), HNil).finish();
+    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
+    /// let _sponge = Verifier::<F, _, End>::start(goldilocks_sponge(0), HNil).finish();
     /// ```
     #[must_use]
     pub fn finish(self) -> T {
@@ -831,24 +860,24 @@ where
 ///
 /// ```
 /// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
 /// use arrabbiata_transcript::{
-///     toy_sponge,
 ///     typed::{Challenge, End, Message, Protocol, ProofOf, Public, prover_tape, verifier_tape},
 /// };
 ///
 /// /// Prove knowledge of nothing: absorb a statement and a message, squeeze.
-/// struct Toy;
-/// impl Protocol for Toy {
+/// struct Sigma;
+/// impl Protocol for Sigma {
 ///     type Transcript = Public<F, Message<F, Challenge<End>>>;
 /// }
 ///
-/// let (c, prover) = prover_tape::<F, _, Toy>(toy_sponge(0))
+/// let (c, prover) = prover_tape::<F, _, Sigma>(goldilocks_sponge(0))
 ///     .public(&F::new(1))
 ///     .send(F::new(2))
 ///     .challenge();
-/// let (_, proof): (_, ProofOf<Toy>) = prover.finish();
+/// let (_, proof): (_, ProofOf<Sigma>) = prover.finish();
 ///
-/// let (d, verifier) = verifier_tape::<F, _, Toy>(toy_sponge(0), proof)
+/// let (d, verifier) = verifier_tape::<F, _, Sigma>(goldilocks_sponge(0), proof)
 ///     .public(&F::new(1))
 ///     .read()
 ///     .1
@@ -868,12 +897,13 @@ pub type ProofOf<P> = <<P as Protocol>::Transcript as Pattern>::Proof;
 ///
 /// ```
 /// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_transcript::{toy_sponge, typed::{End, Protocol, prover_tape}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{typed::{End, Protocol, prover_tape}};
 /// struct Empty;
 /// impl Protocol for Empty {
 ///     type Transcript = End;
 /// }
-/// let (_, _proof) = prover_tape::<F, _, Empty>(toy_sponge(0)).finish();
+/// let (_, _proof) = prover_tape::<F, _, Empty>(goldilocks_sponge(0)).finish();
 /// ```
 #[must_use]
 pub fn prover_tape<F, T, P>(
@@ -891,12 +921,13 @@ where
 ///
 /// ```
 /// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_transcript::{toy_sponge, hlist::HNil, typed::{End, Protocol, verifier_tape}};
+/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
+/// use arrabbiata_transcript::{hlist::HNil, typed::{End, Protocol, verifier_tape}};
 /// struct Empty;
 /// impl Protocol for Empty {
 ///     type Transcript = End;
 /// }
-/// let _ = verifier_tape::<F, _, Empty>(toy_sponge(0), HNil).finish();
+/// let _ = verifier_tape::<F, _, Empty>(goldilocks_sponge(0), HNil).finish();
 /// ```
 #[must_use]
 pub fn verifier_tape<F, T, P>(
@@ -909,84 +940,4 @@ where
     P: Protocol,
 {
     Verifier::start(transcript, proof)
-}
-
-#[cfg(test)]
-mod tests {
-    use arrabbiata_field::Goldilocks as F;
-
-    use super::*;
-    use crate::toy_sponge;
-
-    type Sigma = Message<F, Challenge<End>>;
-    type TwoRounds = Then<Sigma, Sigma>;
-
-    #[test]
-    fn counts_are_known_at_compile_time() {
-        const { assert!(<TwoRounds as Pattern>::MESSAGES == 2) };
-        const { assert!(<TwoRounds as Pattern>::CHALLENGES == 2) };
-    }
-
-    #[test]
-    fn composition_is_the_concatenation() {
-        // Then<Sigma, Sigma> is literally Message<F, Challenge<Message<F,
-        // Challenge<End>>>>; the assignment only type-checks if so.
-        type Expected = Message<F, Challenge<Message<F, Challenge<End>>>>;
-        let tape: Tape<F, _, Expected> = Tape::<F, _, TwoRounds>::start(toy_sponge(0));
-        let (c1, tape) = tape.send(&F::new(1)).challenge();
-        let (c2, tape) = tape.send(&F::new(2)).challenge();
-        let _ = tape.finish();
-        assert_ne!(c1, c2);
-    }
-
-    #[test]
-    fn prover_and_verifier_agree() {
-        let prover = Tape::<F, _, Sigma>::start(toy_sponge(7)).send(&F::new(3));
-        let verifier = Tape::<F, _, Sigma>::start(toy_sponge(7)).receive(&F::new(3));
-        assert_eq!(prover.challenge().0, verifier.challenge().0);
-    }
-
-    #[test]
-    fn prover_proof_replays_on_the_verifier() {
-        type P = Then<Sigma, Message<u64Label, Challenge<End>>>;
-        let prover = Prover::<F, _, P, P, HNil>::start(toy_sponge(1));
-        let (c1, prover) = prover.send(F::new(10)).challenge();
-        let (c2, prover) = prover.send(u64Label(5)).challenge();
-        let (_, proof) = prover.finish();
-        let _: HCons<F, HCons<u64Label, HNil>> = proof;
-
-        let verifier = Verifier::<F, _, P>::start(toy_sponge(1), proof);
-        let (m1, verifier) = verifier.read();
-        let (d1, verifier) = verifier.challenge();
-        let (m2, verifier) = verifier.read();
-        let (d2, verifier) = verifier.challenge();
-        let _ = verifier.finish();
-        assert_eq!((m1, m2, d1, d2), (F::new(10), u64Label(5), c1, c2));
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    #[allow(non_camel_case_types)]
-    struct u64Label(u64);
-
-    impl Label for u64Label {
-        const LABEL: u64 = 99;
-    }
-
-    impl Absorb<F> for u64Label {
-        fn absorb_into<T>(&self, transcript: &mut T)
-        where
-            T: Transcript<F>,
-        {
-            transcript.absorb(F::new(self.0));
-        }
-    }
-
-    #[test]
-    fn the_pattern_separates_protocols() {
-        // Same messages, different declared protocol: different challenges.
-        type Other = Message<F, Challenge<Message<F, End>>>;
-        let a = Tape::<F, _, Sigma>::start(toy_sponge(0)).send(&F::new(3));
-        let b = Tape::<F, _, Other>::start(toy_sponge(0)).send(&F::new(3));
-        assert_ne!(a.challenge().0, b.challenge().0);
-    }
 }

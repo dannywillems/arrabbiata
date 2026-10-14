@@ -3,31 +3,33 @@
 //! This crate compiles the PlonK polynomial IOP (Gabizon, Williamson,
 //! Ciobotaru, ePrint 2019/953) with any univariate
 //! [`PolynomialCommitment`], over any [`TwoAdicField`], with the typed
-//! transcript of [`arrabbiata_transcript::typed`]. Circuits come from
+//! transcript of [`arrabbiata_transcript::typed`] on a sponge `S` that is
+//! part of the protocol type: `Plonk<F, PC, S>`. Fiat-Shamir runs on Poseidon
+//! ([`arrabbiata_poseidon`]) in every instantiation of the crate. Circuits come from
 //! [`arrabbiata_frontend`].
 //!
 //! ```
-//! use arrabbiata_commit::{RevealCommitment, Univariate};
-//! use arrabbiata_field::Goldilocks as F;
+//! use arrabbiata_field::Field;
+//! use arrabbiata_pasta::Fq as F;
 //! use arrabbiata_frontend::build;
 //! use arrabbiata_plonk::{prove, setup, verify};
-//! use arrabbiata_transcript::toy_sponge;
+//! use arrabbiata_plonk::ipa;
 //!
 //! // x^3 + x + 5 = 35, with x = 3 private and 35 public.
 //! let (circuit, witness, ()) = build::<F, _, _>(|b| {
-//!     let x = b.witness(F::new(3));
+//!     let x = b.witness(F::from_u64(3));
 //!     let x2 = b.mul(&x, &x);
 //!     let x3 = b.mul(&x2, &x);
 //!     let sum = b.add(&x3, &x);
-//!     let lhs = b.add_constant(&sum, F::new(5));
-//!     let rhs = b.public_input(F::new(35));
+//!     let lhs = b.add_constant(&sum, F::from_u64(5));
+//!     let rhs = b.public_input(F::from_u64(35));
 //!     b.assert_equal(&lhs, &rhs);
 //! });
 //!
-//! let pcs = RevealCommitment::<Univariate>::new();
+//! let pcs = ipa::pallas(&circuit);
 //! let (pk, vk) = setup(&circuit, &pcs).unwrap();
-//! let proof = prove(&pk, &pcs, toy_sponge(0), &witness).unwrap();
-//! verify(&vk, &pcs, toy_sponge(0), witness.public_inputs(), proof).unwrap();
+//! let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
+//! verify(&vk, &pcs, ipa::pallas_transcript(), witness.public_inputs(), proof).unwrap();
 //! ```
 //!
 //! # The protocol
@@ -89,46 +91,48 @@ pub type Keys<F, PC> = (ProverKey<F, PC>, VerifierKey<F, PC>);
 /// and the transcripts differ from the first challenge.
 ///
 /// ```
-/// use arrabbiata_commit::{RevealCommitment, Univariate};
-/// use arrabbiata_plonk::Scheme;
-/// let m: Scheme<RevealCommitment<Univariate>, u8, 1> = Scheme::new(7);
+/// use arrabbiata_plonk::{Scheme, ipa::PallasIpa};
+/// let m: Scheme<PallasIpa, u8, 1> = Scheme::new(7);
 /// assert_eq!(m.value, 7);
 /// ```
 ///
 /// A proof made with one scheme does not type-check against the verifier of
 /// another, even when their commitment and proof types coincide. Here `Twin`
-/// is a copy of the reference scheme under another label:
+/// is IPA on Pallas under another label:
 ///
 /// ```compile_fail
-/// use arrabbiata_commit::{NoProof, PolynomialCommitment, RevealCommitment, Revealed, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_commit::{PolynomialCommitment, Univariate};
+/// use arrabbiata_field::Field;
 /// use arrabbiata_frontend::build;
-/// use arrabbiata_plonk::{prove, setup, verify};
-/// use arrabbiata_transcript::{toy_sponge, typed::Label};
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{ipa, ipa::PallasIpa, prove, setup, verify};
+/// use arrabbiata_transcript::typed::Label;
 ///
-/// struct Twin(RevealCommitment<Univariate>);
+/// type Point = <PallasIpa as PolynomialCommitment<F>>::Commitment;
+/// type IpaProof = <PallasIpa as PolynomialCommitment<F>>::Proof;
+/// struct Twin(PallasIpa);
 /// impl Label for Twin {
 ///     const LABEL: u64 = 0x7477;
 /// }
 /// impl PolynomialCommitment<F> for Twin {
 ///     type Family = Univariate;
-///     type Commitment = Revealed<F>;
-///     type Proof = NoProof;
-///     fn commit(&self, p: &[F]) -> Revealed<F> { self.0.commit(p) }
-///     fn open(&self, p: &[F], x: &F) -> (F, NoProof) { self.0.open(p, x) }
-///     fn verify(&self, c: &Revealed<F>, x: &F, v: F, pr: &NoProof) -> bool { self.0.verify(c, x, v, pr) }
+///     type Commitment = Point;
+///     type Proof = IpaProof;
+///     fn commit(&self, p: &[F]) -> Point { self.0.commit(p) }
+///     fn open(&self, p: &[F], x: &F) -> (F, IpaProof) { self.0.open(p, x) }
+///     fn verify(&self, c: &Point, x: &F, v: F, pr: &IpaProof) -> bool { self.0.verify(c, x, v, pr) }
 /// }
 ///
 /// let (circuit, witness, ()) = build::<F, _, _>(|b| {
-///     b.witness(F::new(1));
+///     b.witness(F::from_u64(1));
 /// });
-/// let reveal = RevealCommitment::<Univariate>::new();
-/// let twin = Twin(RevealCommitment::new());
-/// let (pk, _) = setup(&circuit, &reveal).unwrap();
+/// let pcs = ipa::pallas(&circuit);
+/// let twin = Twin(ipa::pallas(&circuit));
+/// let (pk, _) = setup(&circuit, &pcs).unwrap();
 /// let (_, twin_vk) = setup(&circuit, &twin).unwrap();
-/// let proof = prove(&pk, &reveal, toy_sponge(0), &witness).unwrap();
-/// // A proof under `reveal` handed to the verifier of `twin`.
-/// let _ = verify(&twin_vk, &twin, toy_sponge(0), &[], proof);
+/// let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
+/// // A proof under `pcs` handed to the verifier of `twin`.
+/// let _ = verify(&twin_vk, &twin, ipa::pallas_transcript(), &[], proof);
 /// ```
 pub struct Scheme<PC, T, const TAG: u64> {
     /// The value.
@@ -140,9 +144,8 @@ impl<PC, T, const TAG: u64> Scheme<PC, T, TAG> {
     /// Tag `value` with the scheme `PC`.
     ///
     /// ```
-    /// use arrabbiata_commit::{RevealCommitment, Univariate};
-    /// use arrabbiata_plonk::Scheme;
-    /// let m = Scheme::<RevealCommitment<Univariate>, _, 1>::new("x");
+    /// use arrabbiata_plonk::{Scheme, ipa::PallasIpa};
+    /// let m = Scheme::<PallasIpa, _, 1>::new("x");
     /// assert_eq!(m.value, "x");
     /// ```
     pub const fn new(value: T) -> Self {
@@ -204,15 +207,63 @@ where
     }
 }
 
+/// The commitment scheme `PC` and the sponge `S` a proof is made with.
+///
+/// Every message of a PlonK proof is tagged with both, so a proof is a
+/// proof for one scheme and one Fiat-Shamir sponge: a verifier running
+/// another sponge (or another scheme) does not type-check against it. The
+/// label is the scheme's; the sponge is separated by its own type and state.
+///
+/// ```
+/// use arrabbiata_pasta::Fq;
+/// use arrabbiata_plonk::{With, ipa::PallasIpa};
+/// use arrabbiata_poseidon::PoseidonSponge;
+/// use arrabbiata_transcript::typed::Label;
+/// type Setup = With<PallasIpa, PoseidonSponge<Fq>>;
+/// assert_eq!(Setup::LABEL, <PallasIpa as Label>::LABEL);
+/// ```
+///
+/// A proof made on the Poseidon sponge is not accepted by a verifier running
+/// another sponge, even over the same field and scheme. Here the verifier runs
+/// Poseidon of width 3 at rate 1 instead of rate 2:
+///
+/// ```compile_fail
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::ipa;
+/// use arrabbiata_frontend::build;
+/// use arrabbiata_plonk::{prove, setup, verify};
+/// use arrabbiata_poseidon::{Poseidon, vesta_base};
+/// use arrabbiata_transcript::Duplex;
+///
+/// let (circuit, witness, ()) = build::<F, _, _>(|b| {
+///     b.witness(F::from_u64(1));
+/// });
+/// let pcs = ipa::pallas(&circuit);
+/// let (pk, vk) = setup(&circuit, &pcs).unwrap();
+/// let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
+/// let rate_one = Duplex::<F, Poseidon<F, 3>, 3, 1>::new(vesta_base(), 0);
+/// let _ = verify(&vk, &pcs, rate_one, &[], proof);
+/// ```
+#[derive(Debug)]
+pub struct With<PC, S>(PhantomData<fn() -> (PC, S)>);
+
+impl<PC, S> Label for With<PC, S>
+where
+    PC: Label,
+{
+    const LABEL: u64 = PC::LABEL;
+}
+
 /// Commitments to the wire polynomials `a, b, c`.
-pub type Wires<F, PC> = Scheme<PC, Triple<Com<F, PC>>, 0x7769>;
+pub type Wires<F, PC, S> = Scheme<With<PC, S>, Triple<Com<F, PC>>, 0x7769>;
 /// Commitment to the grand product `z`.
-pub type GrandProduct<F, PC> = Scheme<PC, Com<F, PC>, 0x7a7a>;
+pub type GrandProduct<F, PC, S> = Scheme<With<PC, S>, Com<F, PC>, 0x7a7a>;
 /// Commitment to the quotient `t`.
-pub type Quotient<F, PC> = Scheme<PC, Com<F, PC>, 0x7474>;
+pub type Quotient<F, PC, S> = Scheme<With<PC, S>, Com<F, PC>, 0x7474>;
 /// The opening proofs.
-pub type Openings<F, PC> =
-    Scheme<PC, OpeningProofs<<PC as PolynomialCommitment<F>>::Proof>, 0x6f70>;
+pub type Openings<F, PC, S> =
+    Scheme<With<PC, S>, OpeningProofs<<PC as PolynomialCommitment<F>>::Proof>, 0x6f70>;
 /// The verifier key: the preprocessed circuit, committed with `PC`.
 pub type VerifierKey<F, PC> = Scheme<PC, Preprocessed<F, Com<F, PC>>, 0x766b>;
 
@@ -243,9 +294,9 @@ where
 /// The public inputs of a statement.
 ///
 /// ```
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_field::{Field, Goldilocks as F};
 /// use arrabbiata_plonk::PublicInputs;
-/// assert_eq!(PublicInputs(vec![F::new(1)]).0.len(), 1);
+/// assert_eq!(PublicInputs(vec![F::from_u64(1)]).0.len(), 1);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInputs<F>(pub Vec<F>);
@@ -316,10 +367,9 @@ pub const OPENED: [&str; 13] = [
 /// The opening proofs of the evaluations.
 ///
 /// ```
-/// use arrabbiata_commit::NoProof;
 /// use arrabbiata_plonk::OpeningProofs;
-/// let o = OpeningProofs { at_zeta: [NoProof; 13], at_zeta_shifted: NoProof };
-/// assert_eq!(o.at_zeta_shifted, NoProof);
+/// let o = OpeningProofs { at_zeta: [0u8; 13], at_zeta_shifted: 1u8 };
+/// assert_eq!(o.at_zeta_shifted, 1);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpeningProofs<P> {
@@ -352,13 +402,14 @@ where
 /// permutation polynomials. Wrapped with its scheme as a [`VerifierKey`].
 ///
 /// ```
-/// use arrabbiata_commit::{RevealCommitment, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
 /// let (circuit, _, ()) = build::<F, _, _>(|b| {
-///     b.witness(F::new(1));
+///     b.witness(F::from_u64(1));
 /// });
-/// let (_, vk) = arrabbiata_plonk::setup(&circuit, &RevealCommitment::<Univariate>::new()).unwrap();
+/// let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
 /// assert_eq!(vk.value.num_rows(), 2);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -374,11 +425,11 @@ impl<F, C> Preprocessed<F, C> {
     /// The number of rows of the circuit.
     ///
     /// ```
-    /// use arrabbiata_commit::{RevealCommitment, Univariate};
-    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::ipa;
     /// use arrabbiata_frontend::build;
     /// let (c, _, ()) = build::<F, _, _>(|_| ());
-    /// let (_, vk) = arrabbiata_plonk::setup(&c, &RevealCommitment::<Univariate>::new()).unwrap();
+    /// let (_, vk) = arrabbiata_plonk::setup(&c, &ipa::pallas(&c)).unwrap();
     /// assert_eq!(vk.value.num_rows(), c.num_rows());
     /// ```
     #[must_use]
@@ -425,11 +476,12 @@ where
 /// commits to.
 ///
 /// ```
-/// use arrabbiata_commit::{RevealCommitment, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
 /// let (circuit, _, ()) = build::<F, _, _>(|_| ());
-/// let (pk, vk) = arrabbiata_plonk::setup(&circuit, &RevealCommitment::<Univariate>::new()).unwrap();
+/// let (pk, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
 /// assert_eq!(pk.verifier_key(), &vk);
 /// ```
 pub struct ProverKey<F, PC>
@@ -452,11 +504,11 @@ where
     /// The verifier key.
     ///
     /// ```
-    /// use arrabbiata_commit::{RevealCommitment, Univariate};
-    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::ipa;
     /// use arrabbiata_frontend::build;
     /// let (c, _, ()) = build::<F, _, _>(|_| ());
-    /// let (pk, _) = arrabbiata_plonk::setup(&c, &RevealCommitment::<Univariate>::new()).unwrap();
+    /// let (pk, _) = arrabbiata_plonk::setup(&c, &ipa::pallas(&c)).unwrap();
     /// assert_eq!(pk.verifier_key().value.num_rows(), 2);
     /// ```
     pub const fn verifier_key(&self) -> &VerifierKey<F, PC> {
@@ -464,22 +516,25 @@ where
     }
 }
 
-/// The transcript of vanilla PlonK compiled with the scheme `PC`. The prover
+/// The transcript of vanilla PlonK compiled with the scheme `PC`, on the
+/// sponge `S`. The prover
 /// and the verifier both follow it, through [`Plonk`].
-pub type PlonkTranscript<F, PC> = Public<
+pub type PlonkTranscript<F, PC, S> = Public<
     VerifierKey<F, PC>,
     Public<
         PublicInputs<F>,
         Message<
-            Wires<F, PC>,
+            Wires<F, PC, S>,
             Challenge<
                 Challenge<
                     Message<
-                        GrandProduct<F, PC>,
+                        GrandProduct<F, PC, S>,
                         Challenge<
                             Message<
-                                Quotient<F, PC>,
-                                Challenge<Message<Evaluations<F>, Message<Openings<F, PC>, End>>>,
+                                Quotient<F, PC, S>,
+                                Challenge<
+                                    Message<Evaluations<F>, Message<Openings<F, PC, S>, End>>,
+                                >,
                             >,
                         >,
                     >,
@@ -492,23 +547,24 @@ pub type PlonkTranscript<F, PC> = Public<
 /// Vanilla PlonK over `F`, compiled with the univariate scheme `PC`.
 ///
 /// ```
-/// use arrabbiata_commit::{RevealCommitment, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_plonk::Plonk;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{Plonk, ipa::PallasIpa};
+/// use arrabbiata_poseidon::PoseidonSponge;
 /// use arrabbiata_transcript::typed::{Pattern, Protocol};
-/// type P = <Plonk<F, RevealCommitment<Univariate>> as Protocol>::Transcript;
+/// type P = <Plonk<F, PallasIpa, PoseidonSponge<F>> as Protocol>::Transcript;
 /// assert_eq!(<P as Pattern>::MESSAGES, 5);
 /// assert_eq!(<P as Pattern>::CHALLENGES, 4);
 /// ```
 #[derive(Debug)]
-pub struct Plonk<F, PC>(PhantomData<(F, PC)>);
+pub struct Plonk<F, PC, S>(PhantomData<(F, PC, S)>);
 
-impl<F, PC> Protocol for Plonk<F, PC>
+impl<F, PC, S> Protocol for Plonk<F, PC, S>
 where
     F: Field,
     PC: PolynomialCommitment<F, Family = Univariate>,
+    S: Transcript<F>,
 {
-    type Transcript = PlonkTranscript<F, PC>;
+    type Transcript = PlonkTranscript<F, PC, S>;
 }
 
 /// Why setup, proving or verification failed.
@@ -560,13 +616,14 @@ impl core::error::Error for PlonkError {}
 /// size.
 ///
 /// ```
-/// use arrabbiata_commit::{RevealCommitment, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
 /// let (c, _, ()) = build::<F, _, _>(|b| {
-///     b.constant(F::new(2));
+///     b.constant(F::from_u64(2));
 /// });
-/// assert!(arrabbiata_plonk::setup(&c, &RevealCommitment::<Univariate>::new()).is_ok());
+/// assert!(arrabbiata_plonk::setup(&c, &ipa::pallas(&c)).is_ok());
 /// ```
 pub fn setup<F, PC>(circuit: &Circuit<F>, pcs: &PC) -> Result<Keys<F, PC>, PlonkError>
 where
@@ -651,33 +708,33 @@ where
 /// match the circuit.
 ///
 /// ```
-/// use arrabbiata_commit::{RevealCommitment, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
 /// use arrabbiata_plonk::{PlonkError, prove, setup};
-/// use arrabbiata_transcript::toy_sponge;
 ///
 /// // A false statement: 2 * 2 = 5.
 /// let (circuit, witness, ()) = build::<F, _, _>(|b| {
-///     let x = b.witness(F::new(2));
+///     let x = b.witness(F::from_u64(2));
 ///     let y = b.mul(&x, &x);
-///     let five = b.public_input(F::new(5));
+///     let five = b.public_input(F::from_u64(5));
 ///     b.assert_equal(&y, &five);
 /// });
-/// let pcs = RevealCommitment::<Univariate>::new();
+/// let pcs = ipa::pallas(&circuit);
 /// let (pk, _) = setup(&circuit, &pcs).unwrap();
-/// assert_eq!(prove(&pk, &pcs, toy_sponge(0), &witness).unwrap_err(), PlonkError::Unsatisfied);
+/// assert_eq!(prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap_err(), PlonkError::Unsatisfied);
 /// ```
-pub fn prove<F, PC, T>(
+pub fn prove<F, PC, S>(
     pk: &ProverKey<F, PC>,
     pcs: &PC,
-    transcript: T,
+    transcript: S,
     witness: &Witness<F>,
-) -> Result<ProofOf<Plonk<F, PC>>, PlonkError>
+) -> Result<ProofOf<Plonk<F, PC, S>>, PlonkError>
 where
     F: TwoAdicField,
     PC: PolynomialCommitment<F, Family = Univariate>,
-    T: Transcript<F>,
+    S: Transcript<F>,
 {
     let domain = &pk.domain;
     let n = domain.size();
@@ -691,7 +748,7 @@ where
         .map(|column| domain.interpolate(column).ok_or(PlonkError::DomainTooLarge));
     let (a, b, c) = (a?, b?, c?);
     let wire_commitments = Triple([&a, &b, &c].map(|p| pcs.commit(p.coefficients())));
-    let tape = prover_tape::<F, T, Plonk<F, PC>>(transcript)
+    let tape = prover_tape::<F, S, Plonk<F, PC, S>>(transcript)
         .public(&pk.vk)
         .public(&PublicInputs(witness.public_inputs().to_vec()))
         .send(Scheme::new(wire_commitments));
@@ -804,43 +861,43 @@ where
 /// `zeta`.
 ///
 /// ```
-/// use arrabbiata_commit::{RevealCommitment, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::ipa;
 /// use arrabbiata_frontend::build;
 /// use arrabbiata_plonk::{PlonkError, prove, setup, verify};
-/// use arrabbiata_transcript::toy_sponge;
 ///
 /// let (circuit, witness, ()) = build::<F, _, _>(|b| {
-///     let x = b.witness(F::new(4));
+///     let x = b.witness(F::from_u64(4));
 ///     let y = b.mul(&x, &x);
-///     let out = b.public_input(F::new(16));
+///     let out = b.public_input(F::from_u64(16));
 ///     b.assert_equal(&y, &out);
 /// });
-/// let pcs = RevealCommitment::<Univariate>::new();
+/// let pcs = ipa::pallas(&circuit);
 /// let (pk, vk) = setup(&circuit, &pcs).unwrap();
-/// let proof = prove(&pk, &pcs, toy_sponge(0), &witness).unwrap();
+/// let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
 /// // The same proof does not verify for another statement.
-/// assert!(verify(&vk, &pcs, toy_sponge(0), &[F::new(17)], proof.clone()).is_err());
-/// assert!(verify(&vk, &pcs, toy_sponge(0), &[F::new(16)], proof).is_ok());
+/// assert!(verify(&vk, &pcs, ipa::pallas_transcript(), &[F::from_u64(17)], proof.clone()).is_err());
+/// assert!(verify(&vk, &pcs, ipa::pallas_transcript(), &[F::from_u64(16)], proof).is_ok());
 /// ```
-pub fn verify<F, PC, T>(
+pub fn verify<F, PC, S>(
     vk: &VerifierKey<F, PC>,
     pcs: &PC,
-    transcript: T,
+    transcript: S,
     public_inputs: &[F],
-    proof: ProofOf<Plonk<F, PC>>,
+    proof: ProofOf<Plonk<F, PC, S>>,
 ) -> Result<(), PlonkError>
 where
     F: TwoAdicField,
     PC: PolynomialCommitment<F, Family = Univariate>,
-    T: Transcript<F>,
+    S: Transcript<F>,
 {
     let key = &vk.value;
     if public_inputs.len() != key.public_rows.len() {
         return Err(PlonkError::PublicInputs);
     }
     let domain = Domain::<F>::new(key.log_size).ok_or(PlonkError::DomainTooLarge)?;
-    let (wires, tape) = verifier_tape::<F, T, Plonk<F, PC>>(transcript, proof)
+    let (wires, tape) = verifier_tape::<F, S, Plonk<F, PC, S>>(transcript, proof)
         .public(vk)
         .public(&PublicInputs(public_inputs.to_vec()))
         .read();

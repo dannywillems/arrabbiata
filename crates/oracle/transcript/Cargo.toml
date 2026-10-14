@@ -12,6 +12,9 @@ authors.workspace = true
 arrabbiata-field = { workspace = true }
 
 [dev-dependencies]
+# Doctests and tests run on the Poseidon sponge (a dev-dependency cycle,
+# which Cargo allows).
+arrabbiata-poseidon = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

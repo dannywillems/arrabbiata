@@ -13,6 +13,13 @@ arrabbiata-field = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 
 [dev-dependencies]
+# Doctests use the real schemes (a dev-dependency cycle, which Cargo
+# allows).
+arrabbiata-bn254 = { workspace = true }
+arrabbiata-ipa = { workspace = true }
+arrabbiata-kzg = { workspace = true }
+arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

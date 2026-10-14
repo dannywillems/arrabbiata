@@ -35,9 +35,10 @@ use crate::{
 /// closed under folding.
 ///
 /// ```
+/// use arrabbiata_pasta::Fq;
 /// use arrabbiata_relation::examples;
 ///
-/// let cs = examples::squaring(4);
+/// let cs = examples::squaring::<Fq>(4);
 /// let trace = examples::squaring_trace(&cs, 3);
 /// assert!(cs.check_trace(&trace).is_ok());
 /// ```
@@ -52,11 +53,13 @@ pub struct ConstraintSystem<F, A, const W: usize, const X: usize, const M: usize
 /// A trace that has one value per row in every witness column.
 ///
 /// ```
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq;
 /// use arrabbiata_relation::examples;
 ///
-/// let cs = examples::squaring(4);
+/// let cs = examples::squaring::<Fq>(4);
 /// let trace = examples::squaring_trace(&cs, 2);
-/// assert_eq!(trace.columns()[0][..3], [2, 4, 16].map(arrabbiata_field::Goldilocks::new));
+/// assert_eq!(trace.columns()[0][..3], [2, 4, 16].map(Fq::from_u64));
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Trace<F, const W: usize> {
@@ -67,8 +70,9 @@ impl<F, const W: usize> Trace<F, W> {
     /// The witness columns.
     ///
     /// ```
+    /// use arrabbiata_pasta::Fq;
     /// use arrabbiata_relation::examples;
-    /// let cs = examples::squaring(2);
+    /// let cs = examples::squaring::<Fq>(2);
     /// assert_eq!(examples::squaring_trace(&cs, 5).columns()[0].len(), 2);
     /// ```
     #[must_use]
@@ -80,15 +84,17 @@ impl<F, const W: usize> Trace<F, W> {
 /// One row of a trace, as an assignment of the circuit variables in `F`.
 ///
 /// ```
-/// use arrabbiata_field::Goldilocks as F;
+/// use arrabbiata_pasta::Fq;
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_poly::{Assignment, Rotation, Scalars, WitnessColumn};
 /// use arrabbiata_relation::{RowView, examples};
 ///
-/// let cs = examples::squaring(4);
+/// let cs = examples::squaring::<Fq>(4);
 /// let trace = examples::squaring_trace(&cs, 3);
 /// let row = RowView::new(trace.columns(), cs.fixed_columns(), 1, cs.num_rows());
 /// let next = row.witness(&Scalars::new(), WitnessColumn::new::<0>(), Rotation::Next);
-/// assert_eq!(next, F::new(81));
+/// assert_eq!(next, F::from_u64(81));
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct RowView<'a, F, const W: usize, const X: usize> {
@@ -103,8 +109,9 @@ impl<'a, F, const W: usize, const X: usize> RowView<'a, F, W, X> {
     /// must have `num_rows` values.
     ///
     /// ```
+    /// use arrabbiata_pasta::Fq;
     /// use arrabbiata_relation::{RowView, examples};
-    /// let cs = examples::squaring(4);
+    /// let cs = examples::squaring::<Fq>(4);
     /// let trace = examples::squaring_trace(&cs, 3);
     /// let _row = RowView::new(trace.columns(), cs.fixed_columns(), 0, cs.num_rows());
     /// ```
@@ -147,18 +154,20 @@ where
     /// the aggregation coefficients are variables.
     ///
     /// ```
+    /// use arrabbiata_pasta::Fq;
     /// use arrabbiata_relation::examples;
-    /// assert_eq!(examples::Squaring::DEGREE, 2);
-    /// assert_eq!(examples::Fibonacci::DEGREE, 3);
+    /// assert_eq!(examples::Squaring::<Fq>::DEGREE, 2);
+    /// assert_eq!(examples::Fibonacci::<Fq>::DEGREE, 3);
     /// ```
     pub const DEGREE: usize = D + A::EXTRA_DEGREE;
 
     /// The number of cross-terms a fold produces: `DEGREE - 1`.
     ///
     /// ```
+    /// use arrabbiata_pasta::Fq;
     /// use arrabbiata_relation::examples;
-    /// assert_eq!(examples::Squaring::CROSS_TERMS, 1);
-    /// assert_eq!(examples::Fibonacci::CROSS_TERMS, 2);
+    /// assert_eq!(examples::Squaring::<Fq>::CROSS_TERMS, 1);
+    /// assert_eq!(examples::Fibonacci::<Fq>::CROSS_TERMS, 2);
     /// ```
     pub const CROSS_TERMS: usize = D + A::EXTRA_DEGREE - 1;
 
@@ -235,8 +244,9 @@ where
     /// The number of rows.
     ///
     /// ```
+    /// use arrabbiata_pasta::Fq;
     /// use arrabbiata_relation::examples;
-    /// assert_eq!(examples::squaring(8).num_rows(), 8);
+    /// assert_eq!(examples::squaring::<Fq>(8).num_rows(), 8);
     /// ```
     #[must_use]
     pub const fn num_rows(&self) -> usize {
@@ -246,8 +256,9 @@ where
     /// The fixed columns.
     ///
     /// ```
+    /// use arrabbiata_pasta::Fq;
     /// use arrabbiata_relation::examples;
-    /// assert_eq!(examples::squaring(3).fixed_columns()[0].len(), 3);
+    /// assert_eq!(examples::squaring::<Fq>(3).fixed_columns()[0].len(), 3);
     /// ```
     #[must_use]
     pub const fn fixed_columns(&self) -> &[Vec<F>; X] {
@@ -257,8 +268,9 @@ where
     /// The constraints.
     ///
     /// ```
+    /// use arrabbiata_pasta::Fq;
     /// use arrabbiata_relation::examples;
-    /// assert_eq!(examples::fibonacci(4).constraints().len(), 2);
+    /// assert_eq!(examples::fibonacci::<Fq>(4).constraints().len(), 2);
     /// ```
     #[must_use]
     pub const fn constraints(&self) -> &[Expr<F, W, X>; M] {
@@ -274,11 +286,13 @@ where
     /// length.
     ///
     /// ```
-    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_pasta::Fq;
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_relation::examples;
-    /// let cs = examples::squaring(2);
-    /// assert!(cs.trace([vec![F::new(1), F::new(1)]]).is_ok());
-    /// assert!(cs.trace([vec![F::new(1)]]).is_err());
+    /// let cs = examples::squaring::<Fq>(2);
+    /// assert!(cs.trace([vec![F::from_u64(1), F::from_u64(1)]]).is_ok());
+    /// assert!(cs.trace([vec![F::from_u64(1)]]).is_err());
     /// ```
     pub fn trace(&self, columns: [Vec<F>; W]) -> Result<Trace<F, W>, ShapeError> {
         self.check_witness_columns(&columns)?;
@@ -309,11 +323,13 @@ where
     /// it in `F`, and the folding prover in `F[r]` to get the cross-terms.
     ///
     /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
+    /// use arrabbiata_pasta::Fq;
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_poly::Scalars;
     /// use arrabbiata_relation::{RowView, examples};
     ///
-    /// let cs = examples::squaring(4);
+    /// let cs = examples::squaring::<Fq>(4);
     /// let trace = examples::squaring_trace(&cs, 3);
     /// let row = RowView::new(trace.columns(), cs.fixed_columns(), 0, cs.num_rows());
     /// assert_eq!(cs.evaluate_row(&Scalars::new(), &row, &F::ONE, None), F::ZERO);
@@ -355,11 +371,13 @@ where
     /// constraint.
     ///
     /// ```
-    /// use arrabbiata_field::Goldilocks as F;
+    /// use arrabbiata_pasta::Fq;
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_relation::{error::RelationError, examples};
     ///
-    /// let cs = examples::squaring(3);
-    /// let bad = cs.trace([vec![F::new(2), F::new(5), F::new(25)]]).unwrap();
+    /// let cs = examples::squaring::<Fq>(3);
+    /// let bad = cs.trace([vec![F::from_u64(2), F::from_u64(5), F::from_u64(25)]]).unwrap();
     /// assert_eq!(
     ///     cs.check_trace(&bad),
     ///     Err(RelationError::Unsatisfied { row: 0, constraint: Some(0) })
@@ -394,14 +412,16 @@ where
     /// [`RelationError::Unsatisfied`] on the first failing row.
     ///
     /// ```
-    /// use arrabbiata_commit::IdentityCommitment;
+    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
+    /// use arrabbiata_pasta::{Fq, Pallas};
+    /// use arrabbiata_ipa::Ipa;
     /// use arrabbiata_relation::examples;
-    /// use arrabbiata_transcript::toy_sponge;
+    /// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 16, vesta_sponge(1));
     ///
-    /// let cs = examples::squaring(4);
+    /// let cs = examples::squaring::<Fq>(4);
     /// let trace = examples::squaring_trace(&cs, 3);
-    /// let instance = cs.commit(&IdentityCommitment, &trace, &mut toy_sponge(0));
-    /// let (instance, witness) = cs.relax(&IdentityCommitment, instance, trace);
+    /// let instance = cs.commit(&ck, &trace, &mut vesta_sponge(2));
+    /// let (instance, witness) = cs.relax(&ck, instance, trace);
     /// assert!(cs.check_relaxed_witness(instance.u(), instance.coefficients(), &witness).is_ok());
     /// ```
     pub fn check_relaxed_witness(
@@ -445,15 +465,17 @@ where
     /// does not open, otherwise as [`ConstraintSystem::check_relaxed_witness`].
     ///
     /// ```
-    /// use arrabbiata_commit::IdentityCommitment;
+    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
+    /// use arrabbiata_pasta::{Fq, Pallas};
+    /// use arrabbiata_ipa::Ipa;
     /// use arrabbiata_relation::examples;
-    /// use arrabbiata_transcript::toy_sponge;
+    /// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 16, vesta_sponge(1));
     ///
-    /// let cs = examples::fibonacci(8);
+    /// let cs = examples::fibonacci::<Fq>(8);
     /// let trace = examples::fibonacci_trace(&cs, 1, 1);
-    /// let instance = cs.commit(&IdentityCommitment, &trace, &mut toy_sponge(0));
-    /// let (instance, witness) = cs.relax(&IdentityCommitment, instance, trace);
-    /// assert!(cs.check_relaxed(&IdentityCommitment, &instance, &witness).is_ok());
+    /// let instance = cs.commit(&ck, &trace, &mut vesta_sponge(2));
+    /// let (instance, witness) = cs.relax(&ck, instance, trace);
+    /// assert!(cs.check_relaxed(&ck, &instance, &witness).is_ok());
     /// ```
     pub fn check_relaxed<PC>(
         &self,
@@ -485,13 +507,15 @@ where
     /// sampled, so the coefficients bind the witness.
     ///
     /// ```
-    /// use arrabbiata_commit::IdentityCommitment;
+    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
+    /// use arrabbiata_pasta::{Fq, Pallas};
+    /// use arrabbiata_ipa::Ipa;
     /// use arrabbiata_relation::examples;
-    /// use arrabbiata_transcript::toy_sponge;
+    /// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 16, vesta_sponge(1));
     ///
-    /// let cs = examples::squaring(4);
+    /// let cs = examples::squaring::<Fq>(4);
     /// let trace = examples::squaring_trace(&cs, 3);
-    /// let instance = cs.commit(&IdentityCommitment, &trace, &mut toy_sponge(0));
+    /// let instance = cs.commit(&ck, &trace, &mut vesta_sponge(2));
     /// assert_eq!(instance.columns().len(), 1);
     /// ```
     pub fn commit<PC, T>(
@@ -524,15 +548,18 @@ where
     /// zero error vector.
     ///
     /// ```
-    /// use arrabbiata_commit::IdentityCommitment;
-    /// use arrabbiata_field::{Field, Goldilocks as F};
+    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
+    /// use arrabbiata_pasta::{Fq, Pallas};
+    /// use arrabbiata_ipa::Ipa;
+    /// use arrabbiata_field::Field;
+    /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_relation::examples;
-    /// use arrabbiata_transcript::toy_sponge;
+    /// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 16, vesta_sponge(1));
     ///
-    /// let cs = examples::squaring(4);
+    /// let cs = examples::squaring::<Fq>(4);
     /// let trace = examples::squaring_trace(&cs, 3);
-    /// let instance = cs.commit(&IdentityCommitment, &trace, &mut toy_sponge(0));
-    /// let (instance, witness) = cs.relax(&IdentityCommitment, instance, trace);
+    /// let instance = cs.commit(&ck, &trace, &mut vesta_sponge(2));
+    /// let (instance, witness) = cs.relax(&ck, instance, trace);
     /// assert_eq!(instance.u(), F::ONE);
     /// assert!(witness.error().iter().all(|e| *e == F::ZERO));
     /// ```
