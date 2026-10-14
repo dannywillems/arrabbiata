@@ -53,6 +53,10 @@ lint-beta: ## Run clippy with the beta toolchain
 test: ## Run all tests, including doctests and compile-fail examples
 	cargo test --workspace
 
+.PHONY: test-curve
+test-curve: ## Property-test the curve laws on CURVE (pallas, vesta, bn254_g1, bn254_g2)
+	cargo test -p arrabbiata-curve --test laws -- --exact $(CURVE)
+
 .PHONY: test-release
 test-release: ## Run all tests in release mode
 	cargo test --workspace --release

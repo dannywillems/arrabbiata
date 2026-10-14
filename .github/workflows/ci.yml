@@ -68,6 +68,25 @@ jobs:
       - name: Tests, doctests and compile-fail examples
         run: make test
 
+  curve-laws:
+    name: Curve laws (${{ matrix.curve }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        curve: [pallas, vesta, bn254_g1, bn254_g2]
+    env:
+      CURVE: ${{ matrix.curve }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Group laws, complete formulas, scalar action, order, MSM
+        run: make test-curve CURVE="$CURVE"
+
   msrv:
     name: MSRV (1.92)
     runs-on: ubuntu-latest

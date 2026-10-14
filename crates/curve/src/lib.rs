@@ -29,6 +29,8 @@
 
 extern crate alloc;
 
+pub mod laws;
+
 use alloc::vec::Vec;
 use core::{
     fmt::Debug,
