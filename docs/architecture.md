@@ -246,11 +246,31 @@ and no wire escapes its builder.
 
 ### `arrabbiata-plonk`
 
-Vanilla PlonK (ePrint 2019/953) over any two-adic field and any univariate
-polynomial commitment and any sponge, on the typed transcript
-(`Plonk<F, PC, S>`). It is a toy: no blinding (not
-zero-knowledge), no linearization, unbatched openings, schoolbook
-multiplication.
+PlonK (ePrint 2019/953) generalized to custom gates, over any two-adic
+field, any univariate polynomial commitment and any sponge, on the typed
+transcript: `Plonk<F, PC, S, G, W, X, Q>` with `W` witness columns, `X`
+fixed columns and a gate set `G` of `Q` gadgets.
+
+The arithmetization follows the original Arrabbiata gadgets: each gadget is
+a list of constraints over the current and the next row, turned on by its
+own selector, with at most one gadget per row; the protocol multiplies every
+constraint by its gadget's selector. The gate set is a type-level list
+`(G0, (G1, ()))`, so the index of a selector is the position of its gadget,
+computed by the compiler (`Member<G, I>`, with the position `I` inferred),
+and a builder cannot turn on a gadget outside the gate set. `Q` is checked
+against the length of the list at compile time. Copy constraints range over
+all `W n` witness cells, with the cosets `g^k H` labelling the columns;
+public inputs are bound to witness column 0 by the term `L_P w_0 - PI`.
+
+The quotient is computed pointwise on a coset of a domain of size at least
+`d n`, where `d` bounds the total degree of a gated constraint (fixed
+columns included) and of the permutation term (`W + 1`), so a gate of any
+degree costs one NTT per column. Vanilla PlonK is the instance `W = 3`,
+`X = 5`, one arithmetic gadget (`vanilla`), which circuits of
+`arrabbiata-frontend` compile to.
+
+It is a toy: no blinding (not zero-knowledge), no linearization, unbatched
+openings, the quotient committed in one piece.
 
 ## deviations and next steps
 
@@ -262,10 +282,11 @@ multiplication.
 - **The verifier circuit on the cycle.** The fields, curves, Poseidon and the
   commitments of the cycle exist; the in-circuit verifier (non-native
   arithmetic, EC gadgets, Poseidon gadget) does not yet.
-- **Performance.** Naive MSM (no Pippenger), Tate pairing over the bits of
-  `r` (not optimal ate), final exponentiation without Frobenius, schoolbook
-  polynomial products, unbatched PlonK openings.
-- **Generalized PlonK**, beyond the vanilla gate.
+- **Performance.** Tate pairing over the bits of `r` (not optimal ate),
+  final exponentiation without Frobenius, schoolbook polynomial products in
+  folding, unbatched PlonK openings.
+- **PlonK beyond custom gates.** Lookups, and rotations other than the next
+  row.
 - **Extraction.** Charon and Aeneas are not run yet. The first pilot is
   `arrabbiata-poly` (recursion over boxed expressions, generic algebras), to
   measure what extracts before relying on it.
@@ -286,10 +307,10 @@ multiplication.
 | graded and homogeneous evaluation | yes | no |
 | folding identity | yes, on arbitrary relaxed pairs | yes, `fold_complete` (built in CI) |
 | prover and verifier fold to the same instance | yes | by construction (shared function) |
-| commitment is a module morphism (reference scheme) | yes | no |
-| PCS completeness and evaluation binding (reference) | yes | no |
+| commitment is a module morphism (Pedersen) | yes | no |
 | multilinear extension interpolates its table | yes | no |
-| PlonK completeness | yes, random circuits, with the reference scheme, KZG and IPA | no |
+| PlonK completeness | yes, random circuits, vanilla and custom gates, KZG and IPA | no |
 | folding with Pedersen and KZG commitments | yes | no |
 | PlonK rejects tampered evaluations, statements, transcripts | yes | no |
+| PlonK identity rejects a cheating prover (gates, copies, public inputs) | yes, every single-cell violation, and mutation-checked | no |
 | folding knowledge soundness | sanity tests only | no |

@@ -29,8 +29,10 @@ Early, but end to end. Implemented and tested:
   relations of any degree (Nova is the degree-2 instance), with real
   (Pedersen or KZG) commitments;
 - the typed Fiat-Shamir transcript;
-- vanilla PlonK, instantiated with KZG on BN254 and with IPA on Pallas and
-  on BN254;
+- PlonK over any number of witness columns, fixed columns and selectors
+  (custom gates of any degree, reading the current and the next row), with
+  vanilla PlonK as an instance; instantiated with KZG on BN254 and with IPA
+  on Pallas and on BN254;
 - the Lean statement and proof of completeness of folding.
 
 Not yet implemented: the IVC verifier circuit on the cycle, the permutation
@@ -60,7 +62,7 @@ the right group.
 | `crates/arithmetization` | `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
 | | `arrabbiata-frontend` | a typed circuit builder (vanilla PlonK arithmetization) | no |
 | `crates/accumulation` | `arrabbiata-folding` | folding of homogeneous relations of any degree; Nova as a special case | yes |
-| `crates/snark` | `arrabbiata-plonk` | vanilla PlonK, with KZG (`kzg`) and IPA (`ipa`) | no |
+| `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
@@ -72,8 +74,10 @@ Every example lives in the API documentation, where it is compiled and run
 as a doctest, so it cannot drift from the code. Good entry points:
 
 - folding two instances: the crate documentation of `arrabbiata-folding`;
-- writing a circuit and proving it with PlonK: `arrabbiata_plonk::ipa` and
-  `arrabbiata_plonk::kzg`;
+- writing custom gates and proving a circuit with PlonK: the crate
+  documentation of `arrabbiata-plonk`;
+- vanilla PlonK from a frontend circuit: `arrabbiata_plonk::vanilla`, with
+  `arrabbiata_plonk::ipa` and `arrabbiata_plonk::kzg`;
 - the typed transcript: `arrabbiata_transcript::typed`.
 
 ## what the type system enforces
@@ -93,6 +97,9 @@ as a doctest, so it cannot drift from the code. Good entry points:
   lattice commitment, homomorphic only for short vectors, is not).
 - A PlonK proof is typed by its commitment scheme: a KZG proof does not
   type-check against an IPA verifier, even over the same field and curve.
+- A PlonK circuit only turns on gadgets of its gate set, and its number of
+  selectors is the number of gadgets; the index of a selector is the
+  position of its gadget in the gate set type.
 - A wire of a circuit cannot be used in another circuit, or escape its
   builder (generative lifetime brand).
 
