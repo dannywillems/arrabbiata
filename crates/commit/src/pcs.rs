@@ -40,7 +40,7 @@
 use core::{fmt::Debug, marker::PhantomData};
 
 use arrabbiata_field::Field;
-use arrabbiata_transcript::{Absorb, Transcript};
+use arrabbiata_transcript::{Absorb, Transcript, typed::Label};
 
 use alloc::vec::Vec;
 
@@ -89,6 +89,10 @@ where
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Univariate;
 
+impl Label for Univariate {
+    const LABEL: u64 = 0x756e_6976;
+}
+
 impl<F> PolynomialFamily<F> for Univariate
 where
     F: Field,
@@ -125,6 +129,10 @@ where
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Multilinear;
+
+impl Label for Multilinear {
+    const LABEL: u64 = 0x6d6c_696e;
+}
 
 impl<F> PolynomialFamily<F> for Multilinear
 where
@@ -163,6 +171,11 @@ where
 /// `verify` fails except with negligible probability when `v` is not the
 /// value of the committed polynomial (evaluation binding).
 ///
+/// Every scheme carries a [`Label`] identifying it. Protocols compiled with a
+/// scheme put the label in their transcript pattern, so that two schemes with
+/// the same commitment type (IPA and KZG both commit to curve points) still
+/// produce incompatible proofs, at the type level and in the transcript.
+///
 /// ```
 /// use arrabbiata_commit::{PolynomialCommitment, RevealCommitment, Univariate};
 /// use arrabbiata_field::Goldilocks as F;
@@ -179,6 +192,7 @@ where
 pub trait PolynomialCommitment<F>
 where
     F: Field,
+    Self: Label,
 {
     /// The family of polynomials the scheme commits to.
     type Family: PolynomialFamily<F>;
@@ -337,10 +351,17 @@ where
     }
 }
 
+impl<Family> Label for RevealCommitment<Family>
+where
+    Family: Label,
+{
+    const LABEL: u64 = 0x7265_7600_0000_0000 ^ Family::LABEL;
+}
+
 impl<F, Family> PolynomialCommitment<F> for RevealCommitment<Family>
 where
     F: Field,
-    Family: PolynomialFamily<F>,
+    Family: PolynomialFamily<F> + Label,
 {
     type Family = Family;
     type Commitment = Revealed<F>;
