@@ -24,7 +24,8 @@ Early, but end to end. Implemented and tested:
   EIP-196/197 vectors), and Grumpkin, which forms a cycle with BN254;
 - the Poseidon permutation over any prime field, matching the Zcash test
   vectors on the Pasta fields and the reference vectors of its authors on
-  BN254;
+  BN254, and Kimchi's instance (55 full rounds, `x^7`, Kimchi's constants
+  and sponge), matching the proof-systems test vectors;
 - two real polynomial commitment schemes: IPA over any curve (no trusted
   setup) and KZG over any pairing;
 - constraint systems, the relaxed relation, and folding of homogeneous
@@ -76,7 +77,7 @@ the right group.
 | | `arrabbiata-bn254` | BN254 fields, `G1`, `G2`, `Fq12`, the pairing | not yet |
 | | `arrabbiata-grumpkin` | Grumpkin, the curve forming a cycle with BN254 | not yet |
 | `crates/oracle` | `arrabbiata-transcript` | sponges over a permutation; the typed Fiat-Shamir transcript | yes |
-| | `arrabbiata-poseidon` | Poseidon with Grain-generated constants; Pasta and BN254 instances | not yet |
+| | `arrabbiata-poseidon` | Poseidon with Grain-generated constants; Pasta and BN254 instances; Kimchi's Poseidon | not yet |
 | `crates/commitment` | `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family | yes |
 | | `arrabbiata-ipa` | the inner-product argument, over any curve | not yet |
 | | `arrabbiata-kzg` | KZG, over any pairing | not yet |

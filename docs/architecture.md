@@ -174,6 +174,15 @@ reproduces the Zcash permutation test vectors on both Pasta fields. The
 BN254 instances use the same generator; no compatibility with another BN254
 Poseidon is claimed.
 
+`kimchi` is the instance of Kimchi (o1-labs/proof-systems, `mina-poseidon`):
+width 3, rate 2, 55 full rounds, `x^7`, and each round S-box, then MDS, then
+round constants, with no key before the first round. Its constants are not
+Grain's for these parameters: they are transcribed from proof-systems
+(`fp_kimchi.rs`, `fq_kimchi.rs`) as limbs, checked below the modulus at
+compile time. Its sponge is Kimchi's: a zero state, no domain, and two
+squeezes per permutation. It reproduces `kimchi.json` over `Fp` and the
+empty-sponge challenge over `Fq`.
+
 ### `arrabbiata-ipa` and `arrabbiata-kzg`
 
 Both implement `PolynomialCommitment` with `Family = Univariate`, and
@@ -594,7 +603,7 @@ accumulator outside `R'`.
 | BN254 add, scalar multiplication, pairing check = EIP-196/197 | yes, the 49 vectors shipped with go-ethereum | no |
 | Grumpkin has the order of the BN254 base field | yes, `[r - 1] G = -G` | no |
 | rotations act on rows as `Z` on `Z/n` | yes | no |
-| Poseidon = reference permutation | yes, Zcash vectors (Pasta) and the authors' `hadeshash` vectors (BN254, widths 3 and 5) | no |
+| Poseidon = reference permutation | yes, Zcash vectors (Pasta), the authors' `hadeshash` vectors (BN254, widths 3 and 5), and proof-systems' `kimchi.json` (Kimchi's instance) | no |
 | IPA and KZG completeness, binding, morphism | yes | no |
 | graded and homogeneous evaluation | yes | no |
 | folding identity | yes, on arbitrary relaxed pairs | yes, `fold_complete` (built in CI) |
