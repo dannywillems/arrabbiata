@@ -31,6 +31,8 @@ Early, but end to end. Implemented and tested:
   relations of any degree (Nova is the degree-2 instance), with real
   (Pedersen or KZG) commitments;
 - the typed Fiat-Shamir transcript;
+- the permutation argument as a component shared by both PlonKs, on any
+  chosen set of columns (Kimchi permutes 7 of its 15);
 - reductions of knowledge as types: relations, reductions, their
   composition and products, arguments as reductions to the trivial
   relation;
@@ -78,6 +80,7 @@ the right group.
 | `crates/commitment` | `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family | yes |
 | | `arrabbiata-ipa` | the inner-product argument, over any curve | not yet |
 | | `arrabbiata-kzg` | KZG, over any pairing | not yet |
+| `crates/iop` | `arrabbiata-permutation` | the permutation argument: copies on chosen columns, shifts, labels, grand product, identities | no |
 | `crates/reduction` | `arrabbiata-reduction` | reductions of knowledge: relations, reductions, composition, products, arguments | no |
 | `crates/arithmetization` | `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
 | | `arrabbiata-plonkish` | PlonKish circuits: gadgets, one-hot selectors, rotations, copies; their relaxation; the vanilla gate | no |
@@ -94,22 +97,23 @@ non-test code.
 
 ## examples
 
-Every example lives in the API documentation, where it is compiled and run
-as a doctest, so it cannot drift from the code. Good entry points:
+Complete runs (a circuit, a proof, its verification; an accumulation and
+its decision) are tests that are real examples, under each crate's
+`tests/examples.rs`, and the rustdoc of the protocol functions points to
+them; short examples of accessors and small functions stay in the
+rustdoc, where they are compiled and run as doctests. Good entry points:
 
 - folding two instances: the crate documentation of `arrabbiata-folding`;
 - accumulating PlonKish circuits, and deciding the accumulator with one
-  PlonK proof: the crate documentation of `arrabbiata-plonkish-folding` and
-  of `arrabbiata-plonk-decider`;
-- reductions of knowledge and their composition: the crate documentation of
+  proof: `tests/examples.rs` of `arrabbiata-plonkish-folding` and of
+  `arrabbiata-plonk-decider`;
+- generalized PlonK: `tests/examples.rs` (a map with a public parameter),
+  `tests/lookups.rs` (range checks, a XOR table) and `tests/permutation.rs`
+  (copies on some columns) of `arrabbiata-generalized-plonk`;
+- reductions of knowledge and their composition: `tests/category.rs` of
   `arrabbiata-reduction`;
 - writing custom gates and proving a circuit with PlonK: the crate
   documentation of `arrabbiata-plonk`;
-- gates as multivariate polynomials reading public inputs: the crate
-  documentation of `arrabbiata-generalized-plonk`;
-- vanilla PlonK from a circuit of `arrabbiata_frontend::vanilla`:
-  `arrabbiata_plonk::vanilla`, with
-  `arrabbiata_plonk::ipa` and `arrabbiata_plonk::kzg`;
 - the typed transcript: `arrabbiata_transcript::typed`.
 
 ## what the type system enforces
@@ -155,7 +159,7 @@ is complete for every circuit at once; the axiom census shows only `propext`,
 make help          # list targets
 make test          # unit, property, doc and compile-fail tests
 make lint          # clippy, warnings denied
-make doc-examples  # require an example on every public item (nightly)
+make doc-examples  # an example on every public item, or a pointer to a test (nightly)
 make check-format  # nightly rustfmt and taplo
 make mutants       # mutation testing (PACKAGE=, FILE=, SHARD=k/n)
 make mutants-diff  # mutation testing of the changes since BASE (origin/main)

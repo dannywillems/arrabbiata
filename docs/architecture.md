@@ -38,8 +38,8 @@ theorem. Which of the two each law currently gets is recorded below.
 ## the crates
 
 The crates live under `crates/<abstraction>/<crate>`: `algebra`, `ec`,
-`oracle`, `commitment`, `reduction`, `arithmetization`, `accumulation`,
-`decider` and `snark` (see the README of each directory). The sections
+`oracle`, `commitment`, `iop`, `reduction`, `arithmetization`,
+`accumulation`, `decider` and `snark` (see the README of each directory). The sections
 below follow the crates.
 
 ### `arrabbiata-field`
@@ -325,6 +325,33 @@ and KZG.
 It is a toy: no blinding (not zero-knowledge), no linearization, unbatched
 openings, the quotient committed in one piece.
 
+### `arrabbiata-permutation`
+
+The copy-constraint argument of PlonK (ePrint 2019/953), written once and
+used by both PlonK and generalized PlonK. A `Permutation` acts on the cells
+of `k` chosen columns; `from_copies` cycles through each class of the
+equivalence relation the copies generate, so it depends on the partition
+only, and an assignment respects it exactly when it is constant on the
+classes. The cells are labelled `k_c w^i` with shifts in distinct cosets of
+the domain; the grand product `z` multiplies `(w + beta id + gamma)` over
+`(w + beta sigma + gamma)` row by row, and the two identities
+`z prod (w + beta k x + gamma) = z(w x) prod (w + beta sigma + gamma)` and
+`L_0 (z - 1) = 0` hold on `H` exactly for respected columns (except with
+probability about `k n / |F|`). The product step has degree `k + 1`, so
+permuting only the columns that carry copies shrinks the quotient: Kimchi
+permutes 7 of its 15 columns, and generalized PlonK takes the set of
+permuted columns (`Circuit::with_permutation`); the decider leaves its error
+column out. Our framing: the cyclic group `<sigma>` acts on the cells with
+the classes as orbits, and the grand product compares two multisets of
+labelled values, so it is a multiset-equality argument, the same tool as
+plookup's.
+
+The laws are property-tested: the partition determines `sigma`; respected
+iff constant on classes; the product closes iff respected (sampled); the
+identities vanish on every row exactly then; the labels of distinct cells
+are distinct. PlonK's transcript is unchanged by the extraction (its
+regression vectors pass).
+
 ### `arrabbiata-reduction`
 
 Reductions of knowledge (Kothapalli and Parno, *Algebraic reductions of
@@ -593,6 +620,8 @@ accumulator outside `R'`.
 | PlonKish fold soundness probes (bad step, bad accumulator, bad cross-term, swapped instances, digest) | yes | no |
 | generalized PlonK: completeness, every opening and evaluation checked, public inputs read by gates | yes, IPA and KZG | no |
 | lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
+| permutation: `sigma` depends on the partition only; respected iff constant on classes; the product closes and the identities vanish iff respected | yes | no |
+| permuting a subset of columns: same satisfied witnesses, smaller quotient | yes, on a sum of 4-bit numbers | no |
 | PlonKish circuits embed into generalized PlonK, preserving and reflecting satisfaction; both protocols accept the same statements | yes, random vanilla programs and rotated gate sets | no |
 | the decider's generalized circuit = the relaxation of `arrabbiata-plonkish` | yes, on accumulators and every change of the error | no |
 | decider: complete on accumulators, rejects perturbed instances, evaluations and foreign proofs | yes, IPA and KZG | no |
