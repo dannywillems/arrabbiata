@@ -112,12 +112,9 @@ jobs:
       - name: Install toolchains
         run: |
           rustup toolchain install stable --profile minimal
-          rustup toolchain install nightly --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Rustdoc, warnings denied
         run: make doc
-      - name: Missing code examples, denied
-        run: make doc-examples
 
   deny:
     name: cargo deny

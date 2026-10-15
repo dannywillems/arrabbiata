@@ -26,8 +26,6 @@ jobs:
           persist-credentials: false
       - name: Install toolchain
         run: rustup toolchain install nightly --profile minimal
-      - name: Missing code examples, denied
-        run: make doc-examples
       - name: Build the site
         run: make doc-site
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0

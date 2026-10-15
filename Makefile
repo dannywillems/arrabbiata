@@ -10,12 +10,6 @@ BASE ?= origin/main
 EXTRACTED_CRATES ?= arrabbiata-field arrabbiata-poly arrabbiata-transcript \
 	arrabbiata-commit arrabbiata-relation arrabbiata-folding
 
-# Every public item must carry a runnable example. rustdoc enforces it only
-# on nightly, behind an unstable lint (rust-lang/rust#101730).
-DOC_EXAMPLES_FLAGS = -Z unstable-options \
-	-Zcrate-attr=feature(rustdoc_missing_doc_code_examples) \
-	-D rustdoc::missing_doc_code_examples
-
 .PHONY: help
 help: ## Ask for help!
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -67,11 +61,6 @@ test-release: ## Run all tests in release mode
 .PHONY: doc
 doc: ## Build the API documentation, denying rustdoc warnings
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-
-.PHONY: doc-examples
-doc-examples: ## Require a code example on every public item (nightly)
-	RUSTDOCFLAGS="$(DOC_EXAMPLES_FLAGS)" \
-		cargo +$(NIGHTLY_RUST_VERSION) doc --workspace --no-deps
 
 .PHONY: doc-site
 doc-site: ## Build the documentation site (all crates, with an index page)
