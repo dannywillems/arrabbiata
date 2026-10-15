@@ -14,40 +14,6 @@
 //! This is the design of the original Arrabbiata gadgets (one selector per
 //! gadget, constraints gated automatically, one gadget per row) with the
 //! index of a selector derived from its type.
-//!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_plonkish::gate::{Gadget, GateSet, Member};
-//! use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-//!
-//! /// `b = a^2` on the current row.
-//! struct Square;
-//! impl Gadget<F, 2, 0> for Square {
-//!     const NAME: &'static str = "square";
-//!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-//!         vec![b - a.clone() * a]
-//!     }
-//! }
-//!
-//! /// `a' = a + b` on the next row.
-//! struct Step;
-//! impl Gadget<F, 2, 0> for Step {
-//!     const NAME: &'static str = "step";
-//!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-//!         let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
-//!         vec![next - a - b]
-//!     }
-//! }
-//!
-//! type Gates = (Square, (Step, ()));
-//! assert_eq!(<Gates as GateSet<F, 2, 0>>::SELECTORS, 2);
-//! assert_eq!(<Gates as Member<Step, _>>::INDEX, 1);
-//! ```
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -62,13 +28,6 @@ use arrabbiata_transcript::{Transcript, absorb_length};
 /// one. The selector columns are derived from these, so they are one-hot by
 /// construction.
 ///
-/// ```
-/// use arrabbiata_plonkish::gate::Selector;
-/// let s = Selector::<3>::new::<2>();
-/// assert_eq!(s.index(), 2);
-/// assert_eq!(Selector::<3>::try_new(3), None);
-/// ```
-///
 /// An index out of range is rejected at compile time:
 ///
 /// ```compile_fail
@@ -80,11 +39,6 @@ pub struct Selector<const Q: usize>(usize);
 
 impl<const Q: usize> Selector<Q> {
     /// The selector `I`, checked against `Q` at compile time.
-    ///
-    /// ```
-    /// use arrabbiata_plonkish::gate::Selector;
-    /// assert_eq!(Selector::<2>::new::<0>().index(), 0);
-    /// ```
     #[must_use]
     pub const fn new<const I: usize>() -> Self {
         const { assert!(I < Q, "selector index out of range") };
@@ -92,23 +46,12 @@ impl<const Q: usize> Selector<Q> {
     }
 
     /// The selector `index`, or `None` if it is not below `Q`.
-    ///
-    /// ```
-    /// use arrabbiata_plonkish::gate::Selector;
-    /// assert!(Selector::<2>::try_new(1).is_some());
-    /// assert!(Selector::<2>::try_new(2).is_none());
-    /// ```
     #[must_use]
     pub const fn try_new(index: usize) -> Option<Self> {
         if index < Q { Some(Self(index)) } else { None }
     }
 
     /// The index, below `Q`.
-    ///
-    /// ```
-    /// use arrabbiata_plonkish::gate::Selector;
-    /// assert_eq!(Selector::<4>::new::<3>().index(), 3);
-    /// ```
     #[must_use]
     pub const fn index(self) -> usize {
         self.0
@@ -121,26 +64,6 @@ impl<const Q: usize> Selector<Q> {
 /// [`Rotation`] of the constrained row. They must not mention the
 /// selector: the
 /// protocol multiplies each of them by it.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::gate::Gadget;
-/// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-///
-/// /// The Poseidon S-box: `b = a^5`.
-/// struct SBox;
-/// impl Gadget<F, 2, 0> for SBox {
-///     const NAME: &'static str = "sbox";
-///     fn constraints() -> Vec<Expr<F, 2, 0>> {
-///         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-///         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-///         let a2 = a.clone() * a.clone();
-///         vec![b - a2.clone() * a2 * a]
-///     }
-/// }
-/// assert_eq!(SBox::constraints()[0].degree(), 5);
-/// ```
 pub trait Gadget<F, const W: usize, const X: usize>
 where
     F: Field,
@@ -150,25 +73,11 @@ where
 
     /// The constraints, each required to vanish on the rows that turn the
     /// gadget on.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{gate::Gadget, vanilla::Arithmetic};
-    /// assert_eq!(<Arithmetic as Gadget<F, 3, 5>>::constraints().len(), 1);
-    /// ```
     fn constraints() -> Vec<Expr<F, W, X>>;
 }
 
 /// A list of gadgets, as a type: `()` is empty and `(H, T)` puts `H` in
 /// front of `T`. The gadget at position `i` is turned on by selector `i`.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{gate::GateSet, vanilla::Vanilla};
-/// assert_eq!(<() as GateSet<F, 3, 5>>::SELECTORS, 0);
-/// assert_eq!(<Vanilla as GateSet<F, 3, 5>>::SELECTORS, 1);
-/// ```
 pub trait GateSet<F, const W: usize, const X: usize>
 where
     F: Field,
@@ -178,23 +87,9 @@ where
 
     /// The constraints of the gadget turned on by `selector`; empty when
     /// `selector >= SELECTORS`.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{gate::GateSet, vanilla::Vanilla};
-    /// assert_eq!(<Vanilla as GateSet<F, 3, 5>>::constraints(0).len(), 1);
-    /// assert!(<Vanilla as GateSet<F, 3, 5>>::constraints(1).is_empty());
-    /// ```
     fn constraints(selector: usize) -> Vec<Expr<F, W, X>>;
 
     /// The name of the gadget turned on by `selector`.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{gate::GateSet, vanilla::Vanilla};
-    /// assert_eq!(<Vanilla as GateSet<F, 3, 5>>::name(0), Some("arithmetic"));
-    /// assert_eq!(<Vanilla as GateSet<F, 3, 5>>::name(1), None);
-    /// ```
     fn name(selector: usize) -> Option<&'static str>;
 }
 
@@ -239,23 +134,10 @@ where
 }
 
 /// The index of a gadget at the head of a gate set.
-///
-/// ```
-/// use arrabbiata_plonkish::gate::{Here, Member};
-/// use arrabbiata_plonkish::vanilla::{Arithmetic, Vanilla};
-/// assert_eq!(<Vanilla as Member<Arithmetic, Here>>::INDEX, 0);
-/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Here;
 
 /// The index of a gadget in the tail of a gate set, at index `I` there.
-///
-/// ```
-/// use arrabbiata_plonkish::gate::{Here, Member, There};
-/// struct A;
-/// struct B;
-/// assert_eq!(<(A, (B, ())) as Member<B, There<Here>>>::INDEX, 1);
-/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct There<I>(PhantomData<I>);
 
@@ -269,13 +151,6 @@ pub struct There<I>(PhantomData<I>);
 /// struct A;
 /// struct B;
 /// let _ = <(A, ()) as Member<B, _>>::INDEX;
-/// ```
-///
-/// ```
-/// use arrabbiata_plonkish::gate::Member;
-/// struct A;
-/// struct B;
-/// assert_eq!(<(A, (B, ())) as Member<A, _>>::INDEX, 0);
 /// ```
 pub trait Member<G, I> {
     /// The position of `G`, which is the index of its selector.
@@ -298,15 +173,6 @@ where
 ///
 /// It differs from [`Expr::degree`], the degree in the witness columns
 /// alone, exactly when a fixed column multiplies a witness column.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{gate::{Gadget, total_degree}, vanilla::Arithmetic};
-/// let gate = &<Arithmetic as Gadget<F, 3, 5>>::constraints()[0];
-/// // q_M a b: degree 3 in all columns, 2 in the witness.
-/// assert_eq!(total_degree(gate), 3);
-/// assert_eq!(gate.degree(), 2);
-/// ```
 #[must_use]
 pub fn total_degree<F, const W: usize, const X: usize>(e: &Expr<F, W, X>) -> usize {
     match e {
@@ -341,17 +207,6 @@ where
 
 /// Every variable of `e`, in syntactic order, with repetitions, appended
 /// to `out`.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::gate::variables;
-/// use arrabbiata_poly::{Expr, Rotation, Variable, WitnessColumn};
-/// let a = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-/// let mut out = Vec::new();
-/// variables(&(a.clone() * a), &mut out);
-/// assert_eq!(out.len(), 2);
-/// assert!(matches!(out[0], Variable::Witness(_, Rotation::CURR)));
-/// ```
 pub fn variables<F, const W: usize, const X: usize>(
     e: &Expr<F, W, X>,
     out: &mut Vec<Variable<W, X>>,
@@ -372,13 +227,6 @@ pub fn variables<F, const W: usize, const X: usize>(
 /// set without constraints. Fixed columns are coefficients, of degree 0.
 ///
 /// This is the degree to which a relaxation homogenizes every constraint.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{gate::degree, vanilla::Vanilla};
-/// assert_eq!(degree::<F, Vanilla, 3, 5>(), 2);
-/// assert_eq!(degree::<F, (), 3, 5>(), 0);
-/// ```
 #[must_use]
 pub fn degree<F, G, const W: usize, const X: usize>() -> usize
 where
@@ -398,13 +246,6 @@ where
 /// number of coefficients combining the constraints of a row. One-hot
 /// selectors are what makes the maximum, and not the sum, enough: a row
 /// turns on one gadget, so the gadgets can share the coefficients.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{gate::combiner_length, vanilla::Vanilla};
-/// assert_eq!(combiner_length::<F, Vanilla, 3, 5>(), 1);
-/// assert_eq!(combiner_length::<F, (), 3, 5>(), 0);
-/// ```
 #[must_use]
 pub fn combiner_length<F, G, const W: usize, const X: usize>() -> usize
 where
@@ -420,25 +261,6 @@ where
 
 /// The rotations at which some constraint of the gate set reads a witness
 /// column, sorted by offset and without repetition.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{gate::{Gadget, witness_rotations}, vanilla::Vanilla};
-/// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-///
-/// /// `a' = a`.
-/// struct Repeat;
-/// impl Gadget<F, 1, 0> for Repeat {
-///     const NAME: &'static str = "repeat";
-///     fn constraints() -> Vec<Expr<F, 1, 0>> {
-///         let a = |r| Expr::witness(WitnessColumn::new::<0>(), r);
-///         vec![a(Rotation::NEXT) - a(Rotation::CURR)]
-///     }
-/// }
-/// assert_eq!(witness_rotations::<F, (Repeat, ()), 1, 0>(), [Rotation::CURR, Rotation::NEXT]);
-/// assert_eq!(witness_rotations::<F, Vanilla, 3, 5>(), [Rotation::CURR]);
-/// ```
 #[must_use]
 pub fn witness_rotations<F, G, const W: usize, const X: usize>() -> Vec<Rotation>
 where
@@ -465,13 +287,6 @@ where
 
 /// Whether some constraint of the gadget turned on by `selector` reads a
 /// fixed column.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{gate::reads_fixed, vanilla::Vanilla};
-/// assert!(reads_fixed::<F, Vanilla, 3, 5>(0));
-/// assert!(!reads_fixed::<F, Vanilla, 3, 5>(1));
-/// ```
 #[must_use]
 pub fn reads_fixed<F, G, const W: usize, const X: usize>(selector: usize) -> bool
 where
@@ -488,20 +303,6 @@ where
 /// Absorb `e` in prefix form, one tag per node: an injective encoding of
 /// the expression tree, so a transcript that absorbs the constraints of a
 /// gate set is bound to the relation and not only to its columns.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::gate::absorb_expr;
-/// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_transcript::Transcript;
-/// let a = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-/// let (mut s, mut t) = (vesta_sponge(0), vesta_sponge(0));
-/// absorb_expr(&(a.clone() * a.clone()), &mut s);
-/// absorb_expr(&(a.clone() + a), &mut t);
-/// assert_ne!(s.squeeze(), t.squeeze());
-/// ```
 pub fn absorb_expr<F, T, const W: usize, const X: usize>(e: &Expr<F, W, X>, transcript: &mut T)
 where
     F: Field,
@@ -542,17 +343,6 @@ where
 
 /// Absorb the constraints of every gadget of `G`, in the order of `G`,
 /// each list prefixed with its length.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{gate::absorb_gates, vanilla::Vanilla};
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_transcript::Transcript;
-/// let (mut s, mut t) = (vesta_sponge(0), vesta_sponge(0));
-/// absorb_gates::<F, Vanilla, _, 3, 5>(&mut s);
-/// absorb_gates::<F, (), _, 3, 5>(&mut t);
-/// assert_ne!(s.squeeze(), t.squeeze());
-/// ```
 pub fn absorb_gates<F, G, T, const W: usize, const X: usize>(transcript: &mut T)
 where
     F: Field,

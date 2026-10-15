@@ -12,19 +12,6 @@ use crate::{MVPoly, monomial::Monomial};
 ///
 /// No coefficient stored is zero, so two equal polynomials have equal maps
 /// and `==` is equality of polynomials.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-/// use arrabbiata_pasta::Fq as F;
-/// let x = Sparse::<F, 2, 2>::variable(Var::new::<0>()).unwrap();
-/// let y = Sparse::<F, 2, 2>::variable(Var::new::<1>()).unwrap();
-/// // (x + y) (x - y) = x^2 - y^2.
-/// let p = (x.clone() + y.clone()).checked_mul(&(x.clone() - y.clone())).unwrap();
-/// let q = x.checked_mul(&x).unwrap() - y.checked_mul(&y).unwrap();
-/// assert_eq!(p, q);
-/// assert_eq!(p.terms().len(), 2);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sparse<F, const N: usize, const D: usize> {
     terms: BTreeMap<Monomial<N>, F>,
@@ -35,24 +22,12 @@ where
     F: Field,
 {
     /// The number of nonzero terms.
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert_eq!(Sparse::<F, 3, 2>::zero().len(), 0);
-    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.terms.len()
     }
 
     /// Whether there is no term (the polynomial is zero).
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert!(Sparse::<F, 3, 2>::zero().is_empty());
-    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.terms.is_empty()

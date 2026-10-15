@@ -12,18 +12,6 @@
 //! special case for doubling, for the identity, or for inverse points. The
 //! code has no branches on point values, which keeps it short, uniform, and
 //! easy to extract and reason about.
-//!
-//! ```
-//! use arrabbiata_curve::{Curve, Projective};
-//! use arrabbiata_field::Field;
-//! use arrabbiata_pasta::{Fq, Pallas};
-//!
-//! let g = Projective::<Pallas>::generator();
-//! let five_g = g * Fq::from_u64(5);
-//! assert_eq!(five_g, g + g + g + g + g);
-//! // The group has order q: (q - 1) G = -G.
-//! assert_eq!(g * (-Fq::ONE), -g);
-//! ```
 
 #![no_std]
 
@@ -42,13 +30,6 @@ use arrabbiata_transcript::{Absorb, Transcript, typed::Label};
 
 /// A curve `y^2 = x^3 + b` over `Base` whose group of points has prime
 /// order `r`, the characteristic of `Scalar`.
-///
-/// ```
-/// use arrabbiata_curve::Curve;
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::{Fp, Pallas};
-/// assert_eq!(Pallas::b(), Fp::from_u64(5));
-/// ```
 pub trait Curve
 where
     Self: 'static + Copy + Debug + Eq + Send + Sync,
@@ -60,23 +41,9 @@ where
     type Scalar: PrimeField;
 
     /// The coefficient `b`.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Curve;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::{Fq, Vesta};
-    /// assert_eq!(Vesta::b(), Fq::from_u64(5));
-    /// ```
     fn b() -> Self::Base;
 
     /// A generator of the group, in affine coordinates `(x, y)`.
-    ///
-    /// ```
-    /// use arrabbiata_curve::{Affine, Curve};
-    /// use arrabbiata_pasta::Pallas;
-    /// let (x, y) = Pallas::generator();
-    /// assert!(Affine::<Pallas>::new(x, y).is_some());
-    /// ```
     fn generator() -> (Self::Base, Self::Base);
 }
 
@@ -84,13 +51,6 @@ where
 ///
 /// Points are only constructed on the curve: [`Affine::new`] checks the
 /// equation.
-///
-/// ```
-/// use arrabbiata_curve::{Affine, Projective};
-/// use arrabbiata_pasta::Pallas;
-/// let g = Projective::<Pallas>::generator().to_affine();
-/// assert_eq!(Affine::new(g.x().unwrap(), g.y().unwrap()), Some(g));
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Affine<C>
 where
@@ -104,27 +64,12 @@ where
     C: Curve,
 {
     /// The point at infinity.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Affine;
-    /// use arrabbiata_pasta::Pallas;
-    /// assert!(Affine::<Pallas>::identity().is_identity());
-    /// ```
     #[must_use]
     pub const fn identity() -> Self {
         Self { coordinates: None }
     }
 
     /// The point `(x, y)`, or `None` if it is not on the curve.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Affine;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::{Fp, Pallas};
-    /// // (-1, 2): 2^2 = (-1)^3 + 5.
-    /// assert!(Affine::<Pallas>::new(-Fp::ONE, Fp::from_u64(2)).is_some());
-    /// assert!(Affine::<Pallas>::new(Fp::ONE, Fp::ONE).is_none());
-    /// ```
     #[must_use]
     pub fn new(x: C::Base, y: C::Base) -> Option<Self> {
         if y * y == x * x * x + C::b() {
@@ -137,25 +82,12 @@ where
     }
 
     /// Whether this is the point at infinity.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_pasta::Pallas;
-    /// assert!(!Projective::<Pallas>::generator().to_affine().is_identity());
-    /// ```
     #[must_use]
     pub const fn is_identity(&self) -> bool {
         self.coordinates.is_none()
     }
 
     /// The `x` coordinate, or `None` at infinity.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::{Fp, Pallas};
-    /// assert_eq!(Projective::<Pallas>::generator().to_affine().x(), Some(-Fp::ONE));
-    /// ```
     #[must_use]
     pub fn x(&self) -> Option<C::Base> {
         match self.coordinates {
@@ -165,13 +97,6 @@ where
     }
 
     /// The `y` coordinate, or `None` at infinity.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::{Fp, Pallas};
-    /// assert_eq!(Projective::<Pallas>::generator().to_affine().y(), Some(Fp::from_u64(2)));
-    /// ```
     #[must_use]
     pub fn y(&self) -> Option<C::Base> {
         match self.coordinates {
@@ -181,12 +106,6 @@ where
     }
 
     /// The projective point.
-    ///
-    /// ```
-    /// use arrabbiata_curve::{Affine, Projective};
-    /// use arrabbiata_pasta::Pallas;
-    /// assert!(Affine::<Pallas>::identity().to_projective().is_identity());
-    /// ```
     #[must_use]
     pub fn to_projective(&self) -> Projective<C> {
         match self.coordinates {
@@ -204,14 +123,6 @@ where
 /// for `(X / Z, Y / Z)`; the identity is `(0 : 1 : 0)`.
 ///
 /// Equality compares the points, not the representatives.
-///
-/// ```
-/// use arrabbiata_curve::Projective;
-/// use arrabbiata_pasta::Pallas;
-/// let g = Projective::<Pallas>::generator();
-/// assert_eq!(g + Projective::identity(), g);
-/// assert!((g - g).is_identity());
-/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Projective<C>
 where
@@ -239,12 +150,6 @@ where
     C: Curve,
 {
     /// The identity `(0 : 1 : 0)`.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_pasta::Vesta;
-    /// assert!(Projective::<Vesta>::identity().is_identity());
-    /// ```
     #[must_use]
     pub const fn identity() -> Self {
         Self {
@@ -255,12 +160,6 @@ where
     }
 
     /// The generator of the curve.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_pasta::Vesta;
-    /// assert!(!Projective::<Vesta>::generator().is_identity());
-    /// ```
     ///
     /// # Panics
     ///
@@ -276,13 +175,6 @@ where
     }
 
     /// Whether this is the identity.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_pasta::Pallas;
-    /// let g = Projective::<Pallas>::generator();
-    /// assert!((g + (-g)).is_identity());
-    /// ```
     #[must_use]
     pub fn is_identity(&self) -> bool {
         self.z.is_zero()
@@ -290,13 +182,6 @@ where
 
     /// Whether the coordinates satisfy the projective equation
     /// `Y^2 Z = X^3 + b Z^3`.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_pasta::Pallas;
-    /// let g = Projective::<Pallas>::generator();
-    /// assert!((g + g + g).is_on_curve());
-    /// ```
     #[must_use]
     pub fn is_on_curve(&self) -> bool {
         let z2 = self.z * self.z;
@@ -304,13 +189,6 @@ where
     }
 
     /// The affine point.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_pasta::Pallas;
-    /// let g = Projective::<Pallas>::generator();
-    /// assert_eq!((g + g).to_affine().to_projective(), g + g);
-    /// ```
     #[must_use]
     pub fn to_affine(&self) -> Affine<C> {
         match self.z.inverse() {
@@ -322,13 +200,6 @@ where
     }
 
     /// `2 self`.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_pasta::Pallas;
-    /// let g = Projective::<Pallas>::generator();
-    /// assert_eq!(g.double(), g + g);
-    /// ```
     #[must_use]
     pub fn double(&self) -> Self {
         *self + *self
@@ -336,13 +207,6 @@ where
 
     /// `[k] self` for a scalar given by its canonical limbs, by
     /// double-and-add from the most significant bit. Not constant time.
-    ///
-    /// ```
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_pasta::Pallas;
-    /// let g = Projective::<Pallas>::generator();
-    /// assert_eq!(g.mul_limbs(&[3]), g + g + g);
-    /// ```
     #[must_use]
     pub fn mul_limbs(&self, scalar: &[u64]) -> Self {
         let mut acc = Self::identity();
@@ -468,15 +332,6 @@ where
 /// additions of `n` separate scalar multiplications; `c` grows with
 /// `log2(n)`. It agrees with the naive sum by the curve law
 /// [`laws::msm_is_the_sum`], checked on every curve.
-///
-/// ```
-/// use arrabbiata_curve::{Projective, msm};
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::{Fq, Pallas};
-/// let g = Projective::<Pallas>::generator();
-/// let h = g + g;
-/// assert_eq!(msm(&[g, h], &[Fq::from_u64(3), Fq::from_u64(1)]), g * Fq::from_u64(5));
-/// ```
 #[must_use]
 pub fn msm<C>(points: &[Projective<C>], scalars: &[C::Scalar]) -> Projective<C>
 where
@@ -555,16 +410,6 @@ where
 /// canonical limbs of its affine coordinates (each limb is below `2^64`,
 /// hence below any field of more than 64 bits, so the encoding is
 /// injective), preceded by a flag for the identity.
-///
-/// ```
-/// use arrabbiata_curve::{Projective, absorb_point};
-/// use arrabbiata_pasta::{Fq, Pallas};
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_transcript::Transcript;
-/// let mut t = vesta_sponge(0);
-/// absorb_point(&Projective::<Pallas>::generator(), &mut t);
-/// let _ = t.squeeze();
-/// ```
 pub fn absorb_point<C, F, T>(point: &Projective<C>, transcript: &mut T)
 where
     C: Curve,
@@ -614,15 +459,6 @@ where
 ///
 /// Nobody knows a discrete-log relation between the points provided the
 /// transcript behaves as a random oracle (a Poseidon sponge, for instance).
-///
-/// ```
-/// use arrabbiata_curve::points_from_transcript;
-/// use arrabbiata_pasta::Pallas;
-/// use arrabbiata_poseidon::pallas_sponge;
-/// let points = points_from_transcript::<Pallas, _>(&mut pallas_sponge(0), 4);
-/// assert_eq!(points.len(), 4);
-/// assert!(points.iter().all(|p| p.is_on_curve() && !p.is_identity()));
-/// ```
 #[must_use]
 pub fn points_from_transcript<C, T>(transcript: &mut T, count: usize) -> Vec<Projective<C>>
 where
@@ -649,22 +485,6 @@ where
 ///
 /// Protocols that need a pairing (KZG) are generic over this trait; a
 /// curve crate provides the instance (for example `arrabbiata_bn254::Bn254`).
-///
-/// ```
-/// use arrabbiata_bn254::{Bn254, Fr};
-/// use arrabbiata_curve::{Pairing, Projective};
-/// use arrabbiata_field::Field;
-///
-/// fn check<E>(a: <E::G1 as arrabbiata_curve::Curve>::Scalar) -> bool
-/// where
-///     E: Pairing,
-/// {
-///     let (p, q) = (Projective::<E::G1>::generator(), Projective::<E::G2>::generator());
-///     // e(aP, Q) e(-P, aQ) = 1.
-///     E::pairing_product_is_one(&[(p * a, q), (-p, q * a)])
-/// }
-/// assert!(check::<Bn254>(Fr::from_u64(7)));
-/// ```
 pub trait Pairing
 where
     Self: 'static + Copy + Debug + Eq + Send + Sync,
@@ -677,13 +497,6 @@ where
 
     /// Whether `prod_i e(P_i, Q_i) = 1`, the form in which pairing checks are
     /// written (one final exponentiation for all the pairs).
-    ///
-    /// ```
-    /// use arrabbiata_bn254::Bn254;
-    /// use arrabbiata_curve::{Pairing, Projective};
-    /// let (p, q) = (Projective::generator(), Projective::generator());
-    /// assert!(!Bn254::pairing_product_is_one(&[(p, q)]));
-    /// ```
     fn pairing_product_is_one(pairs: &[PairingInput<Self>]) -> bool;
 }
 

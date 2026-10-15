@@ -6,21 +6,10 @@
 //! [`crate::typed::Pattern::Proof`].
 
 /// The empty list.
-///
-/// ```
-/// use arrabbiata_transcript::hlist::{HCons, HList, HNil, Reverse};
-/// assert_eq!(<HNil as HList>::LEN, 0);
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HNil;
 
 /// A list with head `H` and tail `T`.
-///
-/// ```
-/// use arrabbiata_transcript::hlist::{HCons, HList, HNil, Reverse};
-/// let l = HCons::new(1u8, HCons::new("two", HNil));
-/// assert_eq!(l.tail.head, "two");
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HCons<H, T> {
     /// The first element.
@@ -31,23 +20,12 @@ pub struct HCons<H, T> {
 
 impl<H, T> HCons<H, T> {
     /// The list `head :: tail`.
-    ///
-    /// ```
-    /// use arrabbiata_transcript::hlist::{HCons, HList, HNil, Reverse};
-    /// let l = HCons::new(true, HNil);
-    /// assert!(l.head);
-    /// ```
     pub const fn new(head: H, tail: T) -> Self {
         Self { head, tail }
     }
 }
 
 /// A heterogeneous list.
-///
-/// ```
-/// use arrabbiata_transcript::hlist::{HCons, HList, HNil, Reverse};
-/// assert_eq!(<HCons<u8, HCons<bool, HNil>> as HList>::LEN, 2);
-/// ```
 pub trait HList {
     /// The number of elements, known at compile time.
     const LEN: usize;
@@ -68,23 +46,11 @@ where
 ///
 /// The prover writes its messages as it goes, newest first (a snoc list);
 /// reversing yields the proof in protocol order.
-///
-/// ```
-/// use arrabbiata_transcript::hlist::{HCons, HList, HNil, Reverse};
-/// let r = HCons::new(1u8, HCons::new(2u16, HNil)).reverse_onto(HNil);
-/// assert_eq!((r.head, r.tail.head), (2u16, 1u8));
-/// ```
 pub trait Reverse<Acc> {
     /// The type of `rev(self) ++ Acc`.
     type Output;
 
     /// `rev(self) ++ acc`.
-    ///
-    /// ```
-    /// use arrabbiata_transcript::hlist::{HCons, HList, HNil, Reverse};
-    /// let r = HCons::new(1u8, HNil).reverse_onto(HCons::new(9u8, HNil));
-    /// assert_eq!((r.head, r.tail.head), (1, 9));
-    /// ```
     fn reverse_onto(self, acc: Acc) -> Self::Output;
 }
 

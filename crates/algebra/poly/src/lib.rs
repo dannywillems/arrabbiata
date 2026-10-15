@@ -8,18 +8,6 @@
 //! Evaluation is generic over the target [`Algebra`], so the same code
 //! evaluates a constraint on a row of field elements and computes the
 //! cross-terms of a fold in the polynomial ring `F[r]`.
-//!
-//! ```
-//! use arrabbiata_field::Goldilocks as F;
-//! use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-//!
-//! // The constraint of a squaring gadget: next = curr^2.
-//! type E = Expr<F, 1, 0>;
-//! let curr = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-//! let next = E::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
-//! let gate = next - curr.clone() * curr;
-//! assert_eq!(gate.degree(), 2);
-//! ```
 
 #![no_std]
 

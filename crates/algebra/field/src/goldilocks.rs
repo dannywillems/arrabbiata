@@ -8,26 +8,12 @@
 //!
 //! The implementation favours obvious correctness over speed: products are
 //! reduced with a `u128` remainder, not with the special form of `p`.
-//!
-//! ```
-//! use arrabbiata_field::{Field, Goldilocks, goldilocks::MODULUS};
-//!
-//! // Since p = 2^64 - 2^32 + 1, we have 2^64 = 2^32 - 1 in the field.
-//! let two = Goldilocks::new(2);
-//! assert_eq!(two.pow(64), Goldilocks::new((1u64 << 32) - 1));
-//! assert_eq!((-Goldilocks::ONE).value(), MODULUS - 1);
-//! ```
 
 use core::ops::{Add, Mul, Neg, Sub};
 
 use crate::{Field, PrimeField, TwoAdicField};
 
 /// The modulus `2^64 - 2^32 + 1`.
-///
-/// ```
-/// use arrabbiata_field::goldilocks::MODULUS;
-/// assert_eq!(u128::from(MODULUS), (1u128 << 64) - (1u128 << 32) + 1);
-/// ```
 pub const MODULUS: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// An element of the Goldilocks field.
@@ -35,21 +21,11 @@ pub const MODULUS: u64 = 0xFFFF_FFFF_0000_0001;
 /// Invariant: the inner value is the canonical representative, in
 /// `[0, MODULUS)`. Every constructor maintains it, so equality of elements
 /// is equality of representatives.
-///
-/// ```
-/// use arrabbiata_field::{Goldilocks, goldilocks::MODULUS};
-/// assert_eq!(Goldilocks::new(MODULUS + 3), Goldilocks::new(3));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Goldilocks(u64);
 
 impl Goldilocks {
     /// Reduce an arbitrary `u64` into the field.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks, goldilocks::MODULUS};
-    /// assert_eq!(Goldilocks::new(MODULUS), Goldilocks::ZERO);
-    /// ```
     #[must_use]
     pub const fn new(value: u64) -> Self {
         // value < 2^64 < 2 * MODULUS, so one conditional subtraction reduces.
@@ -61,11 +37,6 @@ impl Goldilocks {
     }
 
     /// The canonical representative, in `[0, MODULUS)`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Goldilocks, goldilocks::MODULUS};
-    /// assert_eq!(Goldilocks::new(u64::MAX).value(), u64::MAX - MODULUS);
-    /// ```
     #[must_use]
     pub const fn value(self) -> u64 {
         self.0

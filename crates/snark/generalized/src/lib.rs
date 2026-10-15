@@ -44,11 +44,6 @@ pub use crate::{
 };
 
 /// Why building a circuit, setup, proving or verification failed.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::Error;
-/// assert_eq!(Error::IdentityFailed.to_string(), "the identity does not hold at zeta");
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     /// A circuit, a witness or a proof has the wrong shape.

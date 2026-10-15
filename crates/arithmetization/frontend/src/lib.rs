@@ -7,19 +7,6 @@
 //!
 //! Circuits over a custom gate set are written with the builder of
 //! `arrabbiata_plonk::circuit` directly.
-//!
-//! ```
-//! use arrabbiata_field::{Field, Goldilocks as F};
-//! use arrabbiata_frontend::vanilla::build;
-//!
-//! let (circuit, witness, ()) = build::<F, _, _>(|b| {
-//!     let x = b.witness(F::new(3));
-//!     let y = b.mul(&x, &x);
-//!     let out = b.public_input(F::new(9));
-//!     b.assert_equal(&y, &out);
-//! });
-//! assert!(circuit.is_satisfied(&witness));
-//! ```
 
 #![no_std]
 

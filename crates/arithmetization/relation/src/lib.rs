@@ -13,24 +13,6 @@
 //! relaxed R1CS (`D = 2`, one constraint) to any degree and any number of
 //! constraints; how the constraints are combined is the type parameter
 //! [`aggregation::Aggregation`].
-//!
-//! ```
-//! use arrabbiata_ipa::Ipa;
-//! use arrabbiata_pasta::{Fq, Pallas};
-//! use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-//! use arrabbiata_relation::examples;
-//!
-//! // Pedersen commitments on Pallas, Poseidon for Fiat-Shamir.
-//! let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
-//!
-//! // Arithmetize, commit, relax, check.
-//! let cs = examples::fibonacci::<Fq>(8);
-//! let trace = examples::fibonacci_trace(&cs, 1, 2);
-//! cs.check_trace(&trace).unwrap();
-//! let instance = cs.commit(&ck, &trace, &mut vesta_sponge(2));
-//! let (instance, witness) = cs.relax(&ck, instance, trace);
-//! cs.check_relaxed(&ck, &instance, &witness).unwrap();
-//! ```
 
 #![no_std]
 

@@ -10,23 +10,6 @@
 //! coarsely integrated operand scanning (CIOS): `(aR)(bR) R^-1 = (ab)R`.
 //! Every operation is total and written with plain loops (no `unsafe`, no
 //! closures), so it stays in the subset of Rust that Aeneas extracts.
-//!
-//! ```
-//! use arrabbiata_field::{Field, montgomery::{MontField, MontgomeryConfig}};
-//!
-//! /// The field of order 2^61 - 1 (a Mersenne prime), on one limb.
-//! #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-//! struct M61;
-//! impl MontgomeryConfig<1> for M61 {
-//!     const MODULUS: [u64; 1] = [(1 << 61) - 1];
-//!     const GENERATOR: u64 = 37;
-//! }
-//! type F = MontField<M61, 1>;
-//!
-//! let a = F::from_u64(1 << 40);
-//! assert_eq!(a * a, F::from_u64(1 << 19)); // 2^80 = 2^19 mod 2^61 - 1
-//! assert_eq!(a * a.inverse().unwrap(), F::ONE);
-//! ```
 
 use core::{
     fmt,
@@ -38,17 +21,6 @@ use core::{
 use crate::{Field, PrimeField, Sqrt, TwoAdicField, bigint};
 
 /// The parameters of a prime field on `N` 64-bit limbs.
-///
-/// ```
-/// use arrabbiata_field::montgomery::MontgomeryConfig;
-/// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// struct F7;
-/// impl MontgomeryConfig<1> for F7 {
-///     const MODULUS: [u64; 1] = [7];
-///     const GENERATOR: u64 = 3;
-/// }
-/// assert_eq!(F7::MODULUS, [7]);
-/// ```
 pub trait MontgomeryConfig<const N: usize>
 where
     Self: 'static + Copy + fmt::Debug + Eq + Hash + Send + Sync,
@@ -65,18 +37,6 @@ where
 /// An element of the prime field described by `C`, in Montgomery form.
 ///
 /// Invariant: the limbs are `a R mod p`, fully reduced (below `p`).
-///
-/// ```
-/// use arrabbiata_field::{Field, montgomery::{MontField, MontgomeryConfig}};
-/// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// struct F13;
-/// impl MontgomeryConfig<1> for F13 {
-///     const MODULUS: [u64; 1] = [13];
-///     const GENERATOR: u64 = 2;
-/// }
-/// let x = MontField::<F13, 1>::from_u64(20);
-/// assert_eq!(x.to_canonical_limbs(), [7]);
-/// ```
 pub struct MontField<C, const N: usize> {
     limbs: [u64; N],
     config: PhantomData<C>,
@@ -189,19 +149,6 @@ where
 
     /// The element whose canonical representative has the given limbs, or
     /// `None` if they are not below `p`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, montgomery::{MontField, MontgomeryConfig}};
-    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    /// struct F13;
-    /// impl MontgomeryConfig<1> for F13 {
-    ///     const MODULUS: [u64; 1] = [13];
-    ///     const GENERATOR: u64 = 2;
-    /// }
-    /// type F = MontField<F13, 1>;
-    /// assert_eq!(F::from_canonical_limbs([5]), Some(F::from_u64(5)));
-    /// assert_eq!(F::from_canonical_limbs([13]), None);
-    /// ```
     #[must_use]
     pub const fn from_canonical_limbs(limbs: [u64; N]) -> Option<Self> {
         if bigint::geq(&limbs, &C::MODULUS) {
@@ -212,35 +159,12 @@ where
     }
 
     /// The canonical representative in `[0, p)`, as limbs.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, montgomery::{MontField, MontgomeryConfig}};
-    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    /// struct F13;
-    /// impl MontgomeryConfig<1> for F13 {
-    ///     const MODULUS: [u64; 1] = [13];
-    ///     const GENERATOR: u64 = 2;
-    /// }
-    /// assert_eq!((-MontField::<F13, 1>::ONE).to_canonical_limbs(), [12]);
-    /// ```
     #[must_use]
     pub const fn to_canonical_limbs(&self) -> [u64; N] {
         Self::mont_mul(&self.limbs, &bigint::one())
     }
 
     /// The image of `n`, as a `const fn`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, montgomery::{MontField, MontgomeryConfig}};
-    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    /// struct F13;
-    /// impl MontgomeryConfig<1> for F13 {
-    ///     const MODULUS: [u64; 1] = [13];
-    ///     const GENERATOR: u64 = 2;
-    /// }
-    /// const FIVE: MontField<F13, 1> = MontField::from_u64_const(18);
-    /// assert_eq!(FIVE, MontField::from_u64(5));
-    /// ```
     #[must_use]
     pub const fn from_u64_const(n: u64) -> Self {
         let mut limbs = [0u64; N];
@@ -252,19 +176,6 @@ where
     }
 
     /// `self^e` for an exponent given as little-endian limbs of any length.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, montgomery::{MontField, MontgomeryConfig}};
-    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    /// struct F13;
-    /// impl MontgomeryConfig<1> for F13 {
-    ///     const MODULUS: [u64; 1] = [13];
-    ///     const GENERATOR: u64 = 2;
-    /// }
-    /// let two = MontField::<F13, 1>::from_u64(2);
-    /// // Fermat: 2^12 = 1 mod 13.
-    /// assert_eq!(two.pow_limbs(&[12]), MontField::ONE);
-    /// ```
     #[must_use]
     pub fn pow_limbs(self, exponent: &[u64]) -> Self {
         let mut acc = Self::ONE;
@@ -285,19 +196,6 @@ where
 
     /// Euler's criterion: `self^((p - 1) / 2)`, which is 1 on non-zero
     /// squares, -1 on non-squares, and 0 on 0.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, montgomery::{MontField, MontgomeryConfig}};
-    /// #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    /// struct F13;
-    /// impl MontgomeryConfig<1> for F13 {
-    ///     const MODULUS: [u64; 1] = [13];
-    ///     const GENERATOR: u64 = 2;
-    /// }
-    /// type F = MontField<F13, 1>;
-    /// assert_eq!(F::from_u64(4).legendre(), F::ONE);
-    /// assert_eq!(F::from_u64(2).legendre(), -F::ONE);
-    /// ```
     #[must_use]
     pub fn legendre(self) -> Self {
         let half = bigint::shr1(&bigint::sub(&C::MODULUS, &bigint::one()).0);

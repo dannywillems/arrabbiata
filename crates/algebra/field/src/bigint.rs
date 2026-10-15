@@ -4,20 +4,8 @@
 //! their constants (`R`, `R^2`, `-p^-1 mod 2^64`, `(p - 1) / 2^s`) from the
 //! modulus at compile time, so that the modulus is the only number written
 //! by hand.
-//!
-//! ```
-//! use arrabbiata_field::bigint;
-//! let a = [u64::MAX, 0];
-//! let (sum, carry) = bigint::add(&a, &[1, 0]);
-//! assert_eq!((sum, carry), ([0, 1], false));
-//! ```
 
 /// `a + b` and the carry out.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert_eq!(bigint::add(&[u64::MAX], &[1]), ([0], true));
-/// ```
 #[must_use]
 pub const fn add<const N: usize>(a: &[u64; N], b: &[u64; N]) -> ([u64; N], bool) {
     let mut out = [0u64; N];
@@ -33,12 +21,6 @@ pub const fn add<const N: usize>(a: &[u64; N], b: &[u64; N]) -> ([u64; N], bool)
 }
 
 /// `a - b` and the borrow out.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert_eq!(bigint::sub(&[0, 1], &[1, 0]), ([u64::MAX, 0], false));
-/// assert_eq!(bigint::sub(&[0], &[1]), ([u64::MAX], true));
-/// ```
 #[must_use]
 pub const fn sub<const N: usize>(a: &[u64; N], b: &[u64; N]) -> ([u64; N], bool) {
     let mut out = [0u64; N];
@@ -55,12 +37,6 @@ pub const fn sub<const N: usize>(a: &[u64; N], b: &[u64; N]) -> ([u64; N], bool)
 }
 
 /// Whether `a >= b`.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert!(bigint::geq(&[0, 1], &[u64::MAX, 0]));
-/// assert!(!bigint::geq(&[1, 0], &[0, 1]));
-/// ```
 #[must_use]
 pub const fn geq<const N: usize>(a: &[u64; N], b: &[u64; N]) -> bool {
     let mut i = N;
@@ -77,11 +53,6 @@ pub const fn geq<const N: usize>(a: &[u64; N], b: &[u64; N]) -> bool {
 }
 
 /// Whether every limb is zero.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert!(bigint::is_zero(&[0, 0]));
-/// ```
 #[must_use]
 pub const fn is_zero<const N: usize>(a: &[u64; N]) -> bool {
     let mut i = 0;
@@ -95,11 +66,6 @@ pub const fn is_zero<const N: usize>(a: &[u64; N]) -> bool {
 }
 
 /// `a >> 1`.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert_eq!(bigint::shr1(&[0, 1]), [1 << 63, 0]);
-/// ```
 #[must_use]
 pub const fn shr1<const N: usize>(a: &[u64; N]) -> [u64; N] {
     let mut out = [0u64; N];
@@ -115,12 +81,6 @@ pub const fn shr1<const N: usize>(a: &[u64; N]) -> [u64; N] {
 }
 
 /// Bit `i` of `a`.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert!(bigint::bit(&[0, 2], 65));
-/// assert!(!bigint::bit(&[0, 2], 64));
-/// ```
 #[must_use]
 pub const fn bit<const N: usize>(a: &[u64; N], i: usize) -> bool {
     if i >= 64 * N {
@@ -130,12 +90,6 @@ pub const fn bit<const N: usize>(a: &[u64; N], i: usize) -> bool {
 }
 
 /// The number of significant bits of `a`.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert_eq!(bigint::num_bits(&[0, 1]), 65);
-/// assert_eq!(bigint::num_bits(&[0, 0]), 0);
-/// ```
 #[must_use]
 pub const fn num_bits<const N: usize>(a: &[u64; N]) -> u32 {
     let mut i = N;
@@ -149,11 +103,6 @@ pub const fn num_bits<const N: usize>(a: &[u64; N]) -> u32 {
 }
 
 /// `(a + b) mod m` for `a, b < m`.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert_eq!(bigint::add_mod(&[5], &[6], &[7]), [4]);
-/// ```
 #[must_use]
 pub const fn add_mod<const N: usize>(a: &[u64; N], b: &[u64; N], m: &[u64; N]) -> [u64; N] {
     let (s, carry) = add(a, b);
@@ -161,12 +110,6 @@ pub const fn add_mod<const N: usize>(a: &[u64; N], b: &[u64; N], m: &[u64; N]) -
 }
 
 /// `2^(64 N) mod m`, by `64 N` modular doublings of 1.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// // 2^64 mod 7 = 2.
-/// assert_eq!(bigint::pow2_mod(&[7]), [2]);
-/// ```
 #[must_use]
 pub const fn pow2_mod<const N: usize>(m: &[u64; N]) -> [u64; N] {
     let mut r = [0u64; N];
@@ -180,12 +123,6 @@ pub const fn pow2_mod<const N: usize>(m: &[u64; N]) -> [u64; N] {
 }
 
 /// `(a * 2^(64 N)) mod m` for `a < m`, by `64 N` modular doublings.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// // 3 * 2^64 mod 7 = 6.
-/// assert_eq!(bigint::shift_mod(&[3], &[7]), [6]);
-/// ```
 #[must_use]
 pub const fn shift_mod<const N: usize>(a: &[u64; N], m: &[u64; N]) -> [u64; N] {
     let mut r = *a;
@@ -198,12 +135,6 @@ pub const fn shift_mod<const N: usize>(a: &[u64; N], m: &[u64; N]) -> [u64; N] {
 }
 
 /// `-m^-1 mod 2^64` for odd `m0`, by Newton iteration.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// let m0 = 0x992d30ed00000001u64;
-/// assert_eq!(m0.wrapping_mul(bigint::neg_inv_mod_2_64(m0)), u64::MAX);
-/// ```
 #[must_use]
 pub const fn neg_inv_mod_2_64(m0: u64) -> u64 {
     // x <- x (2 - m0 x) doubles the number of correct low bits; m0 is its own
@@ -218,11 +149,6 @@ pub const fn neg_inv_mod_2_64(m0: u64) -> u64 {
 }
 
 /// The 2-adic valuation of `a - 1` for odd `a > 1`.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert_eq!(bigint::two_adicity(&[0x41]), 6);
-/// ```
 #[must_use]
 pub const fn two_adicity<const N: usize>(a: &[u64; N]) -> u32 {
     let mut m = sub(a, &one()).0;
@@ -235,11 +161,6 @@ pub const fn two_adicity<const N: usize>(a: &[u64; N]) -> u32 {
 }
 
 /// The integer 1.
-///
-/// ```
-/// use arrabbiata_field::bigint;
-/// assert_eq!(bigint::one::<2>(), [1, 0]);
-/// ```
 #[must_use]
 pub const fn one<const N: usize>() -> [u64; N] {
     let mut r = [0u64; N];

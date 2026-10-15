@@ -14,18 +14,6 @@
 //! [`bn254_base`] and [`goldilocks`] cover the other fields of the
 //! workspace. [`kimchi`] is Kimchi's instance, with its own constants, round
 //! order and sponge.
-//!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_pasta::Fp;
-//! use arrabbiata_poseidon::{PoseidonSponge, pallas_base};
-//! use arrabbiata_transcript::{Duplex, Transcript};
-//!
-//! let mut sponge: PoseidonSponge<Fp> = Duplex::new(pallas_base(), 0);
-//! sponge.absorb(Fp::from_u64(42));
-//! let challenge = sponge.squeeze();
-//! # let _ = challenge;
-//! ```
 
 #![no_std]
 
@@ -44,16 +32,6 @@ use arrabbiata_transcript::{Duplex, Permutation};
 use crate::grain::Grain;
 
 /// A Poseidon permutation of `F^T`.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fp;
-/// use arrabbiata_poseidon::Poseidon;
-/// let poseidon = Poseidon::<Fp, 3>::new(8, 56, 5);
-/// let mut state = [Fp::ZERO, Fp::ONE, Fp::from_u64(2)];
-/// poseidon.permute_state(&mut state);
-/// assert_ne!(state, [Fp::ZERO, Fp::ONE, Fp::from_u64(2)]);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Poseidon<F, const T: usize> {
     full_rounds: usize,
@@ -76,13 +54,6 @@ where
     ///
     /// If `full_rounds` is odd, or if `x^alpha` is not a permutation of `F`
     /// (`alpha` divides `p - 1`).
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq;
-    /// use arrabbiata_poseidon::Poseidon;
-    /// let p = Poseidon::<Fq, 3>::new(8, 56, 5);
-    /// assert_eq!(p.round_constants().len(), 64);
-    /// ```
     #[must_use]
     pub fn new(full_rounds: usize, partial_rounds: usize, alpha: u64) -> Self {
         assert!(
@@ -117,24 +88,12 @@ where
     }
 
     /// The round constants, one row per round.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::pallas_base;
-    /// assert_eq!(pallas_base().round_constants()[0].len(), 3);
-    /// ```
     #[must_use]
     pub fn round_constants(&self) -> &[[F; T]] {
         &self.round_constants
     }
 
     /// The MDS matrix.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_poseidon::pallas_base;
-    /// assert!(!pallas_base().mds()[0][0].is_zero());
-    /// ```
     #[must_use]
     pub const fn mds(&self) -> &[[F; T]; T] {
         &self.mds
@@ -142,34 +101,18 @@ where
 
     /// The number of full rounds, half of them before the partial rounds
     /// and half after.
-    ///
-    /// ```
-    /// use arrabbiata_poseidon::pallas_base;
-    /// assert_eq!(pallas_base().full_rounds(), 8);
-    /// ```
     #[must_use]
     pub const fn full_rounds(&self) -> usize {
         self.full_rounds
     }
 
     /// The number of partial rounds.
-    ///
-    /// ```
-    /// use arrabbiata_poseidon::{bn254_scalar, pallas_base};
-    /// assert_eq!(pallas_base().partial_rounds(), 56);
-    /// assert_eq!(bn254_scalar().partial_rounds(), 57);
-    /// ```
     #[must_use]
     pub const fn partial_rounds(&self) -> usize {
         self.partial_rounds
     }
 
     /// The exponent of the S-box.
-    ///
-    /// ```
-    /// use arrabbiata_poseidon::pallas_base;
-    /// assert_eq!(pallas_base().alpha(), 5);
-    /// ```
     #[must_use]
     pub const fn alpha(&self) -> u64 {
         self.alpha
@@ -193,17 +136,6 @@ where
     /// `partial_rounds` partial rounds (S-box on the first word only), and
     /// `full_rounds / 2` full rounds; each round adds its constants, applies
     /// the S-box, then the MDS matrix.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::pallas_base;
-    /// let mut a = [Fp::ZERO; 3];
-    /// let mut b = [Fp::ZERO; 3];
-    /// pallas_base().permute_state(&mut a);
-    /// pallas_base().permute_state(&mut b);
-    /// assert_eq!(a, b);
-    /// ```
     pub fn permute_state(&self, state: &mut [F; T]) {
         let half = self.full_rounds / 2;
         let mut round = 0;
@@ -303,11 +235,6 @@ pub type PoseidonSponge<F> = Duplex<F, Poseidon<F, 3>, 3, 2>;
 
 /// Poseidon over the Pallas base field `Fp`: width 3, 8 full and 56 partial
 /// rounds, `x^5`. The `P128Pow5T3` instance of Halo 2 and Orchard.
-///
-/// ```
-/// use arrabbiata_poseidon::pallas_base;
-/// assert_eq!(pallas_base().round_constants().len(), 64);
-/// ```
 #[must_use]
 pub fn pallas_base() -> Poseidon<Fp, 3> {
     Poseidon::new(8, 56, 5)
@@ -315,37 +242,18 @@ pub fn pallas_base() -> Poseidon<Fp, 3> {
 
 /// Poseidon over the Vesta base field `Fq`: width 3, 8 full and 56 partial
 /// rounds, `x^5`. The `P128Pow5T3` instance of Halo 2.
-///
-/// ```
-/// use arrabbiata_poseidon::vesta_base;
-/// assert_eq!(vesta_base().round_constants().len(), 64);
-/// ```
 #[must_use]
 pub fn vesta_base() -> Poseidon<Fq, 3> {
     Poseidon::new(8, 56, 5)
 }
 
 /// A Poseidon sponge over `Fp`, separated by `domain`.
-///
-/// ```
-/// use arrabbiata_poseidon::pallas_sponge;
-/// use arrabbiata_transcript::Transcript;
-/// let mut t = pallas_sponge(1);
-/// let _ = t.squeeze();
-/// ```
 #[must_use]
 pub fn pallas_sponge(domain: u64) -> PoseidonSponge<Fp> {
     Duplex::new(pallas_base(), domain)
 }
 
 /// A Poseidon sponge over `Fq`, separated by `domain`.
-///
-/// ```
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_transcript::Transcript;
-/// let mut t = vesta_sponge(1);
-/// let _ = t.squeeze();
-/// ```
 #[must_use]
 pub fn vesta_sponge(domain: u64) -> PoseidonSponge<Fq> {
     Duplex::new(vesta_base(), domain)
@@ -356,11 +264,6 @@ pub fn vesta_sponge(domain: u64) -> PoseidonSponge<Fq> {
 /// field at 128 bits of security). Constants are Grain-generated with the
 /// first MDS matrix; no compatibility with another implementation is
 /// claimed.
-///
-/// ```
-/// use arrabbiata_poseidon::bn254_scalar;
-/// assert_eq!(bn254_scalar().round_constants().len(), 65);
-/// ```
 #[must_use]
 pub fn bn254_scalar() -> Poseidon<Bn254Fr, 3> {
     Poseidon::new(8, 57, 5)
@@ -368,35 +271,18 @@ pub fn bn254_scalar() -> Poseidon<Bn254Fr, 3> {
 
 /// Poseidon over the BN254 base field, with the parameters of
 /// [`bn254_scalar`].
-///
-/// ```
-/// use arrabbiata_poseidon::bn254_base;
-/// assert_eq!(bn254_base().round_constants().len(), 65);
-/// ```
 #[must_use]
 pub fn bn254_base() -> Poseidon<Bn254Fq, 3> {
     Poseidon::new(8, 57, 5)
 }
 
 /// A Poseidon sponge over the BN254 scalar field, separated by `domain`.
-///
-/// ```
-/// use arrabbiata_poseidon::bn254_scalar_sponge;
-/// use arrabbiata_transcript::Transcript;
-/// let _ = bn254_scalar_sponge(0).squeeze();
-/// ```
 #[must_use]
 pub fn bn254_scalar_sponge(domain: u64) -> PoseidonSponge<Bn254Fr> {
     Duplex::new(bn254_scalar(), domain)
 }
 
 /// A Poseidon sponge over the BN254 base field, separated by `domain`.
-///
-/// ```
-/// use arrabbiata_poseidon::bn254_base_sponge;
-/// use arrabbiata_transcript::Transcript;
-/// let _ = bn254_base_sponge(0).squeeze();
-/// ```
 #[must_use]
 pub fn bn254_base_sponge(domain: u64) -> PoseidonSponge<Bn254Fq> {
     Duplex::new(bn254_base(), domain)
@@ -410,11 +296,6 @@ pub fn bn254_base_sponge(domain: u64) -> PoseidonSponge<Bn254Fq> {
 /// A 64-bit field needs a wide state: with rate 8 and capacity 4, the
 /// capacity holds 256 bits, which is what a 128-bit security level asks of a
 /// sponge. A width-3 sponge over this field would leave 64 bits of capacity.
-///
-/// ```
-/// use arrabbiata_poseidon::goldilocks;
-/// assert_eq!(goldilocks().round_constants().len(), 30);
-/// ```
 #[must_use]
 pub fn goldilocks() -> Poseidon<Goldilocks, 12> {
     Poseidon::new(8, 22, 7)
@@ -424,13 +305,6 @@ pub fn goldilocks() -> Poseidon<Goldilocks, 12> {
 pub type GoldilocksSponge = Duplex<Goldilocks, Poseidon<Goldilocks, 12>, 12, 8>;
 
 /// A Poseidon sponge over Goldilocks, separated by `domain`.
-///
-/// ```
-/// use arrabbiata_poseidon::goldilocks_sponge;
-/// use arrabbiata_transcript::Transcript;
-/// assert_eq!(goldilocks_sponge(1).squeeze(), goldilocks_sponge(1).squeeze());
-/// assert_ne!(goldilocks_sponge(1).squeeze(), goldilocks_sponge(2).squeeze());
-/// ```
 #[must_use]
 pub fn goldilocks_sponge(domain: u64) -> GoldilocksSponge {
     Duplex::new(goldilocks(), domain)

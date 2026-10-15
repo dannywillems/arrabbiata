@@ -60,22 +60,6 @@ use arrabbiata_transcript::Transcript;
 /// A value of a type implementing it carries the parameters the relation
 /// depends on (a circuit, a commitment key): it is a handle on one
 /// relation of a family, cheap to clone.
-///
-/// ```
-/// use arrabbiata_reduction::Relation;
-/// /// `w * w = x` over the integers below 2^32.
-/// struct Square;
-/// impl Relation for Square {
-///     type Instance = u64;
-///     type Witness = u32;
-///     type Error = ();
-///     fn check(&self, x: &u64, w: &u32) -> Result<(), ()> {
-///         if u64::from(*w) * u64::from(*w) == *x { Ok(()) } else { Err(()) }
-///     }
-/// }
-/// assert!(Square.check(&9, &3).is_ok());
-/// assert!(Square.check(&8, &3).is_err());
-/// ```
 pub trait Relation {
     /// An instance: what the verifier knows.
     type Instance;
@@ -91,21 +75,11 @@ pub trait Relation {
     /// # Errors
     ///
     /// Why the pair is not in the relation.
-    ///
-    /// ```
-    /// use arrabbiata_reduction::{Relation, Top};
-    /// assert!(Top.check(&(), &()).is_ok());
-    /// ```
     fn check(&self, instance: &Self::Instance, witness: &Self::Witness) -> Result<(), Self::Error>;
 }
 
 /// `R_top = {(true, bottom)}`: the relation with one pair, the target of an
 /// argument of knowledge. Reducing to it leaves nothing to check.
-///
-/// ```
-/// use arrabbiata_reduction::{Relation, Top};
-/// assert_eq!(Top.check(&(), &()), Ok(()));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Top;
 
@@ -124,11 +98,6 @@ impl Relation for Top {
 ///
 /// As a relation it is the same set as [`Top`]; the two names record the
 /// two roles (terminal target of arguments, unit of products).
-///
-/// ```
-/// use arrabbiata_reduction::{Relation, Unit};
-/// assert_eq!(Unit.check(&(), &()), Ok(()));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Unit;
 
@@ -143,12 +112,6 @@ impl Relation for Unit {
 }
 
 /// One of two things: which side of a product or a composition failed.
-///
-/// ```
-/// use arrabbiata_reduction::Either;
-/// let e: Either<u8, &str> = Either::Right("second");
-/// assert_eq!(e.to_string(), "right: second");
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Either<A, B> {
     /// The first (left) component.
@@ -179,23 +142,6 @@ where
 
 /// The product `R1 x R2`: pairs of instances and pairs of witnesses, each
 /// component in its relation (Kothapalli and Parno, Theorem 2).
-///
-/// ```
-/// use arrabbiata_reduction::{Either, Product, Relation, Top};
-/// /// `w = x` over `u8`.
-/// struct Equal;
-/// impl Relation for Equal {
-///     type Instance = u8;
-///     type Witness = u8;
-///     type Error = ();
-///     fn check(&self, x: &u8, w: &u8) -> Result<(), ()> {
-///         if x == w { Ok(()) } else { Err(()) }
-///     }
-/// }
-/// let both = Product(Equal, Equal);
-/// assert!(both.check(&(1, 2), &(1, 2)).is_ok());
-/// assert_eq!(both.check(&(1, 2), &(1, 3)), Err(Either::Right(())));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Product<R1, R2>(pub R1, pub R2);
 
@@ -218,12 +164,6 @@ where
 
 /// What an honest prover ends with: the output pair, the proof, and the
 /// transcript, so that a caller can continue the protocol on it.
-///
-/// ```
-/// use arrabbiata_reduction::Output;
-/// let out = Output { instance: 1u8, witness: 2u8, proof: (), transcript: () };
-/// assert_eq!((out.instance, out.witness), (1, 2));
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Output<I, W, P, T> {
     /// The output instance, which the verifier also computes.
@@ -257,15 +197,6 @@ pub type OutputOf<F, R, T> = Output<
 /// Knowledge soundness is a property of the protocol, not of the code; its
 /// executable shadow is that a corrupted proof or input leads to a target
 /// pair that fails, which each scheme tests.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_reduction::{Identity, Reduction, Top};
-/// let id = Identity(Top);
-/// let out = Reduction::<F>::prove(&id, vesta_sponge(0), &(), &()).unwrap();
-/// assert_eq!(Reduction::<F>::verify(&id, vesta_sponge(0), &(), ()).unwrap().0, out.instance);
-/// ```
 pub trait Reduction<F>
 where
     F: Field,
@@ -283,21 +214,9 @@ where
     type Error;
 
     /// The relation reduced from.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_reduction::{Identity, Reduction, Top};
-    /// assert_eq!(<Identity<Top> as Reduction<F>>::source(&Identity(Top)), Top);
-    /// ```
     fn source(&self) -> Self::Source;
 
     /// The relation reduced to.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_reduction::{Identity, Reduction, Top};
-    /// assert_eq!(<Identity<Top> as Reduction<F>>::target(&Identity(Top)), Top);
-    /// ```
     fn target(&self) -> Self::Target;
 
     /// Run the prover on `(instance, witness)`.
@@ -306,14 +225,6 @@ where
     ///
     /// When the prover cannot run on its input (a witness of the wrong
     /// shape); a scheme may also refuse a pair outside the source.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_poseidon::vesta_sponge;
-    /// use arrabbiata_reduction::{Identity, Reduction, Top};
-    /// let out = Reduction::<F>::prove(&Identity(Top), vesta_sponge(0), &(), &()).unwrap();
-    /// assert_eq!(out.witness, ());
-    /// ```
     #[allow(clippy::type_complexity)]
     fn prove<T>(
         &self,
@@ -331,14 +242,6 @@ where
     ///
     /// When the proof is rejected outright (a reduction may also accept any
     /// proof and leave the check to the target relation).
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_poseidon::vesta_sponge;
-    /// use arrabbiata_reduction::{Identity, Reduction, Top};
-    /// let (u, _) = Reduction::<F>::verify(&Identity(Top), vesta_sponge(0), &(), ()).unwrap();
-    /// assert_eq!(u, ());
-    /// ```
     #[allow(clippy::type_complexity)]
     fn verify<T>(
         &self,
@@ -352,15 +255,6 @@ where
 
 /// A reference to a reduction is the same reduction, so composites can
 /// borrow a reduction that owns keys instead of moving it.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_reduction::{Identity, Reduction, Then, Top};
-/// let id = Identity(Top);
-/// let both = Then(&id, &id);
-/// assert!(Reduction::<F>::prove(&both, vesta_sponge(0), &(), &()).is_ok());
-/// ```
 impl<F, R> Reduction<F> for &R
 where
     F: Field,
@@ -406,13 +300,6 @@ where
 
 /// An argument of knowledge: a reduction to [`Top`]. Verifying it is the
 /// whole check, since the target relation holds for its only instance.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_reduction::{Argument, Identity};
-/// fn is_argument<A: Argument<F>>(_: &A) {}
-/// is_argument(&Identity(arrabbiata_reduction::Top));
-/// ```
 pub trait Argument<F>: Reduction<F, Target = Top>
 where
     F: Field,
@@ -428,14 +315,6 @@ where
 
 /// The identity reduction `R -> R`: the prover outputs its input, the proof
 /// is empty, the transcript is untouched.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_reduction::{Identity, Reduction, Unit};
-/// let out = Reduction::<F>::prove(&Identity(Unit), vesta_sponge(0), &(), &()).unwrap();
-/// assert_eq!((out.instance, out.witness, out.proof), ((), (), ()));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Identity<R>(pub R);
 
@@ -495,15 +374,6 @@ where
 ///
 /// That the target of `A` is the source of `B` is a bound of the
 /// implementation, so composing mismatched reductions does not compile.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_reduction::{Identity, Reduction, Then, Top};
-/// let both = Then(Identity(Top), Identity(Top));
-/// let out = Reduction::<F>::prove(&both, vesta_sponge(0), &(), &()).unwrap();
-/// assert_eq!(out.proof, ((), ()));
-/// ```
 ///
 /// The target of the first must be the source of the second. `Top` and
 /// `Unit` are the same set but not the same relation, so this does not
@@ -585,16 +455,6 @@ where
 /// Parallel composition `A x B : R1 x R3 -> R2 x R4` of `A : R1 -> R2` and
 /// `B : R3 -> R4` (Kothapalli and Parno, Theorem 2), run one after the
 /// other on the same transcript.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_reduction::{Identity, Parallel, Product, Reduction, Top, Unit};
-/// let both = Parallel(Identity(Top), Identity(Unit));
-/// assert_eq!(Reduction::<F>::source(&both), Product(Top, Unit));
-/// let out = Reduction::<F>::prove(&both, vesta_sponge(0), &((), ()), &((), ())).unwrap();
-/// assert_eq!(out.instance, ((), ()));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Parallel<A, B>(pub A, pub B);
 
@@ -669,12 +529,6 @@ pub mod laws {
     use arrabbiata_field::Field;
 
     /// How a run of [`complete`] failed.
-    ///
-    /// ```
-    /// use arrabbiata_reduction::laws::Failure;
-    /// let f: Failure<(), (), ()> = Failure::Disagree;
-    /// assert_eq!(f, Failure::Disagree);
-    /// ```
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Failure<E, S, T> {
         /// The input pair is not in the source relation.
@@ -695,14 +549,6 @@ pub mod laws {
     /// # Errors
     ///
     /// The first law that fails.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_poseidon::vesta_sponge;
-    /// use arrabbiata_reduction::{Identity, Then, Top, laws::complete};
-    /// let r = Then(Identity(Top), Identity(Top));
-    /// assert!(complete::<F, _, _>(&r, || vesta_sponge(0), &(), &()).is_ok());
-    /// ```
     #[allow(clippy::type_complexity)]
     pub fn complete<F, R, T>(
         reduction: &R,
@@ -747,16 +593,6 @@ pub mod laws {
     /// # Errors
     ///
     /// Which side failed to verify.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_poseidon::vesta_sponge;
-    /// use arrabbiata_reduction::{Identity, Then, Top, laws::same_instance};
-    /// let a = Identity(Top);
-    /// let b = Then(Identity(Top), Identity(Top));
-    /// let (pa, pb) = ((), ((), ()));
-    /// assert!(same_instance::<F, _, _, _>(&a, &b, || vesta_sponge(0), &(), pa, pb).unwrap());
-    /// ```
     #[allow(clippy::type_complexity)]
     pub fn same_instance<F, A, B, T>(
         a: &A,

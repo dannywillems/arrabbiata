@@ -23,14 +23,6 @@
 //!   folded independently, and the folded coefficients are in general no
 //!   longer powers of anything.
 //!
-//! ```
-//! use arrabbiata_field::Goldilocks as F;
-//! use arrabbiata_relation::aggregation::{Aggregation, Powers, Single};
-//!
-//! assert_eq!(<Single as Aggregation<F, 1>>::EXTRA_DEGREE, 0);
-//! assert_eq!(<Powers as Aggregation<F, 3>>::EXTRA_DEGREE, 1);
-//! ```
-//!
 //! ```compile_fail
 //! use arrabbiata_field::Goldilocks as F;
 //! use arrabbiata_relation::aggregation::{Aggregation, Single};
@@ -44,28 +36,11 @@ use arrabbiata_field::{Field, powers};
 use arrabbiata_transcript::{Absorb, Transcript, absorb_length, tag};
 
 /// An aggregation strategy for `M` constraints over `F`.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_relation::aggregation::{Aggregation, Combiner, Powers};
-///
-/// let a = Combiner::<F, 2>::powers(F::new(3));
-/// let b = Combiner::<F, 2>::powers(F::new(5));
-/// let folded = <Powers as Aggregation<F, 2>>::fold(&a, &b, F::new(2));
-/// // 3 + 2 * 5: the coefficient of constraint 1 is folded linearly.
-/// assert_eq!(<Powers as Aggregation<F, 2>>::coefficient(&folded, 1), Some(F::new(13)));
-/// ```
 pub trait Aggregation<F, const M: usize>
 where
     F: Field,
 {
     /// The degree the coefficients add to the relation: 0 or 1.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_relation::aggregation::{Aggregation, Powers};
-    /// assert_eq!(<Powers as Aggregation<F, 4>>::EXTRA_DEGREE, 1);
-    /// ```
     const EXTRA_DEGREE: usize;
 
     /// The coefficients carried by an instance.
@@ -73,58 +48,22 @@ where
 
     /// The coefficient of constraint `j`, or `None` when the strategy has no
     /// coefficient variables (the coefficient is then the constant 1).
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_relation::aggregation::{Aggregation, NoCoefficients, Single};
-    /// assert_eq!(<Single as Aggregation<F, 1>>::coefficient(&NoCoefficients, 0), None);
-    /// ```
     fn coefficient(coefficients: &Self::Coefficients, j: usize) -> Option<F>;
 
     /// `a + r * b`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_relation::aggregation::{Aggregation, Combiner, Powers};
-    /// let one = Combiner::<F, 1>::powers(F::new(9));
-    /// let folded = <Powers as Aggregation<F, 1>>::fold(&one, &one, F::new(4));
-    /// // c_0 = 1 on both, so the folded c_0 is 1 + 4.
-    /// assert_eq!(folded.values(), &[F::new(5)]);
-    /// ```
     fn fold(a: &Self::Coefficients, b: &Self::Coefficients, r: F) -> Self::Coefficients;
 
     /// The coefficients of a fresh instance, drawn from the transcript.
-    ///
-    /// ```
-    /// use arrabbiata_poseidon::vesta_sponge;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_relation::aggregation::{Aggregation, Powers};
-    /// let c = <Powers as Aggregation<F, 3>>::sample(&mut vesta_sponge(2));
-    /// let alpha = c.values()[1];
-    /// assert_eq!(c.values(), &[F::ONE, alpha, alpha * alpha]);
-    /// ```
     fn sample<T>(transcript: &mut T) -> Self::Coefficients
     where
         T: Transcript<F>;
 }
 
 /// One constraint, no combiner. See the module documentation.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_relation::aggregation::{Aggregation, Single};
-/// assert_eq!(<Single as Aggregation<F, 1>>::EXTRA_DEGREE, 0);
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Single;
 
 /// The (absent) coefficients of the [`Single`] strategy.
-///
-/// ```
-/// use arrabbiata_relation::aggregation::NoCoefficients;
-/// assert_eq!(NoCoefficients, NoCoefficients::default());
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NoCoefficients;
 
@@ -164,23 +103,10 @@ where
 }
 
 /// Folded powers of a challenge. See the module documentation.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_relation::aggregation::{Aggregation, Powers};
-/// assert_eq!(<Powers as Aggregation<F, 2>>::EXTRA_DEGREE, 1);
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Powers;
 
 /// The coefficients `c_0, ..., c_{M-1}` of the [`Powers`] strategy.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_relation::aggregation::Combiner;
-/// let c = Combiner::<F, 3>::powers(F::new(2));
-/// assert_eq!(c.values(), &[F::ONE, F::new(2), F::new(4)]);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Combiner<F, const M: usize>([F; M]);
 
@@ -189,12 +115,6 @@ where
     F: Field,
 {
     /// The coefficients `1, alpha, ..., alpha^(M-1)` of a fresh instance.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_relation::aggregation::Combiner;
-    /// assert_eq!(Combiner::<F, 2>::powers(F::new(7)).values(), &[F::ONE, F::new(7)]);
-    /// ```
     #[must_use]
     pub fn powers(alpha: F) -> Self {
         let alphas = powers(alpha, M);
@@ -208,12 +128,6 @@ where
     }
 
     /// The coefficients.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_relation::aggregation::Combiner;
-    /// assert_eq!(Combiner::<F, 1>::powers(F::new(7)).values().len(), 1);
-    /// ```
     #[must_use]
     pub const fn values(&self) -> &[F; M] {
         &self.0

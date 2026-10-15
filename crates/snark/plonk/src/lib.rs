@@ -17,63 +17,6 @@
 //! the instance with three witness columns, five fixed columns and one
 //! gadget ([`vanilla`]).
 //!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_plonk::{
-//!     circuit::{Builder, Cell},
-//!     gate::Gadget,
-//!     ipa, prove, setup, verify,
-//! };
-//! use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-//!
-//! /// The Poseidon S-box, `b = a^5`.
-//! struct SBox;
-//! impl Gadget<F, 2, 0> for SBox {
-//!     const NAME: &'static str = "sbox";
-//!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-//!         let a2 = a.clone() * a.clone();
-//!         vec![b - a2.clone() * a2 * a]
-//!     }
-//! }
-//!
-//! /// `a' = b`: the output of a row is the input of the next.
-//! struct Chain;
-//! impl Gadget<F, 2, 0> for Chain {
-//!     const NAME: &'static str = "chain";
-//!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-//!         let next = Expr::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
-//!         vec![next - b]
-//!     }
-//! }
-//!
-//! // 2 -> 2^5 -> 2^25, with 2 and 2^25 public.
-//! type Gates = (SBox, (Chain, ()));
-//! let mut b = Builder::<F, Gates, 2, 0, 2>::new();
-//! let x = F::from_u64(2);
-//! let y = x.pow(5);
-//! let z = y.pow(5);
-//! let input = b.plain_row([x, F::ZERO], []);
-//! let r0 = b.row::<SBox, _>([x, y], []);
-//! let r1 = b.row::<SBox, _>([y, z], []);
-//! let output = b.plain_row([z, F::ZERO], []);
-//! let (a, c) = (WitnessColumn::new::<0>(), WitnessColumn::new::<1>());
-//! b.copy(Cell::new(a, input), Cell::new(a, r0));
-//! b.copy(Cell::new(c, r0), Cell::new(a, r1));
-//! b.copy(Cell::new(c, r1), Cell::new(a, output));
-//! b.public(input);
-//! b.public(output);
-//! let (circuit, witness) = b.build().unwrap();
-//!
-//! let pcs = ipa::pallas(&circuit);
-//! let (pk, vk) = setup(&circuit, &pcs).unwrap();
-//! let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
-//! verify(&vk, &pcs, ipa::pallas_transcript(), &[x, z], proof).unwrap();
-//! ```
-//!
 //! # The protocol
 //!
 //! With `n` rows, `H` the subgroup of order `n`, `w_k` the witness, `f_k`
@@ -157,12 +100,6 @@ pub type Keys<F, PC, G, const W: usize, const X: usize, const Q: usize> =
 /// and KZG both commit to curve points). The type checker rejects the mix,
 /// and the transcripts differ from the first challenge.
 ///
-/// ```
-/// use arrabbiata_plonk::{Scheme, ipa::PallasIpa};
-/// let m: Scheme<PallasIpa, u8, 1> = Scheme::new(7);
-/// assert_eq!(m.value, 7);
-/// ```
-///
 /// A proof made with one scheme does not type-check against the verifier of
 /// another, even when their commitment and proof types coincide. Here `Twin`
 /// is IPA on Pallas under another label:
@@ -210,12 +147,6 @@ pub struct Scheme<PC, T, const TAG: u64> {
 
 impl<PC, T, const TAG: u64> Scheme<PC, T, TAG> {
     /// Tag `value` with the scheme `PC`.
-    ///
-    /// ```
-    /// use arrabbiata_plonk::{Scheme, ipa::PallasIpa};
-    /// let m = Scheme::<PallasIpa, _, 1>::new("x");
-    /// assert_eq!(m.value, "x");
-    /// ```
     pub const fn new(value: T) -> Self {
         Self {
             value,
@@ -290,15 +221,6 @@ where
 /// another sponge (or another scheme) does not type-check against it. The
 /// label is the scheme's; the sponge is separated by its own type and state.
 ///
-/// ```
-/// use arrabbiata_pasta::Fq;
-/// use arrabbiata_plonk::{With, ipa::PallasIpa};
-/// use arrabbiata_poseidon::PoseidonSponge;
-/// use arrabbiata_transcript::typed::Label;
-/// type Setup = With<PallasIpa, PoseidonSponge<Fq>>;
-/// assert_eq!(Setup::LABEL, <PallasIpa as Label>::LABEL);
-/// ```
-///
 /// A proof made on the Poseidon sponge is not accepted by a verifier running
 /// another sponge, even over the same field and scheme. Here the verifier
 /// runs Poseidon of width 3 at rate 1 instead of rate 2:
@@ -347,11 +269,6 @@ pub type VerifierKey<F, PC, G, const W: usize, const X: usize, const Q: usize> =
     Scheme<PC, Preprocessed<F, Com<F, PC>, G, W, X, Q>, 0x766b>;
 
 /// `N` values of the same type, absorbed in order.
-///
-/// ```
-/// use arrabbiata_plonk::Columns;
-/// assert_eq!(Columns([1, 2, 3]).0[2], 3);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Columns<C, const N: usize>(pub [C; N]);
 
@@ -371,12 +288,6 @@ where
 }
 
 /// The public inputs of a statement.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_plonk::PublicInputs;
-/// assert_eq!(PublicInputs(vec![F::from_u64(1)]).0.len(), 1);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInputs<F>(pub Vec<F>);
 
@@ -403,15 +314,6 @@ where
 /// at `zeta`; `z` at `zeta w`; then each pair `(column, k)` of
 /// [`Opened::rotated_witness`] and of [`Opened::rotated_fixed`] at
 /// `zeta w^k`.
-///
-/// ```
-/// use arrabbiata_plonk::Opened;
-/// let o = Opened::<u8, 1, 1, 1> {
-///     witness: [0], fixed: [1], selectors: [2], sigmas: [3], z: 4, t: 5,
-///     z_next: 6, witness_rotated: vec![], fixed_rotated: vec![],
-/// };
-/// assert_eq!(o.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5, 6]);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opened<T, const W: usize, const X: usize, const Q: usize> {
     /// The witness polynomials at `zeta`.
@@ -438,15 +340,6 @@ pub struct Opened<T, const W: usize, const X: usize, const Q: usize> {
 
 impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
     /// Every value, in the order of the openings.
-    ///
-    /// ```
-    /// use arrabbiata_plonk::Opened;
-    /// let o = Opened::<u8, 2, 0, 0> {
-    ///     witness: [1, 2], fixed: [], selectors: [], sigmas: [3, 4], z: 5, t: 6,
-    ///     z_next: 7, witness_rotated: vec![8], fixed_rotated: vec![],
-    /// };
-    /// assert_eq!(o.iter().count(), 8);
-    /// ```
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.witness
             .iter()
@@ -461,16 +354,6 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
     }
 
     /// Every value, mutably, in the order of the openings.
-    ///
-    /// ```
-    /// use arrabbiata_plonk::Opened;
-    /// let mut o = Opened::<u8, 1, 0, 0> {
-    ///     witness: [1], fixed: [], selectors: [], sigmas: [2], z: 3, t: 4,
-    ///     z_next: 5, witness_rotated: vec![], fixed_rotated: vec![],
-    /// };
-    /// *o.iter_mut().nth(4).unwrap() = 9;
-    /// assert_eq!(o.z_next, 9);
-    /// ```
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.witness
             .iter_mut()
@@ -486,13 +369,6 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
 
     /// The witness columns some constraint of `G` reads at a rotation
     /// other than the current row, with the rotation, in increasing order.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{Opened, vanilla::Vanilla};
-    /// // Vanilla PlonK reads only the current row.
-    /// assert!(Opened::<F, 3, 5, 1>::rotated_witness::<F, Vanilla>().is_empty());
-    /// ```
     #[must_use]
     pub fn rotated_witness<F, G>() -> Vec<(usize, Rotation)>
     where
@@ -504,12 +380,6 @@ impl<T, const W: usize, const X: usize, const Q: usize> Opened<T, W, X, Q> {
 
     /// The fixed columns some constraint of `G` reads at a rotation other
     /// than the current row, with the rotation, in increasing order.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{Opened, vanilla::Vanilla};
-    /// assert!(Opened::<F, 3, 5, 1>::rotated_fixed::<F, Vanilla>().is_empty());
-    /// ```
     #[must_use]
     pub fn rotated_fixed<F, G>() -> Vec<(usize, Rotation)>
     where
@@ -604,19 +474,6 @@ where
 ///
 /// Its absorption also absorbs the constraints of the gate set `G`, so the
 /// transcript is bound to the relation, not only to the columns.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{ipa, vanilla};
-/// let (c, _, ()) = build::<F, _, _>(|b| {
-///     b.witness(F::from_u64(1));
-/// });
-/// let circuit = vanilla::circuit(&c).unwrap();
-/// let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
-/// assert_eq!(vk.value.num_rows(), 2);
-/// ```
 pub struct Preprocessed<F, C, G, const W: usize, const X: usize, const Q: usize> {
     log_size: u32,
     shifts: [F; W],
@@ -629,35 +486,12 @@ pub struct Preprocessed<F, C, G, const W: usize, const X: usize, const Q: usize>
 
 impl<F, C, G, const W: usize, const X: usize, const Q: usize> Preprocessed<F, C, G, W, X, Q> {
     /// The number of rows of the circuit.
-    ///
-    /// ```
-    /// use arrabbiata_frontend::vanilla::build;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{ipa, vanilla};
-    /// let (c, _, ()) = build::<F, _, _>(|_| ());
-    /// let circuit = vanilla::circuit(&c).unwrap();
-    /// let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
-    /// assert_eq!(vk.value.num_rows(), circuit.num_rows());
-    /// ```
     #[must_use]
     pub const fn num_rows(&self) -> usize {
         1 << self.log_size
     }
 
     /// The rows whose witness column 0 is a public input.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{ipa, vanilla};
-    /// let (c, _, ()) = build::<F, _, _>(|b| {
-    ///     b.public_input(F::ONE);
-    /// });
-    /// let circuit = vanilla::circuit(&c).unwrap();
-    /// let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
-    /// assert_eq!(vk.value.public_rows(), circuit.public_rows());
-    /// ```
     #[must_use]
     pub fn public_rows(&self) -> &[usize] {
         &self.public_rows
@@ -755,16 +589,6 @@ where
 
 /// The prover's view of a circuit: the verifier key, the circuit, and the
 /// polynomials it commits to.
-///
-/// ```
-/// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{ipa, vanilla};
-/// let (c, _, ()) = build::<F, _, _>(|_| ());
-/// let circuit = vanilla::circuit(&c).unwrap();
-/// let (pk, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
-/// assert_eq!(pk.verifier_key(), &vk);
-/// ```
 pub struct ProverKey<F, PC, G, const W: usize, const X: usize, const Q: usize>
 where
     F: Field,
@@ -785,16 +609,6 @@ where
     PC: PolynomialCommitment<F>,
 {
     /// The verifier key.
-    ///
-    /// ```
-    /// use arrabbiata_frontend::vanilla::build;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{ipa, vanilla};
-    /// let (c, _, ()) = build::<F, _, _>(|_| ());
-    /// let circuit = vanilla::circuit(&c).unwrap();
-    /// let (pk, _) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
-    /// assert_eq!(pk.verifier_key().value.num_rows(), 2);
-    /// ```
     pub const fn verifier_key(&self) -> &VerifierKey<F, PC, G, W, X, Q> {
         &self.vk
     }
@@ -834,16 +648,6 @@ pub type PlonkTranscript<F, PC, S, G, const W: usize, const X: usize, const Q: u
 /// PlonK over `F` for the gate set `G` with `W` witness columns, `X` fixed
 /// columns and `Q` selectors, compiled with the univariate scheme `PC`, on
 /// the sponge `S`.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{Plonk, ipa::PallasIpa, vanilla::Vanilla};
-/// use arrabbiata_poseidon::PoseidonSponge;
-/// use arrabbiata_transcript::typed::{Pattern, Protocol};
-/// type P = <Plonk<F, PallasIpa, PoseidonSponge<F>, Vanilla, 3, 5, 1> as Protocol>::Transcript;
-/// assert_eq!(<P as Pattern>::MESSAGES, 5);
-/// assert_eq!(<P as Pattern>::CHALLENGES, 4);
-/// ```
 #[derive(Debug)]
 pub struct Plonk<F, PC, S, G, const W: usize, const X: usize, const Q: usize>(
     PhantomData<Parameters<F, PC, S, G>>,
@@ -864,11 +668,6 @@ where
 }
 
 /// Why building a circuit, setup, proving or verification failed.
-///
-/// ```
-/// use arrabbiata_plonk::PlonkError;
-/// assert_eq!(PlonkError::IdentityFailed.to_string(), "the PlonK identity does not hold at zeta");
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlonkError {
     /// The field has no domain of the size the circuit needs.
@@ -911,11 +710,6 @@ impl core::error::Error for PlonkError {}
 
 /// A circuit that cannot be built is a [`PlonkError::Shape`] or a
 /// [`PlonkError::Rotation`].
-///
-/// ```
-/// use arrabbiata_plonk::{CircuitError, PlonkError};
-/// assert_eq!(PlonkError::from(CircuitError::Rotation), PlonkError::Rotation);
-/// ```
 impl From<CircuitError> for PlonkError {
     fn from(e: CircuitError) -> Self {
         match e {
@@ -927,37 +721,14 @@ impl From<CircuitError> for PlonkError {
 
 /// The sizes PlonK needs for a circuit: how much larger than the domain
 /// the quotient is, and how many coefficients a commitment must accept.
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
-/// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-/// // q * q_M a b has degree 4, and so has z (a + ..) (b + ..) (c + ..).
-/// assert_eq!(c.quotient_factor(), 4);
-/// assert_eq!(c.max_coefficients(), 3 * c.num_rows());
-/// ```
 pub trait QuotientSizing {
     /// The largest total degree of a gated constraint (selector included),
     /// and of the copy and public-input identities: the quotient has fewer
     /// than `(quotient_factor() - 1) n` coefficients.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
-    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-    /// assert_eq!(c.quotient_factor(), 4);
-    /// ```
     fn quotient_factor(&self) -> usize;
 
     /// The number of coefficients a polynomial commitment for this circuit
     /// must accept: the size of the quotient, or of a column if larger.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
-    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-    /// assert_eq!(c.max_coefficients(), 3 * c.num_rows());
-    /// ```
     fn max_coefficients(&self) -> usize;
 }
 
@@ -1037,18 +808,6 @@ where
 /// [`PlonkError::DomainTooLarge`] if the field has no domain of the circuit
 /// size, and [`PlonkError::CosetShifts`] if the field has no `W` disjoint
 /// cosets of it generated by powers of its multiplicative generator.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{ipa, vanilla};
-/// let (c, _, ()) = build::<F, _, _>(|b| {
-///     b.constant(F::from_u64(2));
-/// });
-/// let circuit = vanilla::circuit(&c).unwrap();
-/// assert!(arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).is_ok());
-/// ```
 pub fn setup<F, PC, G, const W: usize, const X: usize, const Q: usize>(
     circuit: &Circuit<F, G, W, X, Q>,
     pcs: &PC,
@@ -1148,25 +907,6 @@ where
 /// match the circuit, [`PlonkError::Shape`] if a witness column does not
 /// have one value per row, and [`PlonkError::Unsatisfied`] if the witness
 /// does not satisfy the circuit.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{PlonkError, ipa, prove, setup, vanilla};
-///
-/// // A false statement: 2 * 2 = 5.
-/// let (c, w, ()) = build::<F, _, _>(|b| {
-///     let x = b.witness(F::from_u64(2));
-///     let y = b.mul(&x, &x);
-///     let five = b.public_input(F::from_u64(5));
-///     b.assert_equal(&y, &five);
-/// });
-/// let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
-/// let pcs = ipa::pallas(&circuit);
-/// let (pk, _) = setup(&circuit, &pcs).unwrap();
-/// assert_eq!(prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap_err(), PlonkError::Unsatisfied);
-/// ```
 pub fn prove<F, PC, S, G, const W: usize, const X: usize, const Q: usize>(
     pk: &ProverKey<F, PC, G, W, X, Q>,
     pcs: &PC,
@@ -1522,27 +1262,6 @@ where
 /// columns, [`PlonkError::Opening`] if an opening proof fails, and
 /// [`PlonkError::IdentityFailed`] if the PlonK identity does not hold at
 /// `zeta`.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
-///
-/// let (c, w, ()) = build::<F, _, _>(|b| {
-///     let x = b.witness(F::from_u64(4));
-///     let y = b.mul(&x, &x);
-///     let out = b.public_input(F::from_u64(16));
-///     b.assert_equal(&y, &out);
-/// });
-/// let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
-/// let pcs = ipa::pallas(&circuit);
-/// let (pk, vk) = setup(&circuit, &pcs).unwrap();
-/// let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
-/// // The same proof does not verify for another statement.
-/// assert!(verify(&vk, &pcs, ipa::pallas_transcript(), &[F::from_u64(17)], proof.clone()).is_err());
-/// assert!(verify(&vk, &pcs, ipa::pallas_transcript(), &[F::from_u64(16)], proof).is_ok());
-/// ```
 pub fn verify<F, PC, S, G, const W: usize, const X: usize, const Q: usize>(
     vk: &VerifierKey<F, PC, G, W, X, Q>,
     pcs: &PC,

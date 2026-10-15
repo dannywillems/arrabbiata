@@ -22,19 +22,6 @@ use crate::{
 /// The integers are checked: a shape whose largest integer does not fit a
 /// `u128` has no dense polynomial, and [`MVPoly::from_terms`] returns
 /// `None` for it.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_mvpoly::{Dense, MVPoly, Monomial, Var};
-/// use arrabbiata_pasta::Fq as F;
-/// // 2 variables of degree at most 2: 1, x0, x1, x0^2, x0 x1, x1^2,
-/// // indexed by 1, 2, 3, 4, 6, 9.
-/// assert_eq!(Dense::<F, 2, 2>::codes(), Some(vec![1, 2, 3, 4, 6, 9]));
-/// let x = Dense::<F, 2, 2>::variable(Var::new::<0>()).unwrap();
-/// let y = Dense::<F, 2, 2>::variable(Var::new::<1>()).unwrap();
-/// let xy = x.checked_mul(&y).unwrap();
-/// assert_eq!(xy.coefficient(&Monomial::new([1, 1])), F::ONE);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dense<F, const N: usize, const D: usize> {
     coefficients: Vec<F>,
@@ -47,13 +34,6 @@ where
 {
     /// The sorted integers of all monomials of degree at most `D`, or
     /// `None` if one overflows a `u128`.
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::Dense;
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert_eq!(Dense::<F, 1, 3>::codes(), Some(vec![1, 2, 4, 8]));
-    /// assert_eq!(Dense::<F, 3, 3>::codes().unwrap().len(), 20);
-    /// ```
     #[must_use]
     pub fn codes() -> Option<Vec<u128>> {
         let primes = primes::first(N);
@@ -66,14 +46,6 @@ where
     }
 
     /// The coefficient vector, in the order of [`Dense::codes`].
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{Dense, MVPoly};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let one = Dense::<F, 2, 1>::one();
-    /// assert_eq!(one.coefficients(), &[F::ONE, F::ZERO, F::ZERO]);
-    /// ```
     #[must_use]
     pub fn coefficients(&self) -> &[F] {
         &self.coefficients

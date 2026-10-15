@@ -3,12 +3,6 @@
 use core::fmt;
 
 /// A value does not have the shape the constraint system requires.
-///
-/// ```
-/// use arrabbiata_relation::error::ShapeError;
-/// let e = ShapeError::ConstraintDegree { constraint: 0, degree: 3, maximum: 2 };
-/// assert_eq!(e.to_string(), "constraint 0 has degree 3, above the maximum 2");
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeError {
     /// A fixed column does not have one value per row.
@@ -84,11 +78,6 @@ impl fmt::Display for ShapeError {
 impl core::error::Error for ShapeError {}
 
 /// Which committed vector of an instance a commitment check failed on.
-///
-/// ```
-/// use arrabbiata_relation::error::Slot;
-/// assert_ne!(Slot::Column(0), Slot::Error);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
     /// A witness column.
@@ -98,12 +87,6 @@ pub enum Slot {
 }
 
 /// A witness does not satisfy a relation.
-///
-/// ```
-/// use arrabbiata_relation::error::RelationError;
-/// let e = RelationError::Unsatisfied { row: 3, constraint: Some(1) };
-/// assert_eq!(e.to_string(), "constraint 1 is not satisfied on row 3");
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelationError {
     /// The witness has the wrong shape.

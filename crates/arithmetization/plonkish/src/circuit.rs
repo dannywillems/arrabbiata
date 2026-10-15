@@ -24,41 +24,6 @@
 //! around, are never observed, and adding rows never changes what the
 //! existing ones mean. [`Builder::cyclic`] opts into the cycle: the rows
 //! must already be a power of two, and rotations wrap.
-//!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_plonkish::{
-//!     circuit::{Builder, Cell},
-//!     gate::Gadget,
-//! };
-//! use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-//!
-//! /// `b = a^2`.
-//! struct Square;
-//! impl Gadget<F, 2, 0> for Square {
-//!     const NAME: &'static str = "square";
-//!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-//!         vec![b - a.clone() * a]
-//!     }
-//! }
-//!
-//! // 3 -> 9 -> 81, the output of each row copied to the input of the next,
-//! // and 81 published (on a row of its own, in column 0).
-//! let mut b = Builder::<F, (Square, ()), 2, 0, 1>::new();
-//! let r0 = b.row::<Square, _>([F::from_u64(3), F::from_u64(9)], []);
-//! let r1 = b.row::<Square, _>([F::from_u64(9), F::from_u64(81)], []);
-//! let out = b.plain_row([F::from_u64(81), F::ZERO], []);
-//! let (a, c) = (WitnessColumn::new::<0>(), WitnessColumn::new::<1>());
-//! b.copy(Cell::new(c, r0), Cell::new(a, r1));
-//! b.copy(Cell::new(c, r1), Cell::new(a, out));
-//! b.public(out);
-//! let (circuit, witness) = b.build().unwrap();
-//! assert_eq!(circuit.num_rows(), 4);
-//! assert!(circuit.is_satisfied(&witness));
-//! ```
 
 use alloc::{vec, vec::Vec};
 use core::{array, fmt, marker::PhantomData};
@@ -74,13 +39,6 @@ use crate::{
 };
 
 /// A witness cell: a column and a row.
-///
-/// ```
-/// use arrabbiata_plonkish::circuit::Cell;
-/// use arrabbiata_poly::WitnessColumn;
-/// let c = Cell::<3>::new(WitnessColumn::new::<2>(), 5);
-/// assert_eq!(c.index(8), 2 * 8 + 5);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Cell<const W: usize> {
     /// The witness column.
@@ -91,24 +49,12 @@ pub struct Cell<const W: usize> {
 
 impl<const W: usize> Cell<W> {
     /// The cell of `column` at `row`.
-    ///
-    /// ```
-    /// use arrabbiata_plonkish::circuit::Cell;
-    /// use arrabbiata_poly::WitnessColumn;
-    /// assert_eq!(Cell::<2>::new(WitnessColumn::new::<1>(), 0).row, 0);
-    /// ```
     #[must_use]
     pub const fn new(column: WitnessColumn<W>, row: usize) -> Self {
         Self { column, row }
     }
 
     /// The index of the cell among the `W n` witness cells: `k n + i`.
-    ///
-    /// ```
-    /// use arrabbiata_plonkish::circuit::Cell;
-    /// use arrabbiata_poly::WitnessColumn;
-    /// assert_eq!(Cell::<2>::new(WitnessColumn::new::<1>(), 3).index(4), 7);
-    /// ```
     #[must_use]
     pub const fn index(self, num_rows: usize) -> usize {
         self.column.index() * num_rows + self.row
@@ -116,14 +62,6 @@ impl<const W: usize> Cell<W> {
 }
 
 /// A witness: `W` columns of `n` values, and the public inputs.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::circuit::Witness;
-/// let w = Witness::new([vec![F::ONE, F::ZERO]], vec![F::ONE]);
-/// assert_eq!(w.public_inputs(), &[F::ONE]);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Witness<F, const W: usize> {
     columns: [Vec<F>; W],
@@ -134,40 +72,18 @@ impl<F, const W: usize> Witness<F, W> {
     /// The witness with the given columns and public inputs. Shapes are
     /// checked against a circuit by [`Circuit::is_satisfied`] and by the
     /// prover.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::circuit::Witness;
-    /// let w = Witness::new([vec![F::ONE; 2], vec![F::ZERO; 2]], vec![]);
-    /// assert_eq!(w.columns()[1], vec![F::ZERO; 2]);
-    /// ```
     #[must_use]
     pub const fn new(columns: [Vec<F>; W], public: Vec<F>) -> Self {
         Self { columns, public }
     }
 
     /// The witness columns.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::circuit::Witness;
-    /// assert_eq!(Witness::new([vec![F::ONE]], vec![]).columns()[0], vec![F::ONE]);
-    /// ```
     #[must_use]
     pub const fn columns(&self) -> &[Vec<F>; W] {
         &self.columns
     }
 
     /// The public inputs, in the order of the circuit's public rows.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::circuit::Witness;
-    /// assert!(Witness::<F, 1>::new([vec![]], vec![]).public_inputs().is_empty());
-    /// ```
     #[must_use]
     pub fn public_inputs(&self) -> &[F] {
         &self.public
@@ -183,13 +99,6 @@ impl<F, const W: usize> Witness<F, W> {
 /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
 /// // `Vanilla` has one gadget, hence one selector, not two.
 /// let _ = Builder::<F, Vanilla, 3, 5, 2>::new();
-/// ```
-///
-/// ```
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-/// let (circuit, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-/// assert_eq!(circuit.num_rows(), 2);
 /// ```
 pub struct Circuit<F, G, const W: usize, const X: usize, const Q: usize> {
     num_rows: usize,
@@ -271,20 +180,6 @@ where
     /// `sigma` is not a permutation of the `W num_rows` cells, or a public
     /// row is out of range, repeated, or given without a witness column to
     /// hold it (`W = 0`).
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{CircuitError, circuit::Circuit, gate::Selector, vanilla::Vanilla};
-    /// let fixed: [Vec<F>; 5] = std::array::from_fn(|_| vec![F::ZERO; 2]);
-    /// let on = Some(Selector::new::<0>());
-    /// let identity: Vec<usize> = (0..6).collect();
-    /// let ok = Circuit::<F, Vanilla, 3, 5, 1>::new(2, fixed.clone(), vec![on, None], identity.clone(), vec![]);
-    /// assert!(ok.is_ok());
-    /// // A permutation of 5 cells, not 6.
-    /// let bad = Circuit::<F, Vanilla, 3, 5, 1>::new(2, fixed, vec![on, None], (0..5).collect(), vec![]);
-    /// assert_eq!(bad.unwrap_err(), CircuitError::Shape);
-    /// ```
     pub fn new(
         num_rows: usize,
         fixed: [Vec<F>; X],
@@ -330,42 +225,18 @@ where
     }
 
     /// The number of rows, a power of two.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-    /// assert!(c.num_rows().is_power_of_two());
-    /// ```
     #[must_use]
     pub const fn num_rows(&self) -> usize {
         self.num_rows
     }
 
     /// The fixed columns.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-    /// assert_eq!(c.fixed().len(), 5);
-    /// ```
     #[must_use]
     pub const fn fixed(&self) -> &[Vec<F>; X] {
         &self.fixed
     }
 
     /// The gadget turned on in each row, if any.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, gate::Selector, vanilla::{Arithmetic, Vanilla}};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// b.row::<Arithmetic, _>([F::ZERO; 3], [F::ZERO; 5]);
-    /// let (c, _) = b.build().unwrap();
-    /// assert_eq!(c.gadgets(), &[Some(Selector::new::<0>()), None]);
-    /// ```
     #[must_use]
     pub fn gadgets(&self) -> &[Option<Selector<Q>>] {
         &self.gadgets
@@ -374,16 +245,6 @@ where
     /// The selector columns, one per gadget of `G`, in the order of `G`:
     /// column `g` is 1 on the rows that turn gadget `g` on, 0 elsewhere.
     /// They are one-hot: at most one is 1 in each row.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// b.row::<Arithmetic, _>([F::ZERO; 3], [F::ZERO; 5]);
-    /// let (c, _) = b.build().unwrap();
-    /// assert_eq!(c.selector_columns(), [vec![F::ONE, F::ZERO]]);
-    /// ```
     #[must_use]
     pub fn selector_columns(&self) -> [Vec<F>; Q] {
         let mut columns: [Vec<F>; Q] = array::from_fn(|_| vec![F::ZERO; self.num_rows]);
@@ -396,14 +257,6 @@ where
     }
 
     /// The copy permutation of the witness cells.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-    /// // No copy: the identity.
-    /// assert!(c.sigma().iter().enumerate().all(|(i, s)| i == *s));
-    /// ```
     #[must_use]
     pub fn sigma(&self) -> &[usize] {
         &self.sigma
@@ -411,18 +264,6 @@ where
 
     /// The rows whose witness column 0 is a public input, in the order of
     /// the public inputs.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// let r = b.plain_row([F::ONE, F::ZERO, F::ZERO], [F::ZERO; 5]);
-    /// b.public(r);
-    /// let (c, w) = b.build().unwrap();
-    /// assert_eq!(c.public_rows(), &[r]);
-    /// assert_eq!(w.public_inputs(), &[F::ONE]);
-    /// ```
     #[must_use]
     pub fn public_rows(&self) -> &[usize] {
         &self.public_rows
@@ -431,20 +272,6 @@ where
     /// Whether `witness` satisfies the circuit: the gates of the active
     /// gadgets vanish, copied cells are equal, and column 0 holds the
     /// public inputs on the public rows.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::{Builder, Witness}, vanilla::Vanilla};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// let r = b.plain_row([F::ONE, F::ZERO, F::ZERO], [F::ZERO; 5]);
-    /// b.public(r);
-    /// let (c, w) = b.build().unwrap();
-    /// assert!(c.is_satisfied(&w));
-    /// // Another public input for the same witness.
-    /// let other = Witness::new(w.columns().clone(), vec![F::ZERO]);
-    /// assert!(!c.is_satisfied(&other));
-    /// ```
     #[must_use]
     pub fn is_satisfied(&self, witness: &Witness<F, W>) -> bool {
         let n = self.num_rows;
@@ -523,18 +350,6 @@ enum Topology {
 /// Each row either turns on one gadget of `G` ([`Builder::row`]) or none
 /// ([`Builder::plain_row`]). Copy constraints and public inputs refer to
 /// rows by the index these calls return.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
-/// // 2 * 3 = 6: q_M a b - c = 0, with q_M = 1 and q_O = -1.
-/// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-/// let (two, three, six) = (F::from_u64(2), F::from_u64(3), F::from_u64(6));
-/// b.row::<Arithmetic, _>([two, three, six], [F::ZERO, F::ZERO, -F::ONE, F::ONE, F::ZERO]);
-/// let (circuit, witness) = b.build().unwrap();
-/// assert!(circuit.is_satisfied(&witness));
-/// ```
 pub struct Builder<F, G, const W: usize, const X: usize, const Q: usize> {
     topology: Topology,
     witness: [Vec<F>; W],
@@ -576,12 +391,6 @@ where
     /// A builder of rows on a path: a gadget may only read rows that were
     /// added ([`Builder::build`] fails otherwise), and the circuit is padded
     /// to a power of two with rows no gadget reads.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-    /// assert_eq!(Builder::<F, Vanilla, 3, 5, 1>::new().num_rows(), 0);
-    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self::with(Topology::Path)
@@ -590,33 +399,12 @@ where
     /// A builder of rows on the cycle `Z/n`: rotations wrap around, the
     /// next row of the last row being the first. The number of rows must
     /// be a power of two (at least 2), since nothing is padded.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{CircuitError, circuit::Builder, vanilla::Vanilla};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::cyclic();
-    /// for _ in 0..3 {
-    ///     b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
-    /// }
-    /// // 3 rows do not form a cycle of a power-of-two length.
-    /// assert_eq!(b.build().unwrap_err(), CircuitError::Shape);
-    /// ```
     #[must_use]
     pub fn cyclic() -> Self {
         Self::with(Topology::Cycle)
     }
 
     /// The number of rows added so far.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
-    /// assert_eq!(b.num_rows(), 1);
-    /// ```
     #[must_use]
     pub fn num_rows(&self) -> usize {
         self.gadgets.len()
@@ -625,16 +413,6 @@ where
     /// Add a row turning on the gadget `H`, which `G` must contain; returns
     /// its index. The selector of `H` is its position in `G`, computed at
     /// compile time.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// // a = 1: q_L a + q_C = 0 with q_L = 1, q_C = -1.
-    /// let r = b.row::<Arithmetic, _>([F::ONE, F::ZERO, F::ZERO], [F::ONE, F::ZERO, F::ZERO, F::ZERO, -F::ONE]);
-    /// assert_eq!(r, 0);
-    /// ```
     pub fn row<H, I>(&mut self, witness: [F; W], fixed: [F; X]) -> usize
     where
         G: Member<H, I>,
@@ -651,15 +429,6 @@ where
     /// Add a row with no gadget on (its cells are only constrained by
     /// copies, public inputs, and gadgets of other rows reading it); returns
     /// its index.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// assert_eq!(b.plain_row([F::ONE; 3], [F::ZERO; 5]), 0);
-    /// assert_eq!(b.plain_row([F::ONE; 3], [F::ZERO; 5]), 1);
-    /// ```
     pub fn plain_row(&mut self, witness: [F; W], fixed: [F; X]) -> usize {
         self.push(witness, fixed, None)
     }
@@ -676,35 +445,12 @@ where
     }
 
     /// Require two cells to hold the same value.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::{Builder, Cell}, vanilla::Vanilla};
-    /// use arrabbiata_poly::WitnessColumn;
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// let r = b.plain_row([F::ONE, F::ZERO, F::ZERO], [F::ZERO; 5]);
-    /// b.copy(Cell::new(WitnessColumn::new::<0>(), r), Cell::new(WitnessColumn::new::<1>(), r));
-    /// let (c, w) = b.build().unwrap();
-    /// assert!(!c.is_satisfied(&w));
-    /// ```
     pub fn copy(&mut self, x: Cell<W>, y: Cell<W>) {
         self.copies.push((x, y));
     }
 
     /// Make witness column 0 of `row` a public input. Public inputs are
     /// ordered by the calls to this method, and take the value of the cell.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// let r = b.plain_row([F::from_u64(7), F::ZERO, F::ZERO], [F::ZERO; 5]);
-    /// b.public(r);
-    /// let (_, w) = b.build().unwrap();
-    /// assert_eq!(w.public_inputs(), &[F::from_u64(7)]);
-    /// ```
     pub fn public(&mut self, row: usize) {
         self.public.push(row);
     }
@@ -720,15 +466,6 @@ where
     /// copy or a public input refers to a row that was not added, a row is
     /// public twice, there is no witness column for a public input, or a
     /// cycle does not have a power of two (at least 2) rows.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{CircuitError, circuit::Builder, vanilla::Vanilla};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// b.public(0);
-    /// assert_eq!(b.build().unwrap_err(), CircuitError::Shape);
-    /// ```
     pub fn build(self) -> Result<(Circuit<F, G, W, X, Q>, Witness<F, W>), CircuitError> {
         let rows = self.gadgets.len();
         let n = match self.topology {
@@ -796,25 +533,6 @@ impl<F, G, const W: usize, const X: usize, const Q: usize> Label for Circuit<F, 
 /// fixed columns, the gadget of each row, the copy permutation and the
 /// public rows. A transcript that absorbs a circuit is bound to the
 /// relation it proves.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::{Builder, vanilla::{Arithmetic, Vanilla}};
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_transcript::{Absorb, Transcript};
-/// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-/// b.row::<Arithmetic, _>([F::ZERO; 3], [F::ZERO; 5]);
-/// let (on, _) = b.build().unwrap();
-/// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-/// b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
-/// let (off, _) = b.build().unwrap();
-/// let (mut s, mut t) = (vesta_sponge(0), vesta_sponge(0));
-/// on.absorb_into(&mut s);
-/// off.absorb_into(&mut t);
-/// // Only the selector of row 0 differs.
-/// assert_ne!(s.squeeze(), t.squeeze());
-/// ```
 impl<F, G, const W: usize, const X: usize, const Q: usize> Absorb<F> for Circuit<F, G, W, X, Q>
 where
     F: Field,

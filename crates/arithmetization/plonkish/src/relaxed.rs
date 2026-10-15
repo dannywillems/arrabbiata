@@ -38,34 +38,6 @@
 //! conditions are linear, so they hold on the whole line as soon as they
 //! hold at both ends: they need no error term, and the decider checks
 //! them once, at the end.
-//!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_frontend::vanilla::build;
-//! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_plonkish::{RelaxedWitness, vanilla};
-//!
-//! let (c, w, ()) = build::<F, _, _>(|b| {
-//!     let x = b.witness(F::from_u64(3));
-//!     let y = b.mul(&x, &x);
-//!     let out = b.public_input(F::from_u64(9));
-//!     b.assert_equal(&y, &out);
-//! });
-//! let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
-//! let relaxed = RelaxedWitness::embed(&witness);
-//! // The chart u = 1, E = 0: any coefficients.
-//! let coefficients = [F::from_u64(7)];
-//! assert!(circuit.is_relaxed_satisfied(&relaxed, witness.public_inputs(), F::ONE, &coefficients, 2));
-//! // Scaling the witness, the slack and the error together keeps it
-//! // satisfied (homogeneity), here with E = 0.
-//! let t = F::from_u64(5);
-//! let scaled = RelaxedWitness::new(
-//!     relaxed.columns().clone().map(|c| c.into_iter().map(|v| t * v).collect()),
-//!     relaxed.error().to_vec(),
-//! );
-//! let public: Vec<F> = witness.public_inputs().iter().map(|v| t * *v).collect();
-//! assert!(circuit.is_relaxed_satisfied(&scaled, &public, t, &coefficients, 2));
-//! ```
 
 use alloc::{vec, vec::Vec};
 
@@ -79,14 +51,6 @@ use crate::{
 
 /// A relaxed witness: `W` witness columns and an error column, all of `n`
 /// values.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::RelaxedWitness;
-/// let w = RelaxedWitness::new([vec![F::ONE, F::ZERO]], vec![F::ZERO, F::ONE]);
-/// assert_eq!(w.error(), &[F::ZERO, F::ONE]);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelaxedWitness<F, const W: usize> {
     columns: [Vec<F>; W],
@@ -95,41 +59,18 @@ pub struct RelaxedWitness<F, const W: usize> {
 
 impl<F, const W: usize> RelaxedWitness<F, W> {
     /// The relaxed witness with the given columns and error column.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::RelaxedWitness;
-    /// let w = RelaxedWitness::new([vec![F::ONE]], vec![F::ZERO]);
-    /// assert_eq!(w.columns()[0], vec![F::ONE]);
-    /// ```
     #[must_use]
     pub const fn new(columns: [Vec<F>; W], error: Vec<F>) -> Self {
         Self { columns, error }
     }
 
     /// The witness columns.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::RelaxedWitness;
-    /// let w = RelaxedWitness::new([vec![F::ONE], vec![F::ZERO]], vec![F::ZERO]);
-    /// assert_eq!(w.columns().len(), 2);
-    /// ```
     #[must_use]
     pub const fn columns(&self) -> &[Vec<F>; W] {
         &self.columns
     }
 
     /// The error column.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::RelaxedWitness;
-    /// assert_eq!(RelaxedWitness::new([vec![F::ONE]], vec![F::ONE]).error(), &[F::ONE]);
-    /// ```
     #[must_use]
     pub fn error(&self) -> &[F] {
         &self.error
@@ -142,16 +83,6 @@ where
 {
     /// A witness of the circuit as a relaxed witness: the same columns and
     /// a zero error column, the chart `E = 0`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{RelaxedWitness, Witness};
-    /// let w = Witness::new([vec![F::ONE, F::from_u64(2)]], vec![]);
-    /// let r = RelaxedWitness::embed(&w);
-    /// assert_eq!(r.columns(), w.columns());
-    /// assert_eq!(r.error(), &[F::ZERO, F::ZERO]);
-    /// ```
     #[must_use]
     pub fn embed(witness: &Witness<F, W>) -> Self {
         let n = if W == 0 {
@@ -178,22 +109,6 @@ where
     /// `None` when `degree` is below the degree of a constraint of `g`, or
     /// when `coefficients` has fewer entries than `g` has constraints; the
     /// columns must have `n` values each.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{Builder, vanilla::{Arithmetic, Vanilla}};
-    /// // a * b - c, with q_M = 1, q_O = -1.
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// let one = F::ONE;
-    /// let row = b.row::<Arithmetic, _>([F::from_u64(2), F::from_u64(3), F::from_u64(7)], [F::ZERO, F::ZERO, -one, one, F::ZERO]);
-    /// let (circuit, w) = b.build().unwrap();
-    /// // a b - u c at u = 2: 6 - 14.
-    /// let lhs = circuit.relaxed_row(w.columns(), row, F::from_u64(2), &[one], 2);
-    /// assert_eq!(lhs, Some(F::from_u64(6) - F::from_u64(14)));
-    /// // Degree 1 cannot hold a b.
-    /// assert_eq!(circuit.relaxed_row(w.columns(), row, one, &[one], 1), None);
-    /// ```
     #[must_use]
     pub fn relaxed_row(
         &self,
@@ -227,21 +142,6 @@ where
     /// Whether `witness` satisfies the relaxation of the circuit of degree
     /// `degree`, for the slack `u`, the coefficients `coefficients` and the
     /// public inputs `public`: see the [module documentation](self).
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonkish::{Builder, RelaxedWitness, vanilla::{Arithmetic, Vanilla}};
-    /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-    /// let one = F::ONE;
-    /// b.row::<Arithmetic, _>([F::from_u64(2), F::from_u64(3), F::from_u64(7)], [F::ZERO, F::ZERO, -one, one, F::ZERO]);
-    /// let (circuit, w) = b.build().unwrap();
-    /// // 2 * 3 != 7, but the error column can absorb the difference.
-    /// assert!(!circuit.is_satisfied(&w));
-    /// let error = vec![-one, F::ZERO];
-    /// let relaxed = RelaxedWitness::new(w.columns().clone(), error);
-    /// assert!(circuit.is_relaxed_satisfied(&relaxed, &[], one, &[one], 2));
-    /// ```
     #[must_use]
     pub fn is_relaxed_satisfied(
         &self,

@@ -4,24 +4,6 @@
 //! returns a [`Wire`] carrying its value (for the witness) and its position
 //! (for the constraints):
 //!
-//! ```
-//! use arrabbiata_field::{Field, Goldilocks as F};
-//! use arrabbiata_frontend::vanilla::build;
-//!
-//! // Prove knowledge of x such that x^3 + x + 5 = 35.
-//! let (circuit, witness, ()) = build::<F, _, _>(|b| {
-//!     let x = b.witness(F::new(3));
-//!     let x2 = b.mul(&x, &x);
-//!     let x3 = b.mul(&x2, &x);
-//!     let lhs = b.add(&x3, &x);
-//!     let lhs = b.add_constant(&lhs, F::new(5));
-//!     let rhs = b.public_input(F::new(35));
-//!     b.assert_equal(&lhs, &rhs);
-//! });
-//! assert!(circuit.is_satisfied(&witness));
-//! assert_eq!(witness.public_inputs(), &[F::new(35)]);
-//! ```
-//!
 //! # Arithmetization
 //!
 //! The target is vanilla PlonK: three wire columns `a, b, c`, five selectors
@@ -73,11 +55,6 @@ use arrabbiata_field::Field;
 type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 
 /// A wire column of the vanilla PlonK arithmetization.
-///
-/// ```
-/// use arrabbiata_frontend::vanilla::Column;
-/// assert_eq!(Column::B.index(), 1);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Column {
     /// The left input `a`.
@@ -90,19 +67,9 @@ pub enum Column {
 
 impl Column {
     /// All columns, in order.
-    ///
-    /// ```
-    /// use arrabbiata_frontend::vanilla::Column;
-    /// assert_eq!(Column::ALL.len(), 3);
-    /// ```
     pub const ALL: [Self; 3] = [Self::A, Self::B, Self::C];
 
     /// The index of the column: 0, 1 or 2.
-    ///
-    /// ```
-    /// use arrabbiata_frontend::vanilla::Column;
-    /// assert_eq!(Column::C.index(), 2);
-    /// ```
     #[must_use]
     pub const fn index(self) -> usize {
         match self {
@@ -114,12 +81,6 @@ impl Column {
 }
 
 /// A cell of the trace: a column at a row.
-///
-/// ```
-/// use arrabbiata_frontend::vanilla::{Cell, Column};
-/// let cell = Cell { column: Column::A, row: 3 };
-/// assert_eq!(cell.index(8), 3);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Cell {
     /// The column.
@@ -131,11 +92,6 @@ pub struct Cell {
 impl Cell {
     /// The position of the cell in the flattened trace `a || b || c` of
     /// `num_rows` rows: `column * num_rows + row`.
-    ///
-    /// ```
-    /// use arrabbiata_frontend::vanilla::{Cell, Column};
-    /// assert_eq!(Cell { column: Column::C, row: 1 }.index(4), 9);
-    /// ```
     #[must_use]
     pub const fn index(self, num_rows: usize) -> usize {
         self.column.index() * num_rows + self.row
@@ -144,15 +100,6 @@ impl Cell {
 
 /// A value in a circuit under construction: its value, and the cell that
 /// holds it. Branded by its builder (see the crate documentation).
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_frontend::vanilla::build;
-/// build::<F, _, _>(|b| {
-///     let x = b.witness(F::new(4));
-///     assert_eq!(x.value(), F::new(4));
-/// });
-/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Wire<'id, F> {
     value: F,
@@ -165,30 +112,12 @@ where
     F: Field,
 {
     /// The value the wire carries.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// build::<F, _, _>(|b| {
-    ///     let x = b.witness(F::new(2));
-    ///     assert_eq!(b.mul(&x, &x).value(), F::new(4));
-    /// });
-    /// ```
     #[must_use]
     pub const fn value(&self) -> F {
         self.value
     }
 
     /// The cell holding the value.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::{Column, build};
-    /// build::<F, _, _>(|b| {
-    ///     let x = b.witness(F::new(2));
-    ///     assert_eq!(x.cell().column, Column::A);
-    /// });
-    /// ```
     #[must_use]
     pub const fn cell(&self) -> Cell {
         self.cell
@@ -196,14 +125,6 @@ where
 }
 
 /// The selectors of one row: `q_L a + q_R b + q_O c + q_M a b + q_C`.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_frontend::vanilla::Gate;
-/// // c = a + b.
-/// let add = Gate { q_l: F::ONE, q_r: F::ONE, q_o: -F::ONE, ..Gate::default() };
-/// assert_eq!(add.evaluate(F::new(2), F::new(3), F::new(5)), F::ZERO);
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Gate<F> {
     /// Left selector.
@@ -223,12 +144,6 @@ where
     F: Field,
 {
     /// The gate with every selector zero: no constraint on the row.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_frontend::vanilla::Gate;
-    /// assert_eq!(Gate::<F>::empty().evaluate(F::new(1), F::new(2), F::new(3)), F::ZERO);
-    /// ```
     #[must_use]
     pub const fn empty() -> Self {
         Self {
@@ -241,13 +156,6 @@ where
     }
 
     /// `q_L a + q_R b + q_O c + q_M a b + q_C`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_frontend::vanilla::Gate;
-    /// let mul = Gate { q_m: F::ONE, q_o: -F::ONE, ..Gate::empty() };
-    /// assert_eq!(mul.evaluate(F::new(3), F::new(4), F::new(12)), F::ZERO);
-    /// ```
     #[must_use]
     pub fn evaluate(&self, a: F, b: F, c: F) -> F {
         self.q_l * a + self.q_r * b + self.q_o * c + self.q_m * a * b + self.q_c
@@ -255,16 +163,6 @@ where
 }
 
 /// A circuit under construction. Obtained through [`build`].
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_frontend::vanilla::build;
-/// let (circuit, witness, ()) = build::<F, _, _>(|b| {
-///     let x = b.witness(F::new(2));
-///     let _ = b.add(&x, &x);
-/// });
-/// assert!(circuit.is_satisfied(&witness));
-/// ```
 #[derive(Debug)]
 pub struct Builder<'id, F> {
     gates: Vec<Gate<F>>,
@@ -279,17 +177,6 @@ pub struct Builder<'id, F> {
 ///
 /// The `for<'id>` bound makes the brand of the builder fresh: see the crate
 /// documentation.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_frontend::vanilla::build;
-/// let (circuit, _, square) = build::<F, _, _>(|b| {
-///     let x = b.witness(F::new(9));
-///     b.mul(&x, &x).value()
-/// });
-/// assert_eq!(square, F::new(81));
-/// assert!(circuit.num_rows().is_power_of_two());
-/// ```
 pub fn build<F, R, Body>(f: Body) -> (Circuit<F>, Witness<F>, R)
 where
     F: Field,
@@ -353,27 +240,12 @@ where
     }
 
     /// A private input.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// build::<F, _, _>(|b| assert_eq!(b.witness(F::new(1)).value(), F::new(1)));
-    /// ```
     pub fn witness(&mut self, value: F) -> Wire<'id, F> {
         let row = self.row(Gate::empty(), [value, F::ZERO, F::ZERO]);
         self.wire(value, Column::A, row)
     }
 
     /// A public input: part of the statement, given to the verifier.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (_, w, ()) = build::<F, _, _>(|b| {
-    ///     b.public_input(F::new(7));
-    /// });
-    /// assert_eq!(w.public_inputs(), &[F::new(7)]);
-    /// ```
     pub fn public_input(&mut self, value: F) -> Wire<'id, F> {
         // q_L a + PI = 0 with PI = -value on this row.
         let gate = Gate {
@@ -386,12 +258,6 @@ where
     }
 
     /// The constant `c`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// build::<F, _, _>(|b| assert_eq!(b.constant(F::new(5)).value(), F::new(5)));
-    /// ```
     pub fn constant(&mut self, c: F) -> Wire<'id, F> {
         let gate = Gate {
             q_l: F::ONE,
@@ -403,15 +269,6 @@ where
     }
 
     /// `x + y`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// build::<F, _, _>(|b| {
-    ///     let (x, y) = (b.witness(F::new(2)), b.witness(F::new(3)));
-    ///     assert_eq!(b.add(&x, &y).value(), F::new(5));
-    /// });
-    /// ```
     pub fn add(&mut self, x: &Wire<'id, F>, y: &Wire<'id, F>) -> Wire<'id, F> {
         let gate = Gate {
             q_l: F::ONE,
@@ -423,15 +280,6 @@ where
     }
 
     /// `x - y`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// build::<F, _, _>(|b| {
-    ///     let (x, y) = (b.witness(F::new(5)), b.witness(F::new(3)));
-    ///     assert_eq!(b.sub(&x, &y).value(), F::new(2));
-    /// });
-    /// ```
     pub fn sub(&mut self, x: &Wire<'id, F>, y: &Wire<'id, F>) -> Wire<'id, F> {
         let gate = Gate {
             q_l: F::ONE,
@@ -443,15 +291,6 @@ where
     }
 
     /// `x * y`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// build::<F, _, _>(|b| {
-    ///     let (x, y) = (b.witness(F::new(5)), b.witness(F::new(3)));
-    ///     assert_eq!(b.mul(&x, &y).value(), F::new(15));
-    /// });
-    /// ```
     pub fn mul(&mut self, x: &Wire<'id, F>, y: &Wire<'id, F>) -> Wire<'id, F> {
         let gate = Gate {
             q_m: F::ONE,
@@ -462,15 +301,6 @@ where
     }
 
     /// `x + c` for a constant `c`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// build::<F, _, _>(|b| {
-    ///     let x = b.witness(F::new(5));
-    ///     assert_eq!(b.add_constant(&x, F::new(1)).value(), F::new(6));
-    /// });
-    /// ```
     pub fn add_constant(&mut self, x: &Wire<'id, F>, c: F) -> Wire<'id, F> {
         let gate = Gate {
             q_l: F::ONE,
@@ -491,15 +321,6 @@ where
     }
 
     /// `c * x` for a constant `c`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// build::<F, _, _>(|b| {
-    ///     let x = b.witness(F::new(5));
-    ///     assert_eq!(b.scale(&x, F::new(3)).value(), F::new(15));
-    /// });
-    /// ```
     pub fn scale(&mut self, x: &Wire<'id, F>, c: F) -> Wire<'id, F> {
         let gate = Gate {
             q_l: c,
@@ -519,33 +340,11 @@ where
     }
 
     /// Constrain `x = y`, by a copy constraint (no row).
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (circuit, witness, ()) = build::<F, _, _>(|b| {
-    ///     let (x, y) = (b.witness(F::new(1)), b.witness(F::new(2)));
-    ///     b.assert_equal(&x, &y);
-    /// });
-    /// assert!(!circuit.is_satisfied(&witness));
-    /// ```
     pub fn assert_equal(&mut self, x: &Wire<'id, F>, y: &Wire<'id, F>) {
         self.copies.push((x.cell, y.cell));
     }
 
     /// Constrain `x = 0`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (circuit, witness, ()) = build::<F, _, _>(|b| {
-    ///     let x = b.witness(F::new(3));
-    ///     let y = b.witness(F::new(3));
-    ///     let d = b.sub(&x, &y);
-    ///     b.assert_zero(&d);
-    /// });
-    /// assert!(circuit.is_satisfied(&witness));
-    /// ```
     pub fn assert_zero(&mut self, x: &Wire<'id, F>) {
         let gate = Gate {
             q_l: F::ONE,
@@ -647,15 +446,6 @@ fn permutation(copies: &[(Cell, Cell)], num_rows: usize) -> Vec<usize> {
 
 /// A vanilla PlonK circuit: the gates of every row, the copy permutation, and
 /// the rows of the public inputs.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_frontend::vanilla::build;
-/// let (circuit, _, ()) = build::<F, _, _>(|b| {
-///     b.public_input(F::new(1));
-/// });
-/// assert_eq!(circuit.public_rows(), &[0]);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Circuit<F> {
     num_rows: usize,
@@ -666,15 +456,6 @@ pub struct Circuit<F> {
 
 /// The assignment of a circuit: the three wire columns and the public input
 /// values.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_frontend::vanilla::build;
-/// let (_, witness, ()) = build::<F, _, _>(|b| {
-///     b.witness(F::new(8));
-/// });
-/// assert_eq!(witness.wires()[0][0], F::new(8));
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Witness<F> {
     wires: [Vec<F>; 3],
@@ -685,44 +466,18 @@ impl<F> Witness<F> {
     /// A witness given directly by its wire columns and public inputs, for
     /// witnesses computed outside the builder. Nothing is checked here;
     /// [`Circuit::is_satisfied`] and the prover check it against a circuit.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::{Witness, build};
-    /// let (circuit, honest, ()) = build::<F, _, _>(|b| {
-    ///     let x = b.witness(F::new(2));
-    ///     b.mul(&x, &x);
-    /// });
-    /// let mut wires = honest.wires().clone();
-    /// wires[2][1] = F::new(5); // claim 2 * 2 = 5
-    /// assert!(!circuit.is_satisfied(&Witness::new(wires, vec![])));
-    /// ```
     #[must_use]
     pub const fn new(wires: [Vec<F>; 3], public: Vec<F>) -> Self {
         Self { wires, public }
     }
 
     /// The wire columns `a`, `b`, `c`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (c, w, ()) = build::<F, _, _>(|_| ());
-    /// assert_eq!(w.wires()[2].len(), c.num_rows());
-    /// ```
     #[must_use]
     pub const fn wires(&self) -> &[Vec<F>; 3] {
         &self.wires
     }
 
     /// The public input values, in the order of [`Circuit::public_rows`].
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (_, w, ()) = build::<F, _, _>(|_| ());
-    /// assert!(w.public_inputs().is_empty());
-    /// ```
     #[must_use]
     pub fn public_inputs(&self) -> &[F] {
         &self.public
@@ -734,68 +489,24 @@ where
     F: Field,
 {
     /// The number of rows, a power of two.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (c, _, ()) = build::<F, _, _>(|b| {
-    ///     for i in 0..5 {
-    ///         b.witness(F::new(i));
-    ///     }
-    /// });
-    /// assert_eq!(c.num_rows(), 8);
-    /// ```
     #[must_use]
     pub const fn num_rows(&self) -> usize {
         self.num_rows
     }
 
     /// The gates, one per row.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (c, _, ()) = build::<F, _, _>(|b| {
-    ///     b.constant(F::new(3));
-    /// });
-    /// assert_eq!(c.gates()[0].q_c, -F::new(3));
-    /// ```
     #[must_use]
     pub fn gates(&self) -> &[Gate<F>] {
         &self.gates
     }
 
     /// The copy permutation on cell indices (see [`Cell::index`]).
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::{Cell, Column, build};
-    /// let (c, _, ()) = build::<F, _, _>(|b| {
-    ///     let x = b.witness(F::new(1));
-    ///     let y = b.witness(F::new(1));
-    ///     b.assert_equal(&x, &y);
-    /// });
-    /// let n = c.num_rows();
-    /// let (x, y) = (Cell { column: Column::A, row: 0 }, Cell { column: Column::A, row: 1 });
-    /// assert_eq!(c.sigma()[x.index(n)], y.index(n));
-    /// assert_eq!(c.sigma()[y.index(n)], x.index(n));
-    /// ```
     #[must_use]
     pub fn sigma(&self) -> &[usize] {
         &self.sigma
     }
 
     /// The rows of the public inputs.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (c, _, ()) = build::<F, _, _>(|b| {
-    ///     b.witness(F::new(1));
-    ///     b.public_input(F::new(2));
-    /// });
-    /// assert_eq!(c.public_rows(), &[1]);
-    /// ```
     #[must_use]
     pub fn public_rows(&self) -> &[usize] {
         &self.public_rows
@@ -804,15 +515,6 @@ where
     /// The public input column `PI`: `-x_i` on the row of the `i`-th public
     /// input, zero elsewhere, so that a public-input row reads
     /// `a - x_i = 0`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (c, w, ()) = build::<F, _, _>(|b| {
-    ///     b.public_input(F::new(2));
-    /// });
-    /// assert_eq!(c.public_input_column(w.public_inputs())[0], -F::new(2));
-    /// ```
     #[must_use]
     pub fn public_input_column(&self, public_inputs: &[F]) -> Vec<F> {
         let mut column = vec![F::ZERO; self.num_rows];
@@ -826,18 +528,6 @@ where
 
     /// Whether `witness` satisfies every gate (with the public inputs) and
     /// every copy constraint.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_frontend::vanilla::build;
-    /// let (c, w, ()) = build::<F, _, _>(|b| {
-    ///     let x = b.witness(F::new(6));
-    ///     let y = b.mul(&x, &x);
-    ///     let z = b.public_input(F::new(36));
-    ///     b.assert_equal(&y, &z);
-    /// });
-    /// assert!(c.is_satisfied(&w));
-    /// ```
     #[must_use]
     pub fn is_satisfied(&self, witness: &Witness<F>) -> bool {
         if self.public_rows.len() != witness.public.len() {

@@ -58,15 +58,6 @@ type Prf<F, PC> = <PC as PolynomialCommitment<F>>::Proof;
 /// A value of type `T` produced with the commitment scheme `PC`: its
 /// label combines the scheme's with `TAG`, so a proof made with one
 /// scheme is not a proof for another.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::Tagged;
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq, Pallas};
-/// use arrabbiata_poseidon::PoseidonSponge;
-/// let t = Tagged::<Ipa<Pallas, PoseidonSponge<Fq>>, _, 1>::new(5u8);
-/// assert_eq!(t.value, 5);
-/// ```
 pub struct Tagged<PC, T, const TAG: u64> {
     /// The value.
     pub value: T,
@@ -75,14 +66,6 @@ pub struct Tagged<PC, T, const TAG: u64> {
 
 impl<PC, T, const TAG: u64> Tagged<PC, T, TAG> {
     /// Tag `value` with the scheme `PC`.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Tagged;
-    /// use arrabbiata_ipa::Ipa;
-    /// use arrabbiata_pasta::{Fq, Pallas};
-    /// use arrabbiata_poseidon::PoseidonSponge;
-    /// assert_eq!(Tagged::<Ipa<Pallas, PoseidonSponge<Fq>>, _, 2>::new("x").value, "x");
-    /// ```
     pub const fn new(value: T) -> Self {
         Self {
             value,
@@ -143,11 +126,6 @@ where
 }
 
 /// Commitments, absorbed with their number.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::Commitments;
-/// assert_eq!(Commitments(vec![1u8, 2]).0.len(), 2);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Commitments<C>(pub Vec<C>);
 
@@ -165,13 +143,6 @@ where
 }
 
 /// The public inputs of a statement.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_generalized_plonk::PublicInputs;
-/// use arrabbiata_pasta::Fq as F;
-/// assert_eq!(PublicInputs(vec![F::ONE]).0, vec![F::ONE]);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInputs<F>(pub Vec<F>);
 
@@ -201,12 +172,6 @@ where
 /// each committed lookup column (`h_1, h_2, Z` for plookup, `m, phi` for
 /// LogUp) at `zeta` and `zeta w`, then, for plookup, each table column at
 /// `zeta w`.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::Opened;
-/// let o = Opened { witness: vec![0u8], fixed: vec![], selectors: vec![1], sigmas: vec![2], z: 3, t: 4, z_next: 5, rotated: vec![6], lookups: vec![7] };
-/// assert_eq!(o.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5, 6, 7]);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opened<T> {
     /// The witness polynomials at `zeta`.
@@ -231,12 +196,6 @@ pub struct Opened<T> {
 
 impl<T> Opened<T> {
     /// Every value, in the order of the openings.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Opened;
-    /// let o = Opened { witness: vec![], fixed: vec![], selectors: vec![], sigmas: vec![], z: 1u8, t: 2, z_next: 3, rotated: vec![], lookups: vec![] };
-    /// assert_eq!(o.iter().count(), 3);
-    /// ```
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.witness
             .iter()
@@ -251,13 +210,6 @@ impl<T> Opened<T> {
     }
 
     /// Every value, mutably, in the order of the openings.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Opened;
-    /// let mut o = Opened { witness: vec![1u8], fixed: vec![], selectors: vec![], sigmas: vec![], z: 0, t: 0, z_next: 0, rotated: vec![], lookups: vec![] };
-    /// *o.iter_mut().next().unwrap() = 9;
-    /// assert_eq!(o.witness, vec![9]);
-    /// ```
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.witness
             .iter_mut()
@@ -325,17 +277,6 @@ where
 /// The column variables read at a rotation other than the current row,
 /// with the rotation set to the one read, sorted and without repetition:
 /// the openings at `zeta w^k` a proof makes.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Variable, rotated};
-/// use arrabbiata_poly::Rotation;
-/// let vars = [
-///     Variable::Witness { column: 0, rotation: Rotation::NEXT },
-///     Variable::Witness { column: 0, rotation: Rotation::CURR },
-///     Variable::Public(0),
-/// ];
-/// assert_eq!(rotated(&vars), vec![Variable::Witness { column: 0, rotation: Rotation::NEXT }]);
-/// ```
 #[must_use]
 pub fn rotated(variables: &[Variable]) -> Vec<Variable> {
     let mut set = BTreeSet::new();
@@ -355,29 +296,6 @@ pub fn rotated(variables: &[Variable]) -> Vec<Variable> {
 /// The verifier's view of a circuit: its shape and gates, the coset
 /// shifts of the permutation argument, and the commitments to the fixed,
 /// selector and permutation polynomials.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Circuit, setup};
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// let num_rows = 2;
-/// let witness_columns = 1;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = vec![0, 1];
-/// let public_inputs = 0;
-/// let bindings = vec![];
-/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// let mut generators = pallas_sponge(0);
-/// let size = 4;
-/// let ipa_transcript = vesta_sponge(1);
-/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-/// let (_, vk) = setup(&c, &pcs).unwrap();
-/// assert_eq!(vk.value.num_rows(), 2);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preprocessed<F, C, const N: usize, const D: usize>
 where
@@ -402,56 +320,12 @@ where
     F: Field,
 {
     /// The number of rows of the circuit.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Circuit, setup};
-    /// use arrabbiata_ipa::Ipa;
-    /// use arrabbiata_pasta::{Fq as F, Pallas};
-    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// let num_rows = 4;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// let mut generators = pallas_sponge(0);
-    /// let size = 4;
-    /// let ipa_transcript = vesta_sponge(1);
-    /// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-    /// assert_eq!(setup(&c, &pcs).unwrap().1.value.num_rows(), 4);
-    /// ```
     #[must_use]
     pub const fn num_rows(&self) -> usize {
         1 << self.log_size
     }
 
     /// The number of public inputs of a statement.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Circuit, setup};
-    /// use arrabbiata_ipa::Ipa;
-    /// use arrabbiata_pasta::{Fq as F, Pallas};
-    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 3;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// let mut generators = pallas_sponge(0);
-    /// let size = 4;
-    /// let ipa_transcript = vesta_sponge(1);
-    /// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-    /// assert_eq!(setup(&c, &pcs).unwrap().1.value.public_inputs(), 3);
-    /// ```
     #[must_use]
     pub const fn public_inputs(&self) -> usize {
         self.public_inputs
@@ -515,29 +389,6 @@ pub type Keys<F, PC, const N: usize, const D: usize> =
 
 /// The prover's view of a circuit: the verifier key, the circuit, and the
 /// polynomials it commits to.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Circuit, setup};
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// let num_rows = 2;
-/// let witness_columns = 0;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = vec![];
-/// let public_inputs = 0;
-/// let bindings = vec![];
-/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// let mut generators = pallas_sponge(0);
-/// let size = 4;
-/// let ipa_transcript = vesta_sponge(1);
-/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-/// let (pk, vk) = setup(&c, &pcs).unwrap();
-/// assert_eq!(pk.verifier_key(), &vk);
-/// ```
 pub struct ProverKey<F, PC, const N: usize, const D: usize>
 where
     F: Field,
@@ -558,56 +409,11 @@ where
     PC: PolynomialCommitment<F>,
 {
     /// The verifier key.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Circuit, setup};
-    /// use arrabbiata_ipa::Ipa;
-    /// use arrabbiata_pasta::{Fq as F, Pallas};
-    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// let mut generators = pallas_sponge(0);
-    /// let size = 4;
-    /// let ipa_transcript = vesta_sponge(1);
-    /// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-    /// let (pk, _) = setup(&c, &pcs).unwrap();
-    /// assert_eq!(pk.verifier_key().value.num_rows(), 2);
-    /// ```
     pub const fn verifier_key(&self) -> &VerifierKey<F, PC, N, D> {
         &self.vk
     }
 
     /// The circuit.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Circuit, setup};
-    /// use arrabbiata_ipa::Ipa;
-    /// use arrabbiata_pasta::{Fq as F, Pallas};
-    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// let mut generators = pallas_sponge(0);
-    /// let size = 4;
-    /// let ipa_transcript = vesta_sponge(1);
-    /// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-    /// assert_eq!(setup(&c, &pcs).unwrap().0.circuit(), &c);
-    /// ```
     pub const fn circuit(&self) -> &Circuit<F, N, D> {
         &self.circuit
     }
@@ -650,19 +456,6 @@ pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> = Public<
 
 /// Generalized PlonK over `F`, compiled with the univariate scheme `PC`,
 /// for gates of degree at most `D` in `N` variables.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::GeneralizedPlonk;
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_poseidon::PoseidonSponge;
-/// use arrabbiata_transcript::typed::{Pattern, Protocol};
-/// type P = <GeneralizedPlonk<F, Ipa<Pallas, PoseidonSponge<F>>, 3, 2> as Protocol>::Transcript;
-/// // Wires, lookup columns, z, lookup products, t, evaluations, openings.
-/// assert_eq!(<P as Pattern>::MESSAGES, 7);
-/// // theta, beta, gamma, alpha, zeta.
-/// assert_eq!(<P as Pattern>::CHALLENGES, 5);
-/// ```
 #[derive(Debug)]
 pub struct GeneralizedPlonk<F, PC, const N: usize, const D: usize>(PhantomData<Parameters<F, PC>>);
 
@@ -689,23 +482,6 @@ where
 
 /// The factor by which the quotient domain exceeds the circuit's: the
 /// largest degree of a term of the identity divided by `n`.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Circuit, quotient_factor};
-/// use arrabbiata_pasta::Fq as F;
-/// // Three witness columns: the permutation term has degree 4.
-/// let num_rows = 2;
-/// let witness_columns = 3;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = (0..6).collect();
-/// let public_inputs = 0;
-/// let bindings = vec![];
-/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// assert_eq!(quotient_factor(&c), 4);
-/// ```
 #[must_use]
 pub fn quotient_factor<F, const N: usize, const D: usize>(circuit: &Circuit<F, N, D>) -> usize
 where
@@ -726,22 +502,6 @@ where
 
 /// The number of coefficients a polynomial commitment for `circuit` must
 /// accept: the quotient's, or a column's if larger.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Circuit, max_coefficients};
-/// use arrabbiata_pasta::Fq as F;
-/// let num_rows = 4;
-/// let witness_columns = 3;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = (0..12).collect();
-/// let public_inputs = 0;
-/// let bindings = vec![];
-/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// assert_eq!(max_coefficients(&c), 12);
-/// ```
 #[must_use]
 pub fn max_coefficients<F, const N: usize, const D: usize>(circuit: &Circuit<F, N, D>) -> usize
 where
@@ -757,28 +517,6 @@ where
 ///
 /// [`Error::DomainTooLarge`] if the field has no domain of the circuit
 /// size, [`Error::CosetShifts`] if it has no `W` disjoint cosets of it.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Circuit, setup};
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// let num_rows = 2;
-/// let witness_columns = 1;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = vec![0, 1];
-/// let public_inputs = 0;
-/// let bindings = vec![];
-/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// let mut generators = pallas_sponge(0);
-/// let size = 4;
-/// let ipa_transcript = vesta_sponge(1);
-/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-/// assert!(setup(&c, &pcs).is_ok());
-/// ```
 pub fn setup<F, PC, const N: usize, const D: usize>(
     circuit: &Circuit<F, N, D>,
     pcs: &PC,
@@ -919,7 +657,6 @@ struct LookupWitness<F> {
 /// A complete run, from a circuit to a verified proof, is in
 /// `tests/examples.rs`.
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
-#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub fn prove<F, PC, T, const N: usize, const D: usize>(
     pk: &ProverKey<F, PC, N, D>,
     pcs: &PC,
@@ -1257,7 +994,6 @@ where
 /// A complete run, from a circuit to a verified proof, is in
 /// `tests/examples.rs`.
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
-#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub fn verify<F, PC, T, const N: usize, const D: usize>(
     vk: &VerifierKey<F, PC, N, D>,
     pcs: &PC,

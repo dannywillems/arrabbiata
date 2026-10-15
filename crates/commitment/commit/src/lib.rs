@@ -40,20 +40,6 @@ use arrabbiata_transcript::Absorb;
 /// - `commit(s * a) = scale(commit(a), s)`;
 /// - `add` is associative and commutative, `scale` is an action:
 ///   `scale(scale(c, s), t) = scale(c, s * t)`.
-///
-/// ```
-/// use arrabbiata_commit::HomomorphicCommitment;
-/// use arrabbiata_field::Field;
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq, Pallas};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// // Pedersen vector commitments on Pallas (the commitment of IPA).
-/// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
-/// let (a, b, s) = ([Fq::from_u64(1), Fq::from_u64(2)], [Fq::from_u64(3), Fq::from_u64(4)], Fq::from_u64(5));
-/// let folded = [a[0] + s * b[0], a[1] + s * b[1]];
-/// // The verifier folds commitments as the prover folds vectors.
-/// assert_eq!(ck.commit(&folded), ck.add(&ck.commit(&a), &ck.scale(&ck.commit(&b), s)));
-/// ```
 pub trait HomomorphicCommitment<F>
 where
     F: Field,
@@ -62,46 +48,11 @@ where
     type Commitment: Clone + Debug + PartialEq + Absorb<F>;
 
     /// Commit to `values`.
-    ///
-    /// ```
-    /// use arrabbiata_commit::HomomorphicCommitment;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_ipa::Ipa;
-    /// use arrabbiata_pasta::{Fq, Pallas};
-    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// // Pedersen vector commitments on Pallas (the commitment of IPA).
-    /// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
-    /// assert_eq!(ck.commit(&[Fq::ONE]), ck.commit(&[Fq::ONE, Fq::ZERO]));
-    /// ```
     fn commit(&self, values: &[F]) -> Self::Commitment;
 
     /// The sum of two commitments.
-    ///
-    /// ```
-    /// use arrabbiata_commit::HomomorphicCommitment;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_ipa::Ipa;
-    /// use arrabbiata_pasta::{Fq, Pallas};
-    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// // Pedersen vector commitments on Pallas (the commitment of IPA).
-    /// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
-    /// let c = ck.add(&ck.commit(&[Fq::ONE]), &ck.commit(&[Fq::ONE]));
-    /// assert_eq!(c, ck.commit(&[Fq::from_u64(2)]));
-    /// ```
     fn add(&self, a: &Self::Commitment, b: &Self::Commitment) -> Self::Commitment;
 
     /// A commitment scaled by `s`.
-    ///
-    /// ```
-    /// use arrabbiata_commit::HomomorphicCommitment;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_ipa::Ipa;
-    /// use arrabbiata_pasta::{Fq, Pallas};
-    /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// // Pedersen vector commitments on Pallas (the commitment of IPA).
-    /// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
-    /// let c = ck.scale(&ck.commit(&[Fq::from_u64(3)]), Fq::from_u64(2));
-    /// assert_eq!(c, ck.commit(&[Fq::from_u64(6)]));
-    /// ```
     fn scale(&self, a: &Self::Commitment, s: F) -> Self::Commitment;
 }

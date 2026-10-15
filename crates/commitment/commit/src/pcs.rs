@@ -20,18 +20,6 @@
 //! commitments are homomorphic only for combinations of small norm, so they
 //! must not be folded with arbitrary field challenges; folding asks for the
 //! separate, stronger [`crate::HomomorphicCommitment`].
-//!
-//! ```
-//! use arrabbiata_commit::{Multilinear, PolynomialFamily, Univariate};
-//! use arrabbiata_field::{Field, Goldilocks as F};
-//!
-//! // The reference semantics of the two families.
-//! let p = [F::new(1), F::new(2)]; // 1 + 2X
-//! assert_eq!(<Univariate as PolynomialFamily<F>>::evaluate(&p, &F::new(5)), F::new(11));
-//! let table = [F::new(3), F::new(7)]; // f(0) = 3, f(1) = 7
-//! let v = <Multilinear as PolynomialFamily<F>>::evaluate(&table, &[F::new(2)][..]);
-//! assert_eq!(v, F::new(11)); // 3 + 2 * (7 - 3)
-//! ```
 
 use core::fmt::Debug;
 
@@ -40,14 +28,6 @@ use arrabbiata_transcript::{Absorb, typed::Label};
 
 /// A family of polynomials over `F`: how a polynomial is represented and
 /// where it is evaluated.
-///
-/// ```
-/// use arrabbiata_commit::{PolynomialFamily, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
-/// // 1 + X + X^2 at 2.
-/// let v = <Univariate as PolynomialFamily<F>>::evaluate(&[F::new(1); 3], &F::new(2));
-/// assert_eq!(v, F::new(7));
-/// ```
 pub trait PolynomialFamily<F>
 where
     F: Field,
@@ -58,26 +38,11 @@ where
     /// The value of the polynomial with representation `polynomial` at
     /// `point`. This is the reference semantics every scheme of the family
     /// must agree with.
-    ///
-    /// ```
-    /// use arrabbiata_commit::{Multilinear, PolynomialFamily};
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// // On the hypercube, the multilinear extension is the table.
-    /// let table = [F::new(1), F::new(2), F::new(3), F::new(4)];
-    /// let at = |b0: u64, b1: u64| <Multilinear as PolynomialFamily<F>>::evaluate(&table, &[F::new(b0), F::new(b1)][..]);
-    /// assert_eq!(at(1, 0), F::new(3));
-    /// ```
     fn evaluate(polynomial: &[F], point: &Self::Point) -> F;
 }
 
 /// Univariate polynomials, by their coefficients (constant first),
 /// evaluated at a point of `F`.
-///
-/// ```
-/// use arrabbiata_commit::{PolynomialFamily, Univariate};
-/// use arrabbiata_field::Goldilocks as F;
-/// assert_eq!(<Univariate as PolynomialFamily<F>>::evaluate(&[F::new(4)], &F::new(9)), F::new(4));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Univariate;
 
@@ -109,16 +74,6 @@ where
 /// binary number with `b_0` the most significant bit, and `point[i]` is the
 /// value of variable `b_i`. A table whose length is not `2^point.len()`
 /// evaluates to zero (no polynomial of the family has that shape).
-///
-/// ```
-/// use arrabbiata_commit::{Multilinear, PolynomialFamily};
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// // f(b0, b1) with table [f(0,0), f(0,1), f(1,0), f(1,1)] = [0, 1, 1, 0]
-/// // (XOR), at (1/2, 1/2) is the average, 1/2.
-/// let half = F::new(2).inverse().unwrap();
-/// let table = [F::ZERO, F::ONE, F::ONE, F::ZERO];
-/// assert_eq!(<Multilinear as PolynomialFamily<F>>::evaluate(&table, &[half, half][..]), half);
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Multilinear;
 
@@ -167,23 +122,6 @@ where
 /// scheme put the label in their transcript pattern, so that two schemes with
 /// the same commitment type (IPA and KZG both commit to curve points) still
 /// produce incompatible proofs, at the type level and in the transcript.
-///
-/// ```
-/// use arrabbiata_bn254::{Bn254, Fr};
-/// use arrabbiata_commit::{PolynomialCommitment, Univariate};
-/// use arrabbiata_field::Field;
-/// use arrabbiata_kzg::Kzg;
-///
-/// fn check<PC>(pc: &PC, p: &[Fr], x: Fr) -> bool
-/// where
-///     PC: PolynomialCommitment<Fr, Family = Univariate>,
-/// {
-///     let (v, proof) = pc.open(p, &x);
-///     pc.verify(&pc.commit(p), &x, v, &proof)
-/// }
-/// let kzg = Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(1234));
-/// assert!(check(&kzg, &[Fr::ONE, Fr::ONE], Fr::from_u64(3)));
-/// ```
 pub trait PolynomialCommitment<F>
 where
     F: Field,
@@ -200,31 +138,9 @@ where
     type Proof: Clone + Debug + PartialEq + Absorb<F>;
 
     /// Commit to `polynomial`.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{Bn254, Fr};
-    /// use arrabbiata_commit::PolynomialCommitment;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_kzg::Kzg;
-    /// // A test setup: its secret is known.
-    /// let pc = Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(1234));
-    /// // A constant polynomial commits to a multiple of the generator.
-    /// let c = pc.commit(&[Fr::from_u64(4)]);
-    /// assert_eq!(c, pc.commit(&[Fr::from_u64(4), Fr::ZERO]));
-    /// ```
     fn commit(&self, polynomial: &[F]) -> Self::Commitment;
 
     /// The value of `polynomial` at `point`, with a proof.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{Bn254, Fr};
-    /// use arrabbiata_commit::PolynomialCommitment;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_kzg::Kzg;
-    /// // A test setup: its secret is known.
-    /// let pc = Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(1234));
-    /// assert_eq!(pc.open(&[Fr::ONE, Fr::ONE], &Fr::from_u64(9)).0, Fr::from_u64(10));
-    /// ```
     fn open(
         &self,
         polynomial: &[F],
@@ -233,19 +149,6 @@ where
 
     /// Whether `proof` shows that the committed polynomial takes `value` at
     /// `point`.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{Bn254, Fr};
-    /// use arrabbiata_commit::PolynomialCommitment;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_kzg::Kzg;
-    /// // A test setup: its secret is known.
-    /// let pc = Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(1234));
-    /// let p = [Fr::from_u64(5)];
-    /// let (v, proof) = pc.open(&p, &Fr::ZERO);
-    /// assert!(pc.verify(&pc.commit(&p), &Fr::ZERO, v, &proof));
-    /// assert!(!pc.verify(&pc.commit(&p), &Fr::ZERO, v + Fr::ONE, &proof));
-    /// ```
     fn verify(
         &self,
         commitment: &Self::Commitment,

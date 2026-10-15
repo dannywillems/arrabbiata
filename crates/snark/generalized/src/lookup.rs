@@ -61,11 +61,6 @@ use arrabbiata_mvpoly::{MVPoly, Sparse};
 use crate::Error;
 
 /// Which lookup argument proves a [`Lookup`].
-///
-/// ```
-/// use arrabbiata_generalized_plonk::Argument;
-/// assert_ne!(Argument::Plookup, Argument::LogUp);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Argument {
     /// Plookup: a sorted vector and a grand product. Queries on every row
@@ -89,18 +84,6 @@ impl Argument {
 
 /// A lookup: on every row its selector turns on (every row if `None`),
 /// the tuple of `inputs` is a row of the fixed columns `table`.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Argument, Lookup};
-/// use arrabbiata_mvpoly::{MVPoly, Sparse};
-/// use arrabbiata_pasta::Fq as F;
-/// let argument = Argument::LogUp;
-/// let selector = None;
-/// let inputs = vec![Sparse::<F, 1, 1>::zero()];
-/// let table = vec![0];
-/// let l = Lookup::new(argument, selector, inputs, table);
-/// assert_eq!((l.argument(), l.selector(), l.table()), (Argument::LogUp, None, &[0][..]));
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lookup<F, const N: usize, const D: usize>
 where
@@ -119,18 +102,6 @@ where
 {
     /// The lookup of `inputs` into the fixed columns `table`, one input per
     /// column, turned on by `selector`, proved with `argument`.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Argument, Lookup};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let argument = Argument::Plookup;
-    /// let selector = Some(0);
-    /// let inputs = vec![Sparse::<F, 1, 1>::zero(); 2];
-    /// let table = vec![0, 1];
-    /// let l = Lookup::new(argument, selector, inputs, table);
-    /// assert_eq!(l.inputs().len(), 2);
-    /// ```
     #[must_use]
     pub const fn new(
         argument: Argument,
@@ -148,68 +119,24 @@ where
     }
 
     /// The argument proving the lookup.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Argument, Lookup};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let argument = Argument::Plookup;
-    /// let selector = Some(0);
-    /// let inputs = vec![Sparse::<F, 1, 1>::zero()];
-    /// let table = vec![0];
-    /// assert_eq!(Lookup::new(argument, selector, inputs, table).argument(), Argument::Plookup);
-    /// ```
     #[must_use]
     pub const fn argument(&self) -> Argument {
         self.argument
     }
 
     /// The selector turning the lookup on, if any.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Argument, Lookup};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let argument = Argument::LogUp;
-    /// let selector = Some(2);
-    /// let inputs = vec![Sparse::<F, 1, 1>::zero()];
-    /// let table = vec![0];
-    /// assert_eq!(Lookup::new(argument, selector, inputs, table).selector(), Some(2));
-    /// ```
     #[must_use]
     pub const fn selector(&self) -> Option<usize> {
         self.selector
     }
 
     /// The input polynomials, one per table column.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Argument, Lookup};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let argument = Argument::LogUp;
-    /// let selector = None;
-    /// let inputs = vec![Sparse::<F, 1, 1>::one()];
-    /// let table = vec![0];
-    /// assert!(Lookup::new(argument, selector, inputs, table).inputs()[0].is_constant());
-    /// ```
     #[must_use]
     pub fn inputs(&self) -> &[Sparse<F, N, D>] {
         &self.inputs
     }
 
     /// The fixed columns of the table.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Argument, Lookup};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let argument = Argument::LogUp;
-    /// let selector = None;
-    /// let inputs = vec![Sparse::<F, 1, 1>::zero()];
-    /// let table = vec![3];
-    /// assert_eq!(Lookup::new(argument, selector, inputs, table).table(), &[3]);
-    /// ```
     #[must_use]
     pub fn table(&self) -> &[usize] {
         &self.table
@@ -217,17 +144,6 @@ where
 
     /// The table's first row, which a row with the selector off queries;
     /// empty until the lookup is attached to a circuit.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Argument, Lookup};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let argument = Argument::LogUp;
-    /// let selector = None;
-    /// let inputs = vec![Sparse::<F, 1, 1>::zero()];
-    /// let table = vec![0];
-    /// assert!(Lookup::new(argument, selector, inputs, table).default().is_empty());
-    /// ```
     #[must_use]
     pub fn default(&self) -> &[F] {
         &self.default

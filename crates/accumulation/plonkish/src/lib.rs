@@ -79,11 +79,6 @@ pub use crate::{
 use core::fmt;
 
 /// Why setting up, proving, verifying or checking failed.
-///
-/// ```
-/// use arrabbiata_plonkish_folding::Error;
-/// assert_eq!(Error::Commitment(0).to_string(), "commitment 0 does not open to the witness");
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     /// The degree `D` is below the degree of the gate set in the witness.

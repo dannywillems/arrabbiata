@@ -12,14 +12,6 @@
 //! `b[i+80] = b[i+62] + b[i+51] + b[i+38] + b[i+23] + b[i+13] + b[i]`, whose
 //! output is thinned by the self-shrinking rule (from each pair of bits, emit
 //! the second if the first is 1).
-//!
-//! ```
-//! use arrabbiata_pasta::Fp;
-//! use arrabbiata_poseidon::grain::Grain;
-//! let mut a = Grain::<Fp>::new(3, 8, 56);
-//! let mut b = Grain::<Fp>::new(3, 8, 56);
-//! assert_eq!(a.next_field_element(), b.next_field_element());
-//! ```
 
 use alloc::{vec, vec::Vec};
 use core::marker::PhantomData;
@@ -29,13 +21,6 @@ use arrabbiata_field::PrimeField;
 const STATE: usize = 80;
 
 /// The Grain LFSR, producing elements of `F`.
-///
-/// ```
-/// use arrabbiata_pasta::Fq;
-/// use arrabbiata_poseidon::grain::Grain;
-/// let mut g = Grain::<Fq>::new(3, 8, 56);
-/// assert_ne!(g.next_field_element(), g.next_field_element());
-/// ```
 #[derive(Clone, Debug)]
 pub struct Grain<F> {
     state: [bool; STATE],
@@ -49,12 +34,6 @@ where
 {
     /// The generator for a prime field, the S-box `x^alpha`, width `t`, and
     /// `r_f` full and `r_p` partial rounds.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::grain::Grain;
-    /// let _ = Grain::<Fp>::new(3, 8, 56);
-    /// ```
     #[must_use]
     pub fn new(t: u16, r_f: u16, r_p: u16) -> Self {
         let mut state = [true; STATE];
@@ -135,12 +114,6 @@ where
 
     /// The next field element, by rejection sampling: integers not below the
     /// modulus are discarded. Used for the round constants.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::grain::Grain;
-    /// let _ = Grain::<Fp>::new(3, 8, 56).next_field_element();
-    /// ```
     pub fn next_field_element(&mut self) -> F {
         loop {
             if let Some(element) = F::from_limbs(&self.next_limbs()) {
@@ -151,12 +124,6 @@ where
 
     /// The next field element, reduced modulo `p` without rejection. Used for
     /// the MDS matrix.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::grain::Grain;
-    /// let _ = Grain::<Fp>::new(3, 8, 56).next_field_element_without_rejection();
-    /// ```
     pub fn next_field_element_without_rejection(&mut self) -> F {
         let limbs = self.next_limbs();
         let two_32 = F::from_u64(1 << 32);

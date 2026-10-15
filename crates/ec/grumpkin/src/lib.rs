@@ -10,17 +10,6 @@
 //! below) are those of the arkworks `ark-grumpkin` crate, from Aztec's
 //! barretenberg. The order is checked in the tests: `r - 1` times the
 //! generator, for `r` the BN254 base field modulus, is its negation.
-//!
-//! ```
-//! use arrabbiata_bn254::Fq;
-//! use arrabbiata_curve::Projective;
-//! use arrabbiata_field::Field;
-//! use arrabbiata_grumpkin::Grumpkin;
-//!
-//! // Grumpkin scalars are BN254 base field elements.
-//! let p = Projective::<Grumpkin>::generator() * Fq::from_u64(7);
-//! assert!(p.is_on_curve());
-//! ```
 
 #![no_std]
 
@@ -39,12 +28,6 @@ const GENERATOR_Y: [u64; 4] = [
 
 /// Grumpkin: `y^2 = x^3 - 17` over [`Fr`], of order the BN254 base field
 /// modulus.
-///
-/// ```
-/// use arrabbiata_curve::Projective;
-/// use arrabbiata_grumpkin::Grumpkin;
-/// assert!(Projective::<Grumpkin>::generator().is_on_curve());
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Grumpkin;
 

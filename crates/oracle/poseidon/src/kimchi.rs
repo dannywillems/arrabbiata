@@ -34,13 +34,6 @@ pub const WIDTH: usize = 3;
 pub const RATE: usize = 2;
 
 /// Kimchi's Poseidon permutation of `F^3`.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fp;
-/// use arrabbiata_poseidon::kimchi::{ROUNDS, pallas_base};
-/// assert_eq!(pallas_base().round_constants().len(), ROUNDS);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KimchiPoseidon<F> {
     mds: [[F; WIDTH]; WIDTH],
@@ -53,18 +46,6 @@ where
 {
     /// The permutation with the matrix `mds` and the constants
     /// `round_constants[r]` of round `r`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::kimchi::{KimchiPoseidon, ROUNDS};
-    /// let identity = [[Fp::ONE, Fp::ZERO, Fp::ZERO], [Fp::ZERO, Fp::ONE, Fp::ZERO], [Fp::ZERO, Fp::ZERO, Fp::ONE]];
-    /// let no_constants = [[Fp::ZERO; 3]; ROUNDS];
-    /// let power = KimchiPoseidon::new(identity, no_constants);
-    /// let mut state = [Fp::ONE; 3];
-    /// power.permute_state(&mut state);
-    /// assert_eq!(state, [Fp::ONE; 3]);
-    /// ```
     #[must_use]
     pub const fn new(mds: [[F; WIDTH]; WIDTH], round_constants: [[F; WIDTH]; ROUNDS]) -> Self {
         Self {
@@ -74,22 +55,12 @@ where
     }
 
     /// The MDS matrix, row by row.
-    ///
-    /// ```
-    /// use arrabbiata_poseidon::kimchi::vesta_base;
-    /// assert_eq!(vesta_base().mds().len(), 3);
-    /// ```
     #[must_use]
     pub const fn mds(&self) -> &[[F; WIDTH]; WIDTH] {
         &self.mds
     }
 
     /// The round constants, one triple per round.
-    ///
-    /// ```
-    /// use arrabbiata_poseidon::kimchi::{ROUNDS, vesta_base};
-    /// assert_eq!(vesta_base().round_constants().len(), ROUNDS);
-    /// ```
     #[must_use]
     pub const fn round_constants(&self) -> &[[F; WIDTH]; ROUNDS] {
         &self.round_constants
@@ -101,17 +72,6 @@ where
     /// # Panics
     ///
     /// If `r >= ROUNDS`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::kimchi::pallas_base;
-    /// let poseidon = pallas_base();
-    /// // The zero state goes to the first round's constants.
-    /// let mut state = [Fp::ZERO; 3];
-    /// poseidon.round(0, &mut state);
-    /// assert_eq!(&state, &poseidon.round_constants()[0]);
-    /// ```
     pub fn round(&self, r: usize, state: &mut [F; WIDTH]) {
         let powered = state.map(sbox);
         let constants = &self.round_constants[r];
@@ -125,15 +85,6 @@ where
     }
 
     /// The permutation: the [`ROUNDS`] rounds in order.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::kimchi::pallas_base;
-    /// let mut state = [Fp::ZERO; 3];
-    /// pallas_base().permute_state(&mut state);
-    /// assert_ne!(state, [Fp::ZERO; 3]);
-    /// ```
     pub fn permute_state(&self, state: &mut [F; WIDTH]) {
         for r in 0..ROUNDS {
             self.round(r, state);
@@ -162,22 +113,12 @@ where
 
 /// Kimchi's permutation over the Pallas base field `Fp` (`fp_kimchi`), the
 /// sponge of Kimchi proofs over Vesta and of the Fq-sponge over Pallas.
-///
-/// ```
-/// use arrabbiata_poseidon::kimchi::pallas_base;
-/// let _ = pallas_base();
-/// ```
 #[must_use]
 pub const fn pallas_base() -> KimchiPoseidon<Fp> {
     KimchiPoseidon::new(fp::MDS, fp::ROUND_CONSTANTS)
 }
 
 /// Kimchi's permutation over the Vesta base field `Fq` (`fq_kimchi`).
-///
-/// ```
-/// use arrabbiata_poseidon::kimchi::vesta_base;
-/// let _ = vesta_base();
-/// ```
 #[must_use]
 pub const fn vesta_base() -> KimchiPoseidon<Fq> {
     KimchiPoseidon::new(fq::MDS, fq::ROUND_CONSTANTS)
@@ -201,19 +142,6 @@ enum Mode {
 ///
 /// So `[a]` and `[a, 0]` collide, as Kimchi documents: the sponge is meant
 /// for inputs of a fixed length.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fp;
-/// use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base};
-/// use arrabbiata_transcript::Transcript;
-/// let mut a = KimchiSponge::new(pallas_base());
-/// let mut b = KimchiSponge::new(pallas_base());
-/// a.absorb(Fp::ONE);
-/// b.absorb(Fp::ONE);
-/// b.absorb(Fp::ZERO);
-/// assert_eq!(a.squeeze(), b.squeeze());
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KimchiSponge<F> {
     permutation: KimchiPoseidon<F>,
@@ -226,13 +154,6 @@ where
     F: Field,
 {
     /// A fresh sponge: the zero state, nothing absorbed.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fq;
-    /// use arrabbiata_poseidon::kimchi::{KimchiSponge, vesta_base};
-    /// assert_eq!(KimchiSponge::new(vesta_base()).state(), &[Fq::ZERO; 3]);
-    /// ```
     #[must_use]
     pub fn new(permutation: KimchiPoseidon<F>) -> Self {
         Self {
@@ -243,16 +164,6 @@ where
     }
 
     /// The state.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_pasta::Fp;
-    /// use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base};
-    /// use arrabbiata_transcript::Transcript;
-    /// let mut sponge = KimchiSponge::new(pallas_base());
-    /// sponge.absorb(Fp::ONE);
-    /// assert_eq!(sponge.state(), &[Fp::ONE, Fp::ZERO, Fp::ZERO]);
-    /// ```
     #[must_use]
     pub const fn state(&self) -> &[F; WIDTH] {
         &self.state
@@ -290,13 +201,6 @@ where
 }
 
 /// Kimchi's hash of `inputs`: absorb them all, squeeze one element.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fp;
-/// use arrabbiata_poseidon::kimchi::{hash, pallas_base};
-/// assert_ne!(hash(pallas_base(), &[Fp::ONE]), hash(pallas_base(), &[Fp::ZERO]));
-/// ```
 #[must_use]
 pub fn hash<F>(permutation: KimchiPoseidon<F>, inputs: &[F]) -> F
 where

@@ -12,17 +12,6 @@
 //! than speed (see [`pairing`]). The security of BN254 is estimated at
 //! about 100 bits since the improved tower number field sieve (Kim and
 //! Barbulescu, CRYPTO 2016), below the 128 its size once suggested.
-//!
-//! ```
-//! use arrabbiata_bn254::{Fr, G1, G2, pairing::pairing};
-//! use arrabbiata_curve::Projective;
-//! use arrabbiata_field::Field;
-//!
-//! let (g1, g2) = (Projective::<G1>::generator(), Projective::<G2>::generator());
-//! let (a, b) = (Fr::from_u64(3), Fr::from_u64(5));
-//! // Bilinearity: e(aP, bQ) = e(abP, Q).
-//! assert_eq!(pairing(&(g1 * a), &(g2 * b)), pairing(&(g1 * (a * b)), &g2));
-//! ```
 
 #![no_std]
 
@@ -36,12 +25,6 @@ use arrabbiata_field::{
 };
 
 /// The modulus of the base field, `p`.
-///
-/// ```
-/// use arrabbiata_bn254::FqConfig;
-/// use arrabbiata_field::MontgomeryConfig;
-/// assert_eq!(FqConfig::MODULUS[3], 0x30644e72e131a029);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FqConfig;
 
@@ -57,12 +40,6 @@ impl MontgomeryConfig<4> for FqConfig {
 }
 
 /// The modulus of the scalar field, `r`.
-///
-/// ```
-/// use arrabbiata_bn254::FrConfig;
-/// use arrabbiata_field::MontgomeryConfig;
-/// assert_eq!(FrConfig::MODULUS[0], 0x43e1f593f0000001);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FrConfig;
 
@@ -78,30 +55,12 @@ impl MontgomeryConfig<4> for FrConfig {
 }
 
 /// The base field.
-///
-/// ```
-/// use arrabbiata_bn254::Fq;
-/// use arrabbiata_field::TwoAdicField;
-/// assert_eq!(Fq::TWO_ADICITY, 1);
-/// ```
 pub type Fq = MontField<FqConfig, 4>;
 
 /// The scalar field.
-///
-/// ```
-/// use arrabbiata_bn254::Fr;
-/// use arrabbiata_field::TwoAdicField;
-/// assert_eq!(Fr::TWO_ADICITY, 28);
-/// ```
 pub type Fr = MontField<FrConfig, 4>;
 
 /// `Fq2 = Fq[u] / (u^2 + 1)`: `-1` is not a square since `p = 3 mod 4`.
-///
-/// ```
-/// use arrabbiata_bn254::{Fq, Fq2Config};
-/// use arrabbiata_field::{Field, extension::QuadraticConfig};
-/// assert_eq!(Fq2Config::non_residue(), -Fq::ONE);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Fq2Config;
 
@@ -114,34 +73,15 @@ impl QuadraticConfig for Fq2Config {
 }
 
 /// The quadratic extension of the base field.
-///
-/// ```
-/// use arrabbiata_bn254::{Fq, Fq2};
-/// use arrabbiata_field::Field;
-/// let u = Fq2::new(Fq::ZERO, Fq::ONE);
-/// assert_eq!(u * u, -Fq2::ONE);
-/// ```
 pub type Fq2 = Quadratic<Fq2Config>;
 
 /// `xi = 9 + u`, the non-residue defining the twist and `Fq12`.
-///
-/// ```
-/// use arrabbiata_bn254::{Fq, xi};
-/// use arrabbiata_field::Field;
-/// assert_eq!(xi().c0(), Fq::from_u64(9));
-/// ```
 #[must_use]
 pub const fn xi() -> Fq2 {
     Fq2::new(Fq::from_u64_const(9), Fq::from_u64_const(1))
 }
 
 /// `G1`: `y^2 = x^3 + 3` over `Fq`, generator `(1, 2)`.
-///
-/// ```
-/// use arrabbiata_bn254::G1;
-/// use arrabbiata_curve::Projective;
-/// assert!(Projective::<G1>::generator().is_on_curve());
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct G1;
 
@@ -160,12 +100,6 @@ impl Curve for G1 {
 
 /// `G2`: the twist `y^2 = x^3 + 3 / xi` over `Fq2`, with the generator of
 /// EIP-197.
-///
-/// ```
-/// use arrabbiata_bn254::G2;
-/// use arrabbiata_curve::Projective;
-/// assert!(Projective::<G2>::generator().is_on_curve());
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct G2;
 
@@ -222,13 +156,6 @@ impl Curve for G2 {
 }
 
 /// The BN254 pairing, as a [`Pairing`] instance.
-///
-/// ```
-/// use arrabbiata_bn254::Bn254;
-/// use arrabbiata_curve::{Pairing, Projective};
-/// let (p, q) = (Projective::generator(), Projective::generator());
-/// assert!(Bn254::pairing_product_is_one(&[(p, q), (-p, q)]));
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bn254;
 

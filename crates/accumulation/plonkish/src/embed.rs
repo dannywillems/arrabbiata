@@ -31,7 +31,6 @@ use crate::{
 ///
 /// Complete runs: `tests/examples.rs` (an incremental computation, two
 /// accumulators folded); laws: `tests/accumulation.rs`.
-#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub struct Embed<
     'a,
     F,

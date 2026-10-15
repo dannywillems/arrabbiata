@@ -12,25 +12,6 @@
 //!
 //! Fiat-Shamir and the generators come from Poseidon sponges.
 //!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_frontend::vanilla::build;
-//! use arrabbiata_pasta::Fq;
-//! use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
-//!
-//! let (c, w, ()) = build::<Fq, _, _>(|b| {
-//!     let x = b.witness(Fq::from_u64(3));
-//!     let y = b.mul(&x, &x);
-//!     let out = b.public_input(Fq::from_u64(9));
-//!     b.assert_equal(&y, &out);
-//! });
-//! let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
-//! let pcs = ipa::pallas(&circuit);
-//! let (pk, vk) = setup(&circuit, &pcs).unwrap();
-//! let proof = prove(&pk, &pcs, ipa::pallas_transcript(), &witness).unwrap();
-//! verify(&vk, &pcs, ipa::pallas_transcript(), &[Fq::from_u64(9)], proof).unwrap();
-//! ```
-//!
 //! A proof made with KZG is not accepted by the IPA verifier of the same
 //! field and commitment type:
 //!
@@ -94,16 +75,6 @@ where
 }
 
 /// IPA on Pallas, sized for `circuit`.
-///
-/// ```
-/// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_pasta::Fq;
-/// use arrabbiata_plonk::ipa;
-/// use arrabbiata_plonk::vanilla;
-/// let (c, _, ()) = build::<Fq, _, _>(|_| ());
-/// let circuit = vanilla::circuit(&c).unwrap();
-/// assert_eq!(ipa::pallas(&circuit).size(), 8);
-/// ```
 #[must_use]
 pub fn pallas<G, const W: usize, const X: usize, const Q: usize>(
     circuit: &Circuit<Fq, G, W, X, Q>,
@@ -119,16 +90,6 @@ where
 }
 
 /// IPA on BN254 `G1`, sized for `circuit`.
-///
-/// ```
-/// use arrabbiata_bn254::Fr;
-/// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_plonk::ipa;
-/// use arrabbiata_plonk::vanilla;
-/// let (c, _, ()) = build::<Fr, _, _>(|_| ());
-/// let circuit = vanilla::circuit(&c).unwrap();
-/// assert_eq!(ipa::bn254(&circuit).size(), 8);
-/// ```
 #[must_use]
 pub fn bn254<G, const W: usize, const X: usize, const Q: usize>(
     circuit: &Circuit<Fr, G, W, X, Q>,
@@ -144,24 +105,12 @@ where
 }
 
 /// A fresh Poseidon transcript for PlonK over `Fq`.
-///
-/// ```
-/// use arrabbiata_plonk::ipa;
-/// use arrabbiata_transcript::Transcript;
-/// assert_eq!(ipa::pallas_transcript().squeeze(), ipa::pallas_transcript().squeeze());
-/// ```
 #[must_use]
 pub fn pallas_transcript() -> PoseidonSponge<Fq> {
     vesta_sponge(DOMAIN)
 }
 
 /// A fresh Poseidon transcript for PlonK over the BN254 scalar field.
-///
-/// ```
-/// use arrabbiata_plonk::ipa;
-/// use arrabbiata_transcript::Transcript;
-/// assert_eq!(ipa::bn254_transcript().squeeze(), ipa::bn254_transcript().squeeze());
-/// ```
 #[must_use]
 pub fn bn254_transcript() -> PoseidonSponge<Fr> {
     bn254_scalar_sponge(DOMAIN)

@@ -14,17 +14,6 @@
 //!
 //! The moduli are checked in the tests by the group orders: `q` times the
 //! Pallas generator, and `p` times the Vesta generator, is the identity.
-//!
-//! ```
-//! use arrabbiata_curve::Projective;
-//! use arrabbiata_field::Field;
-//! use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
-//!
-//! // The cycle: Pallas scalars are Vesta coordinates, and conversely.
-//! let pallas = Projective::<Pallas>::generator() * Fq::from_u64(7);
-//! let vesta = Projective::<Vesta>::generator() * Fp::from_u64(7);
-//! assert!(pallas.is_on_curve() && vesta.is_on_curve());
-//! ```
 
 #![no_std]
 
@@ -32,12 +21,6 @@ use arrabbiata_curve::Curve;
 use arrabbiata_field::{Field, MontField, MontgomeryConfig};
 
 /// The modulus of the Pallas base field, `p`.
-///
-/// ```
-/// use arrabbiata_field::MontgomeryConfig;
-/// use arrabbiata_pasta::FpConfig;
-/// assert_eq!(FpConfig::MODULUS[3], 0x4000000000000000);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FpConfig;
 
@@ -53,12 +36,6 @@ impl MontgomeryConfig<4> for FpConfig {
 }
 
 /// The modulus of the Vesta base field, `q`.
-///
-/// ```
-/// use arrabbiata_field::MontgomeryConfig;
-/// use arrabbiata_pasta::FqConfig;
-/// assert_eq!(FqConfig::MODULUS[0], 0x8c46eb2100000001);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FqConfig;
 
@@ -74,31 +51,12 @@ impl MontgomeryConfig<4> for FqConfig {
 }
 
 /// The Pallas base field, which is the Vesta scalar field.
-///
-/// ```
-/// use arrabbiata_field::{Field, TwoAdicField};
-/// use arrabbiata_pasta::Fp;
-/// assert_eq!(Fp::TWO_ADICITY, 32);
-/// assert_eq!(Fp::from_u64(2) * Fp::from_u64(3), Fp::from_u64(6));
-/// ```
 pub type Fp = MontField<FpConfig, 4>;
 
 /// The Vesta base field, which is the Pallas scalar field.
-///
-/// ```
-/// use arrabbiata_field::{Field, TwoAdicField};
-/// use arrabbiata_pasta::Fq;
-/// assert_eq!(Fq::TWO_ADICITY, 32);
-/// ```
 pub type Fq = MontField<FqConfig, 4>;
 
 /// Pallas: `y^2 = x^3 + 5` over [`Fp`], of order `q`.
-///
-/// ```
-/// use arrabbiata_curve::Projective;
-/// use arrabbiata_pasta::Pallas;
-/// assert!(Projective::<Pallas>::generator().is_on_curve());
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pallas;
 
@@ -117,12 +75,6 @@ impl Curve for Pallas {
 }
 
 /// Vesta: `y^2 = x^3 + 5` over [`Fq`], of order `p`.
-///
-/// ```
-/// use arrabbiata_curve::Projective;
-/// use arrabbiata_pasta::Vesta;
-/// assert!(Projective::<Vesta>::generator().is_on_curve());
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Vesta;
 

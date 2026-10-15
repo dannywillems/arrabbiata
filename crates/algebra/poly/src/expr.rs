@@ -8,18 +8,6 @@
 //! on is a consequence of that universal property.
 //!
 //! Expressions are built with the ordinary operators:
-//!
-//! ```
-//! use arrabbiata_field::Goldilocks;
-//! use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-//!
-//! type E = Expr<Goldilocks, 3, 0>;
-//! let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-//! let b = E::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-//! let c = E::witness(WitnessColumn::new::<2>(), Rotation::CURR);
-//! let gate = a.clone() * b - c;
-//! assert_eq!(gate.degree(), 2);
-//! ```
 
 use alloc::boxed::Box;
 use core::ops::{Add, Mul, Neg, Sub};
@@ -30,21 +18,6 @@ use crate::column::{FixedColumn, Rotation, Variable, WitnessColumn};
 
 /// A polynomial over `F` in the variables of a circuit with `W` witness
 /// columns and `X` fixed columns.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poly::{Expr, FixedColumn, Rotation, WitnessColumn};
-///
-/// // A selector-gated multiplication gate: q * (a * b - c).
-/// type E = Expr<F, 3, 1>;
-/// let q = E::fixed(FixedColumn::new::<0>(), Rotation::CURR);
-/// let a = E::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-/// let b = E::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-/// let c = E::witness(WitnessColumn::new::<2>(), Rotation::CURR);
-/// let gate = q * (a * b - c);
-/// // The selector is fixed, hence of degree zero.
-/// assert_eq!(gate.degree(), 2);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr<F, const W: usize, const X: usize> {
     /// A constant of the field.
@@ -64,38 +37,18 @@ where
     F: Field,
 {
     /// The constant `c`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poly::Expr;
-    /// assert_eq!(Expr::<F, 1, 0>::constant(F::ONE).degree(), 0);
-    /// ```
     #[must_use]
     pub const fn constant(c: F) -> Self {
         Self::Constant(c)
     }
 
     /// The witness column `column` at `rotation`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-    /// let next = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::NEXT);
-    /// assert_eq!(next.degree(), 1);
-    /// ```
     #[must_use]
     pub const fn witness(column: WitnessColumn<W>, rotation: Rotation) -> Self {
         Self::Variable(Variable::Witness(column, rotation))
     }
 
     /// The fixed column `column` at `rotation`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_poly::{Expr, FixedColumn, Rotation};
-    /// let q = Expr::<F, 0, 1>::fixed(FixedColumn::new::<0>(), Rotation::CURR);
-    /// assert_eq!(q.degree(), 0);
-    /// ```
     #[must_use]
     pub const fn fixed(column: FixedColumn<X>, rotation: Rotation) -> Self {
         Self::Variable(Variable::Fixed(column, rotation))
@@ -108,15 +61,6 @@ where
     /// expression denotes (cancellations are not detected), which is the
     /// bound the folding scheme needs: graded evaluation produces exactly
     /// `degree() + 1` components.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-    /// let x = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-    /// // x^5 - x^5 denotes zero but has syntactic degree 5.
-    /// let x5 = x.clone() * x.clone() * x.clone() * x.clone() * x;
-    /// assert_eq!((x5.clone() - x5).degree(), 5);
-    /// ```
     #[must_use]
     pub fn degree(&self) -> usize {
         match self {

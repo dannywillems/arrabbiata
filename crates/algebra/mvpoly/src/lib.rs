@@ -35,25 +35,6 @@
 //! (<https://hackmd.io/qq_Awc1AR3ywzkruE4Wq9Q>), as in the `mvpoly` crate
 //! of o1-labs/proof-systems.
 //!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-//! use arrabbiata_pasta::Fq as F;
-//!
-//! // P = x0 * x1 - x2, homogenized to degree 2: x0 x1 - u x2.
-//! let x = |i| Sparse::<F, 3, 2>::variable(Var::try_new(i).unwrap()).unwrap();
-//! let p = x(0).checked_mul(&x(1)).unwrap() - x(2);
-//! let (x1, x2) = ([F::from_u64(2), F::from_u64(3), F::from_u64(6)], [F::ONE, F::from_u64(5), F::from_u64(9)]);
-//! let (u1, u2) = (F::ONE, F::from_u64(4));
-//! let t = p.cross_terms(&x1, &x2, u1, u2);
-//! // t_0 and t_2 are the two evaluations; check the folded one at r = 7.
-//! let r = F::from_u64(7);
-//! let folded: [F; 3] = std::array::from_fn(|i| x1[i] + r * x2[i]);
-//! assert_eq!(t[0], p.homogeneous_eval(&x1, u1));
-//! assert_eq!(t[2], p.homogeneous_eval(&x2, u2));
-//! assert_eq!(t[0] + r * t[1] + r * r * t[2], p.homogeneous_eval(&folded, u1 + r * u2));
-//! ```
-//!
 //! Constraints written as [`arrabbiata_poly::Expr`] convert with
 //! [`from_expr`], under a [`Layout`] giving one variable per witness column
 //! and rotation (the current and the next row, in the layout of
@@ -92,18 +73,6 @@ pub use crate::{
 /// partial product, evaluation a ring morphism, the cross-term expansion)
 /// therefore hold for every representation at once, and the two in this
 /// crate are tested to be isomorphic.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_mvpoly::{Dense, MVPoly, Sparse, Var};
-/// use arrabbiata_pasta::Fq as F;
-///
-/// let x0 = Sparse::<F, 2, 3>::variable(Var::new::<0>()).unwrap();
-/// let p = x0.checked_mul(&x0).unwrap() + Sparse::constant(F::ONE);
-/// let d: Dense<F, 2, 3> = Dense::from_terms(p.terms()).unwrap();
-/// assert_eq!(d.terms(), p.terms());
-/// assert_eq!(p.degree(), Some(2));
-/// ```
 pub trait MVPoly<F, const N: usize, const D: usize>:
     Sized
     + Clone
@@ -117,62 +86,26 @@ where
     F: Field,
 {
     /// The nonzero terms, in increasing monomial order.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Monomial, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let p = Sparse::<F, 1, 2>::constant(F::from_u64(3));
-    /// assert_eq!(p.terms(), vec![(Monomial::one(), F::from_u64(3))]);
-    /// ```
     fn terms(&self) -> Vec<(Monomial<N>, F)>;
 
     /// The polynomial with the given terms (summed when a monomial
     /// repeats), or `None` if a term of nonzero coefficient has degree
     /// above `D`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Monomial, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let x2 = (Monomial::new([2]), F::ONE);
-    /// assert!(Sparse::<F, 1, 2>::from_terms(vec![x2]).is_some());
-    /// assert!(Sparse::<F, 1, 1>::from_terms(vec![x2]).is_none());
-    /// ```
     fn from_terms(terms: Vec<(Monomial<N>, F)>) -> Option<Self>;
 
     /// The zero polynomial.
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert!(Sparse::<F, 2, 2>::zero().is_zero());
-    /// ```
     #[must_use]
     fn zero() -> Self {
         Self::constant(F::ZERO)
     }
 
     /// The polynomial `1`.
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert_eq!(Sparse::<F, 2, 2>::one().degree(), Some(0));
-    /// ```
     #[must_use]
     fn one() -> Self {
         Self::constant(F::ONE)
     }
 
     /// The constant polynomial `c`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert!(Sparse::<F, 1, 1>::constant(F::from_u64(5)).is_constant());
-    /// ```
     #[must_use]
     fn constant(c: F) -> Self {
         match Self::from_terms(vec![(Monomial::one(), c)]) {
@@ -182,28 +115,12 @@ where
     }
 
     /// The polynomial `x_v`, or `None` when `D = 0`.
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert_eq!(Sparse::<F, 2, 1>::variable(Var::new::<1>()).unwrap().degree(), Some(1));
-    /// assert!(Sparse::<F, 2, 0>::variable(Var::new::<1>()).is_none());
-    /// ```
     #[must_use]
     fn variable(v: Var<N>) -> Option<Self> {
         Self::from_terms(vec![(Monomial::variable(v), F::ONE)])
     }
 
     /// The coefficient of the monomial `m`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Monomial, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let p = Sparse::<F, 2, 2>::from_terms(vec![(Monomial::new([1, 1]), F::from_u64(4))]).unwrap();
-    /// assert_eq!(p.coefficient(&Monomial::new([1, 1])), F::from_u64(4));
-    /// assert_eq!(p.coefficient(&Monomial::new([2, 0])), F::ZERO);
-    /// ```
     fn coefficient(&self, m: &Monomial<N>) -> F {
         self.terms()
             .into_iter()
@@ -212,77 +129,33 @@ where
     }
 
     /// Whether `self` is zero.
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let p = Sparse::<F, 1, 1>::one();
-    /// assert!((p.clone() - p).is_zero());
-    /// ```
     fn is_zero(&self) -> bool {
         self.terms().is_empty()
     }
 
     /// Whether `self` is a constant (zero included).
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert!(!Sparse::<F, 1, 1>::variable(Var::new::<0>()).unwrap().is_constant());
-    /// ```
     fn is_constant(&self) -> bool {
         self.terms().iter().all(|(m, _)| m.degree() == 0)
     }
 
     /// The total degree, or `None` for the zero polynomial (whose degree
     /// is `-infinity`, not 0).
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// assert_eq!(Sparse::<F, 1, 3>::zero().degree(), None);
-    /// ```
     fn degree(&self) -> Option<usize> {
         self.terms().iter().map(|(m, _)| m.degree()).max()
     }
 
     /// Whether every term has degree exactly `D` (the zero polynomial is
     /// homogeneous of every degree).
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let x = Sparse::<F, 2, 1>::variable(Var::new::<0>()).unwrap();
-    /// assert!(x.is_homogeneous());
-    /// assert!(!(x + Sparse::one()).is_homogeneous());
-    /// ```
     fn is_homogeneous(&self) -> bool {
         self.terms().iter().all(|(m, _)| m.degree() == D)
     }
 
     /// Whether every variable appears with exponent at most 1.
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let x = Sparse::<F, 2, 2>::variable(Var::new::<0>()).unwrap();
-    /// let y = Sparse::<F, 2, 2>::variable(Var::new::<1>()).unwrap();
-    /// assert!(x.checked_mul(&y).unwrap().is_multilinear());
-    /// assert!(!x.checked_mul(&x).unwrap().is_multilinear());
-    /// ```
     fn is_multilinear(&self) -> bool {
         self.terms().iter().all(|(m, _)| m.is_multilinear())
     }
 
     /// `c` times `self`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let p = Sparse::<F, 1, 1>::one().scale(F::from_u64(3));
-    /// assert_eq!(p, Sparse::constant(F::from_u64(3)));
-    /// ```
     #[must_use]
     fn scale(&self, c: F) -> Self {
         let terms = self.terms().into_iter().map(|(m, a)| (m, a * c)).collect();
@@ -293,14 +166,6 @@ where
     }
 
     /// The product, or `None` if its degree would exceed `D`.
-    ///
-    /// ```
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let x = Sparse::<F, 1, 2>::variable(Var::new::<0>()).unwrap();
-    /// let x2 = x.checked_mul(&x).unwrap();
-    /// assert!(x2.checked_mul(&x).is_none());
-    /// ```
     fn checked_mul(&self, other: &Self) -> Option<Self> {
         let (a, b) = (self.terms(), other.terms());
         let mut terms = Vec::with_capacity(a.len() * b.len());
@@ -313,16 +178,6 @@ where
     }
 
     /// The value at `x`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let x = Sparse::<F, 2, 2>::variable(Var::new::<0>()).unwrap();
-    /// let y = Sparse::<F, 2, 2>::variable(Var::new::<1>()).unwrap();
-    /// let p = x.checked_mul(&y).unwrap() + Sparse::one();
-    /// assert_eq!(p.eval(&[F::from_u64(2), F::from_u64(3)]), F::from_u64(7));
-    /// ```
     fn eval(&self, x: &[F; N]) -> F {
         self.terms()
             .iter()
@@ -331,15 +186,6 @@ where
 
     /// The value at `(u, x)` of the homogenization of `self` to degree `D`,
     /// `sum_e c_e u^(D - |e|) x^e`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// // 1, homogenized to degree 3: u^3.
-    /// let p = Sparse::<F, 1, 3>::one();
-    /// assert_eq!(p.homogeneous_eval(&[F::ZERO], F::from_u64(2)), F::from_u64(8));
-    /// ```
     fn homogeneous_eval(&self, x: &[F; N], u: F) -> F {
         self.terms().iter().fold(F::ZERO, |acc, (m, c)| {
             acc + *c * monomial_value(m, x) * u.pow((D - m.degree()) as u64)
@@ -350,18 +196,6 @@ where
     /// `P^D(u_1 + r u_2, x_1 + r x_2)`, for the homogenization `P^D` of
     /// `self` to degree `D`. `T_0` and `T_D` are the homogeneous values at
     /// the two points; `T_1, ..., T_(D-1)` are the cross-terms of folding.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// // x^2, homogeneous: (a + r b)^2 = a^2 + 2 a b r + b^2 r^2.
-    /// let x = Sparse::<F, 1, 2>::variable(Var::new::<0>()).unwrap();
-    /// let p = x.checked_mul(&x).unwrap();
-    /// let (a, b) = (F::from_u64(3), F::from_u64(5));
-    /// let t = p.cross_terms(&[a], &[b], F::ONE, F::ONE);
-    /// assert_eq!(t, vec![a * a, F::from_u64(2) * a * b, b * b]);
-    /// ```
     fn cross_terms(&self, x1: &[F; N], x2: &[F; N], u1: F, u2: F) -> Vec<F> {
         let mut out = vec![F::ZERO; D + 1];
         for (m, c) in self.terms() {
@@ -381,16 +215,6 @@ where
     /// `(s_1 + r s_2) P^D(u_1 + r u_2, x_1 + r x_2)`: the cross-terms of
     /// `s P` for a scalar `s` folded with the instances, as a constraint's
     /// coefficient in a random combination is. The degree is `D + 1`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// // s * 1, at degree 0: (s1 + r s2).
-    /// let p = Sparse::<F, 1, 0>::one();
-    /// let t = p.cross_terms_scaled(&[F::ZERO], &[F::ZERO], F::ONE, F::ONE, F::from_u64(2), F::from_u64(3));
-    /// assert_eq!(t, vec![F::from_u64(2), F::from_u64(3)]);
-    /// ```
     fn cross_terms_scaled(&self, x1: &[F; N], x2: &[F; N], u1: F, u2: F, s1: F, s2: F) -> Vec<F> {
         mul_line_power(&self.cross_terms(x1, x2, u1, u2), s1, s2, 1)
     }
@@ -402,20 +226,6 @@ where
     /// `H^(i) H^(j) = binomial(i + j, i) H^(i + j)`: the directional form
     /// of Dvir, Kopparty, Saraf and Sudan, *Extensions to the method of
     /// multiplicities*, arXiv:0901.2529, Definition 2 and Proposition 4.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// // x^3 in direction 1: 3 x^2, then 3 x, then 1.
-    /// let x = Sparse::<F, 1, 3>::variable(Var::new::<0>()).unwrap();
-    /// let x3 = x.checked_mul(&x).unwrap().checked_mul(&x).unwrap();
-    /// let three = F::from_u64(3);
-    /// assert_eq!(x3.hasse(1, &[F::ONE]), x.checked_mul(&x).unwrap().scale(three));
-    /// assert_eq!(x3.hasse(2, &[F::ONE]), x.scale(three));
-    /// assert_eq!(x3.hasse(3, &[F::ONE]), Sparse::one());
-    /// assert!(x3.hasse(4, &[F::ONE]).is_zero());
-    /// ```
     #[must_use]
     fn hasse(&self, k: usize, y: &[F; N]) -> Self {
         let mut terms = Vec::new();
@@ -529,21 +339,6 @@ where
 /// by the powers of a combiner `alpha`, each power folded linearly with the
 /// instances (`alpha_1^i + r alpha_2^i`): the coefficients of `r^k`,
 /// `k <= D + 1`. This is `compute_combined_cross_terms` of proof-systems.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_mvpoly::{MVPoly, Sparse, Var, combined_cross_terms};
-/// use arrabbiata_pasta::Fq as F;
-/// let x = Sparse::<F, 1, 1>::variable(Var::new::<0>()).unwrap();
-/// let polys = [x.clone(), x.scale(F::from_u64(2))];
-/// let (a, b) = (F::from_u64(3), F::from_u64(4));
-/// let t = combined_cross_terms(&polys, &[a], &[b], F::ONE, F::ONE, F::from_u64(5), F::from_u64(6));
-/// // At r: x(r) (1 + r) + 2 x(r) (5 + 6 r), with x(r) = 3 + 4 r.
-/// let r = F::from_u64(9);
-/// let at = |k: usize| t[k] * r.pow(k as u64);
-/// let x_r = a + r * b;
-/// assert_eq!(at(0) + at(1) + at(2), x_r * (F::ONE + r) + F::from_u64(2) * x_r * (F::from_u64(5) + F::from_u64(6) * r));
-/// ```
 pub fn combined_cross_terms<F, P, const N: usize, const D: usize>(
     polys: &[P],
     x1: &[F; N],
@@ -573,16 +368,6 @@ where
 /// linearly with the instances (`c_(1, i) + r c_(2, i)`): the coefficients
 /// of `r^k`, `k <= D + 1`. The combiners of a folding scheme (powers of a
 /// challenge, or folded powers) are instances of this.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_mvpoly::{MVPoly, Sparse, combined_cross_terms_with};
-/// use arrabbiata_pasta::Fq as F;
-/// let one = Sparse::<F, 1, 0>::one();
-/// let t = combined_cross_terms_with(&[one.clone(), one], &[F::ZERO], &[F::ZERO], F::ONE, F::ONE, &[F::ONE, F::from_u64(2)], &[F::from_u64(3), F::from_u64(4)]);
-/// // (1 + 3 r) + (2 + 4 r).
-/// assert_eq!(t, vec![F::from_u64(3), F::from_u64(7)]);
-/// ```
 pub fn combined_cross_terms_with<F, P, const N: usize, const D: usize>(
     polys: &[P],
     x1: &[F; N],

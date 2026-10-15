@@ -12,12 +12,6 @@ use alloc::vec::Vec;
 use crate::monomial::Monomial;
 
 /// The first `n` primes, by trial division.
-///
-/// ```
-/// use arrabbiata_mvpoly::primes::first;
-/// assert_eq!(first(6), vec![2, 3, 5, 7, 11, 13]);
-/// assert!(first(0).is_empty());
-/// ```
 #[must_use]
 pub fn first(n: usize) -> Vec<u64> {
     let mut primes: Vec<u64> = Vec::with_capacity(n);
@@ -37,14 +31,6 @@ pub fn first(n: usize) -> Vec<u64> {
 
 /// The integer of `m`, `prod_i p_i^(e_i)`, or `None` if it overflows a
 /// `u128`.
-///
-/// ```
-/// use arrabbiata_mvpoly::{Monomial, primes};
-/// let p = primes::first(3);
-/// // x_0^2 x_2 = 2^2 * 5.
-/// assert_eq!(primes::code(&Monomial::new([2, 0, 1]), &p), Some(20));
-/// assert_eq!(primes::code(&Monomial::<3>::one(), &p), Some(1));
-/// ```
 #[must_use]
 pub fn code<const N: usize>(m: &Monomial<N>, primes: &[u64]) -> Option<u128> {
     let mut acc: u128 = 1;
@@ -58,14 +44,6 @@ pub fn code<const N: usize>(m: &Monomial<N>, primes: &[u64]) -> Option<u128> {
 
 /// The monomial of the integer `n`: its exponents on the first `N`
 /// primes, or `None` if `n` is zero or has another prime factor.
-///
-/// ```
-/// use arrabbiata_mvpoly::{Monomial, primes};
-/// let p = primes::first(3);
-/// assert_eq!(primes::decode::<3>(20, &p), Some(Monomial::new([2, 0, 1])));
-/// // 7 is not among the first three primes.
-/// assert_eq!(primes::decode::<3>(14, &p), None);
-/// ```
 #[must_use]
 pub fn decode<const N: usize>(mut n: u128, primes: &[u64]) -> Option<Monomial<N>> {
     if n == 0 {

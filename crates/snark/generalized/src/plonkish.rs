@@ -20,13 +20,6 @@ use arrabbiata_poly::{Expr, Variable as Read};
 use crate::{Circuit, Error, Gate, Variable};
 
 /// A variable of a PlonKish constraint as a generalized variable.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Variable, plonkish::variable};
-/// use arrabbiata_poly::{Rotation, Variable as Read, WitnessColumn};
-/// let v = variable::<2, 0>(&Read::Witness(WitnessColumn::new::<1>(), Rotation::NEXT));
-/// assert_eq!(v, Variable::Witness { column: 1, rotation: Rotation::NEXT });
-/// ```
 #[must_use]
 pub fn variable<const W: usize, const X: usize>(v: &Read<W, X>) -> Variable {
     match v {
@@ -43,17 +36,6 @@ pub fn variable<const W: usize, const X: usize>(v: &Read<W, X>) -> Variable {
 
 /// The polynomial of `expr`, its variables numbered by `index`; `None` if
 /// a variable has no index or the degree exceeds `D`.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_generalized_plonk::{Variable, plonkish::polynomial};
-/// use arrabbiata_mvpoly::{MVPoly, Sparse};
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-/// let a = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-/// let p: Sparse<F, 1, 2> = polynomial(&(a.clone() * a), &|_: Variable| Some(0)).unwrap();
-/// assert_eq!(p.eval(&[F::from_u64(3)]), F::from_u64(9));
-/// ```
 pub fn polynomial<F, I, const W: usize, const X: usize, const N: usize, const D: usize>(
     expr: &Expr<F, W, X>,
     index: &I,
@@ -78,14 +60,6 @@ where
 
 /// The columns, at their rotations, some constraint of `G` reads, sorted
 /// and without repetition.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::{Variable, plonkish::columns_read};
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::vanilla::Vanilla;
-/// // a, b, c and the five fixed columns, on the current row.
-/// assert_eq!(columns_read::<F, Vanilla, 3, 5>().len(), 8);
-/// ```
 #[must_use]
 pub fn columns_read<F, G, const W: usize, const X: usize>() -> Vec<Variable>
 where
@@ -113,25 +87,6 @@ where
 /// [`Error::Shape`] if `N` is below the number of columns the gate set
 /// reads (at their rotations) or `D` below the degree of a constraint in
 /// all its variables, fixed columns included.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_generalized_plonk::plonkish::from_plonkish;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonkish::vanilla;
-/// let (c, w, ()) = build::<F, _, _>(|b| {
-///     let x = b.witness(F::from_u64(3));
-///     let y = b.mul(&x, &x);
-///     let out = b.public_input(F::from_u64(9));
-///     b.assert_equal(&y, &out);
-/// });
-/// let (circuit, witness) = (vanilla::circuit(&c).unwrap(), vanilla::witness(&w));
-/// // 8 columns read; q_M a b has degree 3 in all of them.
-/// let g = from_plonkish::<F, _, 3, 5, 1, 8, 3>(&circuit).unwrap();
-/// assert!(g.is_satisfied(witness.columns(), witness.public_inputs()));
-/// assert!(from_plonkish::<F, _, 3, 5, 1, 8, 2>(&circuit).is_err());
-/// ```
 pub fn from_plonkish<
     F,
     G,

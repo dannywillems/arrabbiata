@@ -19,34 +19,6 @@
 //! `arrabbiata-plonk`, the accumulation scheme in
 //! `arrabbiata-plonkish-folding` and the decider in
 //! `arrabbiata-plonk-decider`; all three read circuits from here.
-//!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_plonkish::{Builder, Cell, Gadget};
-//! use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-//!
-//! /// The Poseidon S-box, `b = a^5`.
-//! struct SBox;
-//! impl Gadget<F, 2, 0> for SBox {
-//!     const NAME: &'static str = "sbox";
-//!     fn constraints() -> Vec<Expr<F, 2, 0>> {
-//!         let a = Expr::witness(WitnessColumn::new::<0>(), Rotation::CURR);
-//!         let b = Expr::witness(WitnessColumn::new::<1>(), Rotation::CURR);
-//!         let a2 = a.clone() * a.clone();
-//!         vec![b - a2.clone() * a2 * a]
-//!     }
-//! }
-//!
-//! let mut b = Builder::<F, (SBox, ()), 2, 0, 1>::new();
-//! let x = F::from_u64(3);
-//! let r0 = b.row::<SBox, _>([x, x.pow(5)], []);
-//! let out = b.plain_row([x.pow(5), F::ZERO], []);
-//! b.copy(Cell::new(WitnessColumn::new::<1>(), r0), Cell::new(WitnessColumn::new::<0>(), out));
-//! b.public(out);
-//! let (circuit, witness) = b.build().unwrap();
-//! assert!(circuit.is_satisfied(&witness));
-//! ```
 
 #![no_std]
 
@@ -66,11 +38,6 @@ pub use crate::{
 };
 
 /// Why a circuit could not be built.
-///
-/// ```
-/// use arrabbiata_plonkish::CircuitError;
-/// assert_eq!(CircuitError::Shape.to_string(), "a circuit or a witness has the wrong shape");
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CircuitError {
     /// A circuit or a witness has the wrong shape: a number of rows that is

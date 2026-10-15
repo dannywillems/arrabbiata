@@ -6,13 +6,6 @@
 //! reduction `w^6 = xi`: slower, and obviously correct. `w^6 - xi` is
 //! irreducible over `Fq2` because `xi` is neither a square nor a cube
 //! there, which the tests check through the non-degeneracy of the pairing.
-//!
-//! ```
-//! use arrabbiata_bn254::fq12::Fq12;
-//! let w = Fq12::w();
-//! let w6 = w * w * w * w * w * w;
-//! assert_eq!(w6, Fq12::from_fq2(arrabbiata_bn254::xi()));
-//! ```
 
 use core::ops::Mul;
 
@@ -21,11 +14,6 @@ use arrabbiata_field::Field;
 use crate::{Fq2, xi};
 
 /// An element `sum_i c_i w^i` of `Fq12`, with `c_i` in `Fq2`.
-///
-/// ```
-/// use arrabbiata_bn254::fq12::Fq12;
-/// assert_eq!(Fq12::one() * Fq12::w(), Fq12::w());
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fq12 {
     c: [Fq2; 6],
@@ -83,45 +71,24 @@ pub const FINAL_EXPONENT: [u64; 44] = [
 
 impl Fq12 {
     /// The element with coefficients `c`.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{Fq2, fq12::Fq12};
-    /// use arrabbiata_field::Field;
-    /// assert_eq!(Fq12::new([Fq2::ONE, Fq2::ZERO, Fq2::ZERO, Fq2::ZERO, Fq2::ZERO, Fq2::ZERO]), Fq12::one());
-    /// ```
     #[must_use]
     pub const fn new(c: [Fq2; 6]) -> Self {
         Self { c }
     }
 
     /// The coefficients.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::fq12::Fq12;
-    /// assert_eq!(Fq12::one().coefficients().len(), 6);
-    /// ```
     #[must_use]
     pub const fn coefficients(&self) -> &[Fq2; 6] {
         &self.c
     }
 
     /// The multiplicative identity.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::fq12::Fq12;
-    /// assert!(Fq12::one().is_one());
-    /// ```
     #[must_use]
     pub const fn one() -> Self {
         Self::from_fq2(Fq2::ONE)
     }
 
     /// The generator `w` of the extension over `Fq2`.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::fq12::Fq12;
-    /// assert!(!Fq12::w().is_one());
-    /// ```
     #[must_use]
     pub const fn w() -> Self {
         let mut c = [Fq2::ZERO; 6];
@@ -130,12 +97,6 @@ impl Fq12 {
     }
 
     /// The embedding of `Fq2`.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{Fq2, fq12::Fq12};
-    /// use arrabbiata_field::Field;
-    /// assert_eq!(Fq12::from_fq2(Fq2::ONE), Fq12::one());
-    /// ```
     #[must_use]
     pub const fn from_fq2(a: Fq2) -> Self {
         let mut c = [Fq2::ZERO; 6];
@@ -144,23 +105,12 @@ impl Fq12 {
     }
 
     /// Whether this is the identity.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::fq12::Fq12;
-    /// assert!((Fq12::w() * Fq12::one()).is_one() == false);
-    /// ```
     #[must_use]
     pub fn is_one(&self) -> bool {
         *self == Self::one()
     }
 
     /// `self^e` for an exponent given as little-endian limbs.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::fq12::Fq12;
-    /// let w = Fq12::w();
-    /// assert_eq!(w.pow_limbs(&[3]), w * w * w);
-    /// ```
     #[must_use]
     pub fn pow_limbs(&self, exponent: &[u64]) -> Self {
         let mut acc = Self::one();

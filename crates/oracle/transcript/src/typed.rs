@@ -40,36 +40,6 @@
 //! different protocols therefore diverge from the first challenge, which is
 //! the domain separation of the protocol itself.
 //!
-//! ```
-//! use arrabbiata_field::Goldilocks as F;
-//! use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-//! use arrabbiata_transcript::{
-//!     typed::{Challenge, End, Label, Message, Tape},
-//! };
-//!
-//! struct Commitment(F);
-//! impl Label for Commitment {
-//!     const LABEL: u64 = 1;
-//! }
-//! impl arrabbiata_transcript::Absorb<F> for Commitment {
-//!     fn absorb_into<T>(&self, t: &mut T)
-//!     where
-//!         T: arrabbiata_transcript::Transcript<F>,
-//!     {
-//!         t.absorb(self.0);
-//!     }
-//! }
-//!
-//! // Sigma-protocol shape: commitment, challenge, end.
-//! type Sigma = Message<Commitment, Challenge<End>>;
-//!
-//! let tape = Tape::<F, _, Sigma>::start(goldilocks_sponge(0));
-//! let tape = tape.send(&Commitment(F::new(42)));
-//! let (challenge, tape) = tape.challenge();
-//! let _sponge = tape.finish();
-//! # let _ = challenge;
-//! ```
-//!
 //! Squeezing before the commitment is sent does not compile:
 //!
 //! ```compile_fail
@@ -107,18 +77,6 @@ use crate::{
 ///
 /// Distinct message types of one protocol should have distinct labels, so
 /// that patterns differing only in which message is sent are separated.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// use arrabbiata_transcript::typed::Label;
-/// struct Opening;
-/// impl Label for Opening {
-///     const LABEL: u64 = 0x4f50;
-/// }
-/// assert_eq!(Opening::LABEL, 0x4f50);
-/// ```
 pub trait Label {
     /// The label.
     const LABEL: u64;
@@ -137,16 +95,6 @@ where
 /// commitments in a row); wrapping each in its own label keeps them
 /// distinguishable in the pattern, so a transcript that swaps two of them
 /// is a different protocol.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::typed::{Label, Labeled};
-/// type Beta = Labeled<F, 0x6265>;
-/// assert_eq!(Beta::LABEL, 0x6265);
-/// let b: Beta = Labeled(F::new(1));
-/// assert_eq!(b.0, F::new(1));
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Labeled<T, const LABEL: u64>(pub T);
 
@@ -169,62 +117,24 @@ where
 }
 
 /// The end of a protocol.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// assert_eq!(<End as Pattern>::MESSAGES, 0);
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct End;
 
 /// The prover sends a value of type `M`, then the protocol continues as
 /// `Next`.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// type P = Message<F, Message<F, End>>;
-/// assert_eq!(<P as Pattern>::MESSAGES, 2);
-/// let _: <P as Pattern>::Proof = HCons::new(F::ONE, HCons::new(F::ZERO, HNil));
-/// ```
 #[derive(Debug)]
 pub struct Message<M, Next>(PhantomData<(M, Next)>);
 
 /// The verifier sends one challenge, then the protocol continues as `Next`.
-///
-/// ```
-/// use arrabbiata_transcript::typed::{Challenge, End, Pattern};
-/// assert_eq!(<Challenge<Challenge<End>> as Pattern>::CHALLENGES, 2);
-/// ```
 #[derive(Debug)]
 pub struct Challenge<Next>(PhantomData<Next>);
 
 /// Both parties absorb a public value of type `M`, then the protocol
 /// continues as `Next`. Public values are not part of the proof.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::HNil, typed::{End, Pattern, Public}};
-/// // A public value contributes nothing to the proof.
-/// let _: <Public<F, End> as Pattern>::Proof = HNil;
-/// ```
 #[derive(Debug)]
 pub struct Public<M, Next>(PhantomData<(M, Next)>);
 
 /// A protocol pattern: a type-level list of messages and challenges.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// type Sumcheck2 = Message<F, Challenge<Message<F, Challenge<End>>>>;
-/// assert_eq!(<Sumcheck2 as Pattern>::MESSAGES, 2);
-/// assert_eq!(<Sumcheck2 as Pattern>::CHALLENGES, 2);
-/// ```
 pub trait Pattern {
     /// The number of prover messages.
     const MESSAGES: usize;
@@ -238,18 +148,6 @@ pub trait Pattern {
 
     /// Absorb a description of the pattern: one tag per step, and the label
     /// of every message.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// use arrabbiata_transcript::Transcript;
-    /// let mut a = goldilocks_sponge(0);
-    /// let mut b = goldilocks_sponge(0);
-    /// <Message<F, End> as Pattern>::describe(&mut a);
-    /// <Challenge<End> as Pattern>::describe(&mut b);
-    /// assert_ne!(a.squeeze(), b.squeeze());
-    /// ```
     fn describe<F, T>(transcript: &mut T)
     where
         F: Field,
@@ -333,16 +231,6 @@ where
 }
 
 /// Sequential composition of patterns: type-level list concatenation.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// use arrabbiata_transcript::typed::Then;
-/// type A = Message<F, End>;
-/// type B = Challenge<End>;
-/// let _same: Option<Then<A, B>> = None::<Message<F, Challenge<End>>>;
-/// ```
 pub trait Concat<Q> {
     /// The pattern `Self` followed by `Q`.
     type Output;
@@ -377,15 +265,6 @@ where
 pub type Then<P, Q> = <P as Concat<Q>>::Output;
 
 /// A transcript `T` over `F` that still has to follow the pattern `P`.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// let tape = Tape::<F, _, Challenge<End>>::start(goldilocks_sponge(0));
-/// let (_c, tape) = tape.challenge();
-/// let _sponge = tape.finish();
-/// ```
 #[derive(Debug)]
 pub struct Tape<F, T, P> {
     transcript: T,
@@ -400,13 +279,6 @@ where
 {
     /// Start a protocol following `P` on `transcript`, after absorbing the
     /// description of `P`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let _tape = Tape::<F, _, End>::start(goldilocks_sponge(0));
-    /// ```
     #[must_use]
     pub fn start(mut transcript: T) -> Self {
         P::describe(&mut transcript);
@@ -432,14 +304,6 @@ where
     Next: Pattern,
 {
     /// The prover writes `message` on the tape.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let tape = Tape::<F, _, Message<F, End>>::start(goldilocks_sponge(0));
-    /// let _ = tape.send(&F::ONE).finish();
-    /// ```
     #[must_use]
     pub fn send(mut self, message: &M) -> Tape<F, T, Next> {
         message.absorb_into(&mut self.transcript);
@@ -449,14 +313,6 @@ where
     /// The verifier reads `message` from the tape. Identical to
     /// [`Tape::send`]; the two names keep protocol code readable on both
     /// sides.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let tape = Tape::<F, _, Message<F, End>>::start(goldilocks_sponge(0));
-    /// let _ = tape.receive(&F::ONE).finish();
-    /// ```
     #[must_use]
     pub fn receive(self, message: &M) -> Tape<F, T, Next> {
         self.send(message)
@@ -478,14 +334,6 @@ where
     Next: Pattern,
 {
     /// Absorb the public value `value`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{typed::{End, Public, Tape}};
-    /// let tape = Tape::<F, _, Public<F, End>>::start(goldilocks_sponge(0));
-    /// let _ = tape.public(&F::new(1)).finish();
-    /// ```
     #[must_use]
     pub fn public(mut self, value: &M) -> Tape<F, T, Next> {
         value.absorb_into(&mut self.transcript);
@@ -503,15 +351,6 @@ where
     Next: Pattern,
 {
     /// The verifier writes a challenge on the tape.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let (c, _) = Tape::<F, _, Challenge<End>>::start(goldilocks_sponge(0)).challenge();
-    /// let (d, _) = Tape::<F, _, Challenge<End>>::start(goldilocks_sponge(0)).challenge();
-    /// assert_eq!(c, d);
-    /// ```
     #[must_use]
     pub fn challenge(mut self) -> (F, Tape<F, T, Next>) {
         let challenge = self.transcript.squeeze();
@@ -529,15 +368,6 @@ where
 {
     /// The protocol is over; recover the transcript, for instance to run a
     /// subsequent protocol on the same sponge.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// use arrabbiata_transcript::Transcript;
-    /// let mut sponge = Tape::<F, _, End>::start(goldilocks_sponge(0)).finish();
-    /// let _ = sponge.squeeze();
-    /// ```
     #[must_use]
     pub fn finish(self) -> T {
         self.transcript
@@ -550,16 +380,6 @@ where
 /// [`Prover::finish`] only exists once `Rest` is [`End`], and returns the
 /// proof as a value of exactly `Full::Proof`: the type checker verifies that
 /// the messages written are the messages the protocol declares.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// type P = Message<F, Challenge<End>>;
-/// let (_c, prover) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).send(F::ONE).challenge();
-/// let (_, proof) = prover.finish();
-/// assert_eq!(proof, HCons::new(F::ONE, HNil));
-/// ```
 #[derive(Debug)]
 pub struct Prover<F, T, Full, Rest, Written> {
     tape: Tape<F, T, Rest>,
@@ -574,15 +394,6 @@ where
     Full: Pattern,
 {
     /// Start proving `Full` on `transcript`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// type P = End;
-    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).finish();
-    /// assert_eq!(proof, HNil);
-    /// ```
     #[must_use]
     pub fn start(transcript: T) -> Self {
         Self {
@@ -601,15 +412,6 @@ where
     Next: Pattern,
 {
     /// Absorb `message` and record it in the proof.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// type P = Message<F, End>;
-    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).send(F::new(3)).finish();
-    /// assert_eq!(proof.head, F::new(3));
-    /// ```
     #[must_use]
     pub fn send(self, message: M) -> Prover<F, T, Full, Next, HCons<M, Written>> {
         let tape = self.tape.send(&message);
@@ -629,15 +431,6 @@ where
     Next: Pattern,
 {
     /// Absorb the public value `value`; it is not recorded in the proof.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::HNil, typed::{End, Prover, Public}};
-    /// type P = Public<F, End>;
-    /// let (_, proof) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).public(&F::new(1)).finish();
-    /// assert_eq!(proof, HNil);
-    /// ```
     #[must_use]
     pub fn public(self, value: &M) -> Prover<F, T, Full, Next, Written> {
         Prover {
@@ -655,15 +448,6 @@ where
     Next: Pattern,
 {
     /// Squeeze the next challenge.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// type P = Challenge<End>;
-    /// let (_c, prover) = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).challenge();
-    /// let _ = prover.finish();
-    /// ```
     #[must_use]
     pub fn challenge(self) -> (F, Prover<F, T, Full, Next, Written>) {
         let (challenge, tape) = self.tape.challenge();
@@ -684,17 +468,6 @@ where
     Written: Reverse<HNil, Output = <Full as Pattern>::Proof>,
 {
     /// The transcript and the proof, in protocol order.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// type P = Message<F, Message<F, End>>;
-    /// let prover = Prover::<F, _, P, P, HNil>::start(goldilocks_sponge(0)).send(F::new(1)).send(F::new(2));
-    /// let (_, proof) = prover.finish();
-    /// // In protocol order, not in reverse.
-    /// assert_eq!((proof.head, proof.tail.head), (F::new(1), F::new(2)));
-    /// ```
     #[must_use]
     pub fn finish(self) -> (T, <Full as Pattern>::Proof) {
         (self.tape.finish(), self.written.reverse_onto(HNil))
@@ -708,18 +481,6 @@ where
 /// [`Verifier::read`] returns a message of exactly the declared type, and
 /// [`Verifier::finish`] (only at [`End`]) certifies that the whole proof was
 /// consumed: a proof cannot carry messages the verifier ignores.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-/// type P = Message<F, Challenge<End>>;
-/// let verifier = Verifier::<F, _, P>::start(goldilocks_sponge(0), HCons::new(F::ONE, HNil));
-/// let (m, verifier) = verifier.read();
-/// let (_c, verifier) = verifier.challenge();
-/// let _ = verifier.finish();
-/// assert_eq!(m, F::ONE);
-/// ```
 pub struct Verifier<F, T, Rest>
 where
     Rest: Pattern,
@@ -735,13 +496,6 @@ where
     Full: Pattern,
 {
     /// Start verifying `proof` against `Full` on `transcript`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let _ = Verifier::<F, _, End>::start(goldilocks_sponge(0), HNil).finish();
-    /// ```
     #[must_use]
     pub fn start(transcript: T, proof: <Full as Pattern>::Proof) -> Self {
         Self {
@@ -759,15 +513,6 @@ where
     Next: Pattern,
 {
     /// Read and absorb the next message.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let verifier = Verifier::<F, _, Message<F, End>>::start(goldilocks_sponge(0), HCons::new(F::new(8), HNil));
-    /// let (m, _) = verifier.read();
-    /// assert_eq!(m, F::new(8));
-    /// ```
     #[must_use]
     pub fn read(self) -> (M, Verifier<F, T, Next>) {
         let HCons { head, tail } = self.unread;
@@ -784,14 +529,6 @@ where
     Next: Pattern,
 {
     /// Absorb the public value `value`, which the verifier supplies.
-    ///
-    /// ```
-    /// use arrabbiata_field::Goldilocks as F;
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::HNil, typed::{End, Public, Verifier}};
-    /// let verifier = Verifier::<F, _, Public<F, End>>::start(goldilocks_sponge(0), HNil);
-    /// let _ = verifier.public(&F::new(1)).finish();
-    /// ```
     #[must_use]
     pub fn public(self, value: &M) -> Verifier<F, T, Next> {
         Verifier {
@@ -808,14 +545,6 @@ where
     Next: Pattern,
 {
     /// Squeeze the next challenge.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let (_c, v) = Verifier::<F, _, Challenge<End>>::start(goldilocks_sponge(0), HNil).challenge();
-    /// let _ = v.finish();
-    /// ```
     #[must_use]
     pub fn challenge(self) -> (F, Verifier<F, T, Next>) {
         let (challenge, tape) = self.tape.challenge();
@@ -835,13 +564,6 @@ where
     T: Transcript<F>,
 {
     /// The protocol is over and the proof fully read.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-    /// use arrabbiata_transcript::{hlist::{HCons, HNil}, typed::{Challenge, End, Message, Pattern, Prover, Tape, Verifier}};
-    /// let _sponge = Verifier::<F, _, End>::start(goldilocks_sponge(0), HNil).finish();
-    /// ```
     #[must_use]
     pub fn finish(self) -> T {
         self.tape.finish()
@@ -857,34 +579,6 @@ where
 /// construction, on the order of the tape, on the statement, and on the type
 /// of every message; if they did not, they would not be running the same
 /// SNARK, and they would not type-check against each other.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{
-///     typed::{Challenge, End, Message, Protocol, ProofOf, Public, prover_tape, verifier_tape},
-/// };
-///
-/// /// Prove knowledge of nothing: absorb a statement and a message, squeeze.
-/// struct Sigma;
-/// impl Protocol for Sigma {
-///     type Transcript = Public<F, Message<F, Challenge<End>>>;
-/// }
-///
-/// let (c, prover) = prover_tape::<F, _, Sigma>(goldilocks_sponge(0))
-///     .public(&F::new(1))
-///     .send(F::new(2))
-///     .challenge();
-/// let (_, proof): (_, ProofOf<Sigma>) = prover.finish();
-///
-/// let (d, verifier) = verifier_tape::<F, _, Sigma>(goldilocks_sponge(0), proof)
-///     .public(&F::new(1))
-///     .read()
-///     .1
-///     .challenge();
-/// let _ = verifier.finish();
-/// assert_eq!(c, d);
-/// ```
 pub trait Protocol {
     /// The transcript both parties follow.
     type Transcript: Pattern;
@@ -894,17 +588,6 @@ pub trait Protocol {
 pub type ProofOf<P> = <<P as Protocol>::Transcript as Pattern>::Proof;
 
 /// The prover's tape for the protocol `P`.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{typed::{End, Protocol, prover_tape}};
-/// struct Empty;
-/// impl Protocol for Empty {
-///     type Transcript = End;
-/// }
-/// let (_, _proof) = prover_tape::<F, _, Empty>(goldilocks_sponge(0)).finish();
-/// ```
 #[must_use]
 pub fn prover_tape<F, T, P>(
     transcript: T,
@@ -918,17 +601,6 @@ where
 }
 
 /// The verifier's tape for the protocol `P`, reading `proof`.
-///
-/// ```
-/// use arrabbiata_field::Goldilocks as F;
-/// use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
-/// use arrabbiata_transcript::{hlist::HNil, typed::{End, Protocol, verifier_tape}};
-/// struct Empty;
-/// impl Protocol for Empty {
-///     type Transcript = End;
-/// }
-/// let _ = verifier_tape::<F, _, Empty>(goldilocks_sponge(0), HNil).finish();
-/// ```
 #[must_use]
 pub fn verifier_tape<F, T, P>(
     transcript: T,

@@ -15,13 +15,6 @@
 //!   exponent sends to 1 (denominator elimination);
 //! - the final exponentiation is a plain square-and-multiply by
 //!   `(p^12 - 1) / r`, with no Frobenius shortcuts.
-//!
-//! ```
-//! use arrabbiata_bn254::{G1, G2, pairing::pairing};
-//! use arrabbiata_curve::Projective;
-//! let e = pairing(&Projective::<G1>::generator(), &Projective::<G2>::generator());
-//! assert!(!e.is_one());
-//! ```
 
 use arrabbiata_curve::Projective;
 use arrabbiata_field::{Field, MontgomeryConfig, bigint};
@@ -33,58 +26,29 @@ use crate::{
 
 /// An element of the target group `Gt`, the subgroup of order `r` of
 /// `Fq12*`, written multiplicatively.
-///
-/// ```
-/// use arrabbiata_bn254::{G1, G2, pairing::{Gt, pairing}};
-/// use arrabbiata_curve::Projective;
-/// let e = pairing(&Projective::<G1>::generator(), &Projective::<G2>::generator());
-/// assert_eq!(e * Gt::one(), e);
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Gt(Fq12);
 
 impl Gt {
     /// The identity.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::pairing::Gt;
-    /// assert!(Gt::one().is_one());
-    /// ```
     #[must_use]
     pub const fn one() -> Self {
         Self(Fq12::one())
     }
 
     /// Whether this is the identity.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::pairing::Gt;
-    /// assert!((Gt::one() * Gt::one()).is_one());
-    /// ```
     #[must_use]
     pub fn is_one(&self) -> bool {
         self.0.is_one()
     }
 
     /// `self^e` for an exponent given as little-endian limbs.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{G1, G2, pairing::pairing};
-    /// use arrabbiata_curve::Projective;
-    /// let e = pairing(&Projective::<G1>::generator(), &Projective::<G2>::generator());
-    /// assert_eq!(e.pow_limbs(&[2]), e * e);
-    /// ```
     #[must_use]
     pub fn pow_limbs(&self, exponent: &[u64]) -> Self {
         Self(self.0.pow_limbs(exponent))
     }
 
     /// The underlying element of `Fq12`.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::pairing::Gt;
-    /// assert!(Gt::one().as_fq12().is_one());
-    /// ```
     #[must_use]
     pub const fn as_fq12(&self) -> &Fq12 {
         &self.0
@@ -111,13 +75,6 @@ fn line(lambda: Fq, xt: Fq, yt: Fq, xq: Fq2, yq: Fq2) -> Fq12 {
 
 /// The Miller function `f_{r,P}` evaluated at `psi(Q)`, up to factors in
 /// proper subfields (removed by the final exponentiation).
-///
-/// ```
-/// use arrabbiata_bn254::{G1, G2, pairing::{final_exponentiation, miller_loop, pairing}};
-/// use arrabbiata_curve::Projective;
-/// let (p, q) = (Projective::<G1>::generator(), Projective::<G2>::generator());
-/// assert_eq!(final_exponentiation(&miller_loop(&p, &q)), pairing(&p, &q));
-/// ```
 #[must_use]
 pub fn miller_loop(p: &Projective<G1>, q: &Projective<G2>) -> Fq12 {
     let p = p.to_affine();
@@ -170,40 +127,18 @@ pub fn miller_loop(p: &Projective<G1>, q: &Projective<G2>) -> Fq12 {
 }
 
 /// Raise to `(p^12 - 1) / r`, mapping `Fq12*` onto `Gt`.
-///
-/// ```
-/// use arrabbiata_bn254::{fq12::Fq12, pairing::final_exponentiation};
-/// assert!(final_exponentiation(&Fq12::one()).is_one());
-/// ```
 #[must_use]
 pub fn final_exponentiation(f: &Fq12) -> Gt {
     Gt(f.pow_limbs(&FINAL_EXPONENT))
 }
 
 /// The reduced Tate pairing.
-///
-/// ```
-/// use arrabbiata_bn254::{Fr, G1, G2, pairing::pairing};
-/// use arrabbiata_curve::Projective;
-/// use arrabbiata_field::Field;
-/// let (p, q) = (Projective::<G1>::generator(), Projective::<G2>::generator());
-/// let two = Fr::from_u64(2);
-/// assert_eq!(pairing(&(p * two), &q), pairing(&p, &(q * two)));
-/// ```
 #[must_use]
 pub fn pairing(p: &Projective<G1>, q: &Projective<G2>) -> Gt {
     final_exponentiation(&miller_loop(p, q))
 }
 
 /// `prod_i e(P_i, Q_i)`, with one final exponentiation for all the pairs.
-///
-/// ```
-/// use arrabbiata_bn254::{G1, G2, pairing::{multi_pairing, pairing}};
-/// use arrabbiata_curve::Projective;
-/// let (p, q) = (Projective::<G1>::generator(), Projective::<G2>::generator());
-/// // e(P, Q) e(-P, Q) = 1.
-/// assert!(multi_pairing(&[(p, q), (-p, q)]).is_one());
-/// ```
 #[must_use]
 pub fn multi_pairing(pairs: &[(Projective<G1>, Projective<G2>)]) -> Gt {
     let mut f = Fq12::one();

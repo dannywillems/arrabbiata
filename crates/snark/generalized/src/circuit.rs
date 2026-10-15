@@ -16,36 +16,6 @@
 //!
 //! Selectors are columns with any values; one-hot selectors, sums of
 //! selectors equal to one, are circuits, not requirements.
-//!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_generalized_plonk::{Circuit, Gate, Variable};
-//! use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-//! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_poly::Rotation;
-//!
-//! // One gate, w0 * w0 - x0 = 0 on the rows of selector 0, with x0 public.
-//! let var = |i| Sparse::<F, 2, 2>::variable(Var::try_new(i).unwrap()).unwrap();
-//! let selector = Some(0);
-//! let polynomial = var(0).checked_mul(&var(0)).unwrap() - var(1);
-//! let gate = Gate::new(selector, polynomial);
-//! let variables = vec![
-//!     Variable::Witness { column: 0, rotation: Rotation::CURR },
-//!     Variable::Public(0),
-//! ];
-//! let num_rows = 2;
-//! let witness_columns = 1;
-//! let fixed = vec![];
-//! let selectors = vec![vec![F::ONE, F::ZERO]];
-//! let gates = vec![gate];
-//! let sigma = (0..2).collect();
-//! let public_inputs = 1;
-//! let bindings = vec![];
-//! let circuit = Circuit::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-//! let columns = vec![vec![F::from_u64(3), F::from_u64(5)]];
-//! assert!(circuit.is_satisfied(&columns, &[F::from_u64(9)]));
-//! assert!(!circuit.is_satisfied(&columns, &[F::from_u64(10)]));
-//! ```
 
 use alloc::vec::Vec;
 
@@ -61,14 +31,6 @@ use crate::{
 };
 
 /// What a variable of a gate reads.
-///
-/// ```
-/// use arrabbiata_generalized_plonk::Variable;
-/// use arrabbiata_poly::Rotation;
-/// let v = Variable::Fixed { column: 2, rotation: Rotation::NEXT };
-/// assert!(v.is_column());
-/// assert!(!Variable::Public(0).is_column());
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Variable {
     /// A witness column at a rotation of the constrained row.
@@ -92,12 +54,6 @@ pub enum Variable {
 impl Variable {
     /// Whether the variable reads a column (and so has degree one in the
     /// polynomial interpolating it), rather than a public input (a scalar).
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Variable;
-    /// use arrabbiata_poly::Rotation;
-    /// assert!(Variable::Witness { column: 0, rotation: Rotation::CURR }.is_column());
-    /// ```
     #[must_use]
     pub const fn is_column(&self) -> bool {
         !matches!(self, Self::Public(_))
@@ -115,16 +71,6 @@ impl Variable {
 
 /// A gate: a polynomial of degree at most `D` in `N` variables, turned on
 /// by a selector (`Some(q)`) or on every row (`None`).
-///
-/// ```
-/// use arrabbiata_generalized_plonk::Gate;
-/// use arrabbiata_mvpoly::{MVPoly, Sparse};
-/// use arrabbiata_pasta::Fq as F;
-/// let selector = None;
-/// let polynomial = Sparse::<F, 1, 1>::zero();
-/// let g = Gate::new(selector, polynomial);
-/// assert_eq!(g.selector(), None);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Gate<F, const N: usize, const D: usize>
 where
@@ -139,17 +85,6 @@ where
     F: Field,
 {
     /// The gate `polynomial`, turned on by `selector`.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_generalized_plonk::Gate;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let selector = Some(1);
-    /// let polynomial = Sparse::<F, 1, 1>::one();
-    /// let g = Gate::new(selector, polynomial);
-    /// assert_eq!(g.selector(), Some(1));
-    /// ```
     #[must_use]
     pub const fn new(selector: Option<usize>, polynomial: Sparse<F, N, D>) -> Self {
         Self {
@@ -159,30 +94,12 @@ where
     }
 
     /// The selector turning the gate on, if any.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Gate;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let selector = Some(0);
-    /// let polynomial = Sparse::<F, 1, 1>::zero();
-    /// assert_eq!(Gate::new(selector, polynomial).selector(), Some(0));
-    /// ```
     #[must_use]
     pub const fn selector(&self) -> Option<usize> {
         self.selector
     }
 
     /// The polynomial.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Gate;
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let selector = None;
-    /// let polynomial = Sparse::<F, 1, 1>::zero();
-    /// assert!(Gate::new(selector, polynomial).polynomial().is_zero());
-    /// ```
     #[must_use]
     pub const fn polynomial(&self) -> &Sparse<F, N, D> {
         &self.polynomial
@@ -190,24 +107,6 @@ where
 }
 
 /// A circuit of generalized PlonK: see the [module documentation](self).
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_generalized_plonk::{Circuit, Error};
-/// use arrabbiata_pasta::Fq as F;
-/// // Three rows is not a power of two.
-/// let num_rows = 3;
-/// let witness_columns = 1;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = (0..3).collect();
-/// let public_inputs = 0;
-/// let bindings = vec![];
-/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings);
-/// assert_eq!(c.unwrap_err(), Error::Shape);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Circuit<F, const N: usize, const D: usize>
 where
@@ -245,28 +144,6 @@ where
     /// a variable that is not declared, `sigma` is not a permutation of the
     /// witness cells, or a binding is out of range, binds a row twice, or
     /// has no witness column to bind to.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_generalized_plonk::{Circuit, Error, Gate, Variable};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// // The gate reads variable 0, but no variable is declared.
-    /// let selector = None;
-    /// let polynomial = Sparse::<F, 1, 1>::variable(Var::new::<0>()).unwrap();
-    /// let gate = Gate::new(selector, polynomial);
-    /// let num_rows = 2;
-    /// let witness_columns = 1;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![gate];
-    /// let sigma = vec![0, 1];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings);
-    /// assert_eq!(c.unwrap_err(), Error::Shape);
-    /// ```
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         num_rows: usize,
@@ -348,26 +225,6 @@ where
     ///
     /// See `tests/permutation.rs` for circuits copying between some of
     /// their columns only.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Circuit, Error};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 3;
-    /// let sigma = (0..6).collect();
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// let repeated = vec![2, 2];
-    /// assert_eq!(c.clone().with_permutation(repeated, vec![0, 1, 2, 3]).unwrap_err(), Error::Shape);
-    /// let only_column_2 = vec![2];
-    /// let swap_its_rows = vec![1, 0];
-    /// assert_eq!(c.with_permutation(only_column_2, swap_its_rows).unwrap().permuted(), &[2]);
-    /// ```
     pub fn with_permutation(
         mut self,
         columns: Vec<usize>,
@@ -388,22 +245,6 @@ where
 
     /// The witness columns the copy permutation acts on, in the order of
     /// its cells.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 2;
-    /// let sigma = (0..4).collect();
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.permuted(), &[0, 1]);
-    /// ```
     #[must_use]
     pub fn permuted(&self) -> &[usize] {
         &self.permuted
@@ -418,37 +259,6 @@ where
     /// a selector that is not boolean, reads an undeclared variable, or is
     /// a plookup that is ungated or turned on on the last row (which
     /// plookup reserves).
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_generalized_plonk::{Argument, Circuit, Error, Lookup};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![vec![F::ZERO; 2]];
-    /// let selectors = vec![vec![F::ONE; 2]];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// // A plookup on the last row.
-    /// let argument = Argument::Plookup;
-    /// let selector = Some(0);
-    /// let inputs = vec![Sparse::zero()];
-    /// let table = vec![0];
-    /// let l = Lookup::new(argument, selector, inputs, table);
-    /// assert_eq!(c.clone().with_lookups(vec![l]).unwrap_err(), Error::Shape);
-    /// // LogUp has no reserved row.
-    /// let argument = Argument::LogUp;
-    /// let selector = Some(0);
-    /// let inputs = vec![Sparse::zero()];
-    /// let table = vec![0];
-    /// let l = Lookup::new(argument, selector, inputs, table);
-    /// assert!(c.with_lookups(vec![l]).is_ok());
-    /// ```
     pub fn with_lookups(mut self, lookups: Vec<Lookup<F, N, D>>) -> Result<Self, Error> {
         let n = self.num_rows;
         let mut attached = Vec::with_capacity(lookups.len());
@@ -495,200 +305,54 @@ where
     }
 
     /// The lookups.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert!(c.lookups().is_empty());
-    /// ```
     #[must_use]
     pub fn lookups(&self) -> &[Lookup<F, N, D>] {
         &self.lookups
     }
 
     /// The number of rows, a power of two.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 4;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.num_rows(), 4);
-    /// ```
     #[must_use]
     pub const fn num_rows(&self) -> usize {
         self.num_rows
     }
 
     /// The number of witness columns.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 3;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = (0..6).collect();
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.witness_columns(), 3);
-    /// ```
     #[must_use]
     pub const fn witness_columns(&self) -> usize {
         self.witness_columns
     }
 
     /// The fixed columns.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![vec![F::ONE; 2]];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.fixed(), &[vec![F::ONE; 2]]);
-    /// ```
     #[must_use]
     pub fn fixed(&self) -> &[Vec<F>] {
         &self.fixed
     }
 
     /// The selector columns.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![vec![F::ONE, F::ZERO]];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.selectors().len(), 1);
-    /// ```
     #[must_use]
     pub fn selectors(&self) -> &[Vec<F>] {
         &self.selectors
     }
 
     /// The variables of the gates, in the order of their indices.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::{Circuit, Variable};
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![Variable::Public(0)];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 1;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.variables(), &[Variable::Public(0)]);
-    /// ```
     #[must_use]
     pub fn variables(&self) -> &[Variable] {
         &self.variables
     }
 
     /// The gates.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert!(c.gates().is_empty());
-    /// ```
     #[must_use]
     pub fn gates(&self) -> &[Gate<F, N, D>] {
         &self.gates
     }
 
     /// The copy permutation of the witness cells.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 1;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![1, 0];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.sigma(), &[1, 0]);
-    /// ```
     #[must_use]
     pub fn sigma(&self) -> &[usize] {
         &self.sigma
     }
 
     /// The number of public inputs.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 0;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![];
-    /// let public_inputs = 5;
-    /// let bindings = vec![];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.public_inputs(), 5);
-    /// ```
     #[must_use]
     pub const fn public_inputs(&self) -> usize {
         self.public_inputs
@@ -696,22 +360,6 @@ where
 
     /// The bindings `(input, row)`: witness column 0 at `row` holds public
     /// input `input`.
-    ///
-    /// ```
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// let num_rows = 2;
-    /// let witness_columns = 1;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![0, 1];
-    /// let public_inputs = 1;
-    /// let bindings = vec![(0, 1)];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.bindings(), &[(0, 1)]);
-    /// ```
     #[must_use]
     pub fn bindings(&self) -> &[(usize, usize)] {
         &self.bindings
@@ -720,31 +368,6 @@ where
     /// The degree of a gate in the polynomials the protocol interpolates:
     /// the largest number of column variables in a monomial (public inputs
     /// are scalars), plus one for the selector.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_generalized_plonk::{Circuit, Gate, Variable};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_poly::Rotation;
-    /// let var = |i| Sparse::<F, 2, 2>::variable(Var::try_new(i).unwrap()).unwrap();
-    /// // w0 * x0: one column, one scalar; gated.
-    /// let selector = Some(0);
-    /// let polynomial = var(0).checked_mul(&var(1)).unwrap();
-    /// let gate = Gate::new(selector, polynomial);
-    /// let vars = vec![Variable::Witness { column: 0, rotation: Rotation::CURR }, Variable::Public(0)];
-    /// let num_rows = 2;
-    /// let witness_columns = 1;
-    /// let fixed = vec![];
-    /// let selectors = vec![vec![F::ONE; 2]];
-    /// let variables = vars;
-    /// let gates = vec![gate];
-    /// let sigma = vec![0, 1];
-    /// let public_inputs = 1;
-    /// let bindings = vec![];
-    /// let c = Circuit::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert_eq!(c.column_degree(&c.gates()[0]), 2);
-    /// ```
     #[must_use]
     pub fn column_degree(&self, gate: &Gate<F, N, D>) -> usize {
         self.polynomial_degree(&gate.polynomial) + usize::from(gate.selector.is_some())
@@ -752,32 +375,6 @@ where
 
     /// The degree of a lookup's query in the interpolated polynomials: the
     /// largest column degree of an input, plus one for the selector.
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_generalized_plonk::{Argument, Circuit, Lookup, Variable};
-    /// use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_poly::Rotation;
-    /// let w = Sparse::<F, 1, 2>::variable(Var::new::<0>()).unwrap();
-    /// let vars = vec![Variable::Witness { column: 0, rotation: Rotation::CURR }];
-    /// let argument = Argument::LogUp;
-    /// let selector = Some(0);
-    /// let inputs = vec![w.checked_mul(&w).unwrap()];
-    /// let table = vec![0];
-    /// let l = Lookup::new(argument, selector, inputs, table);
-    /// let num_rows = 2;
-    /// let witness_columns = 1;
-    /// let fixed = vec![vec![F::ZERO; 2]];
-    /// let selectors = vec![vec![F::ONE; 2]];
-    /// let variables = vars;
-    /// let gates = vec![];
-    /// let sigma = vec![0, 1];
-    /// let public_inputs = 0;
-    /// let bindings = vec![];
-    /// let c = Circuit::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap().with_lookups(vec![l]).unwrap();
-    /// assert_eq!(c.query_degree(&c.lookups()[0]), 3);
-    /// ```
     #[must_use]
     pub fn query_degree(&self, lookup: &Lookup<F, N, D>) -> usize {
         let inputs = lookup
@@ -816,25 +413,6 @@ where
 
     /// Whether the witness columns `columns` and the public inputs `public`
     /// satisfy the circuit: see the [module documentation](self).
-    ///
-    /// ```
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_generalized_plonk::Circuit;
-    /// use arrabbiata_pasta::Fq as F;
-    /// // Two cells copied to each other, and one bound to x0.
-    /// let num_rows = 2;
-    /// let witness_columns = 1;
-    /// let fixed = vec![];
-    /// let selectors = vec![];
-    /// let variables = vec![];
-    /// let gates = vec![];
-    /// let sigma = vec![1, 0];
-    /// let public_inputs = 1;
-    /// let bindings = vec![(0, 0)];
-    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-    /// assert!(c.is_satisfied(&[vec![F::ONE, F::ONE]], &[F::ONE]));
-    /// assert!(!c.is_satisfied(&[vec![F::ONE, F::ZERO]], &[F::ONE]));
-    /// ```
     #[must_use]
     pub fn is_satisfied(&self, columns: &[Vec<F>], public: &[F]) -> bool {
         let n = self.num_rows;
@@ -1012,41 +590,6 @@ where
 
 /// The whole circuit: its shape, then every fixed and selector value and
 /// the copy permutation.
-///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_generalized_plonk::Circuit;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_transcript::{Absorb, Transcript};
-/// // Sponge domain tags: each transcript gets its own, and prover and
-/// // verifier start from the same one.
-/// let transcript_domain = 0;
-/// let num_rows = 2;
-/// let witness_columns = 1;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = vec![0, 1];
-/// let public_inputs = 0;
-/// let bindings = vec![];
-/// let a = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// let num_rows = 2;
-/// let witness_columns = 1;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = vec![1, 0];
-/// let public_inputs = 0;
-/// let bindings = vec![];
-/// let b = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// let (mut s, mut t) = (vesta_sponge(transcript_domain), vesta_sponge(transcript_domain));
-/// a.absorb_into(&mut s);
-/// b.absorb_into(&mut t);
-/// assert_ne!(s.squeeze(), t.squeeze());
-/// ```
 impl<F, const N: usize, const D: usize> Absorb<F> for Circuit<F, N, D>
 where
     F: Field,

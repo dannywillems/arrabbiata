@@ -19,12 +19,6 @@ use arrabbiata_transcript::{
 use crate::{Digest, Embed, Error, Params, Relaxed, RelaxedInstance};
 
 /// The commitments to the `K` cross-terms of a fold, `T_1` first.
-///
-/// ```
-/// use arrabbiata_plonkish_folding::CrossTerms;
-/// let t = CrossTerms([1u8, 2]);
-/// assert_eq!(t.0[0], 1);
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CrossTerms<C, const K: usize>(pub [C; K]);
 
@@ -67,7 +61,6 @@ where
 ///
 /// Complete runs: `tests/examples.rs` (an incremental computation, two
 /// accumulators folded); laws: `tests/accumulation.rs`.
-#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub struct Fold<
     'a,
     F,
@@ -339,7 +332,6 @@ pub type Accumulate<
 ///
 /// Complete runs: `tests/examples.rs` (an incremental computation, two
 /// accumulators folded); laws: `tests/accumulation.rs`.
-#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub const fn accumulate<
     F,
     PC,

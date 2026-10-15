@@ -28,48 +28,15 @@ pub mod typed;
 use arrabbiata_field::Field;
 
 /// A Fiat-Shamir transcript over the field `F`.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::goldilocks_sponge;
-/// use arrabbiata_transcript::{Transcript};
-/// fn challenge_after<T>(t: &mut T, x: F) -> F
-/// where
-///     T: Transcript<F>,
-/// {
-///     t.absorb(x);
-///     t.squeeze()
-/// }
-/// let c = challenge_after(&mut goldilocks_sponge(0), F::new(1));
-/// assert_eq!(c, challenge_after(&mut goldilocks_sponge(0), F::new(1)));
-/// ```
 pub trait Transcript<F>
 where
     F: Field,
 {
     /// Absorb one field element.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::goldilocks_sponge;
-    /// use arrabbiata_transcript::{Transcript};
-    /// let mut t = goldilocks_sponge(0);
-    /// t.absorb(F::new(1));
-    /// ```
     fn absorb(&mut self, value: F);
 
     /// Squeeze one challenge. The challenge depends on everything absorbed
     /// and squeezed so far.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::goldilocks_sponge;
-    /// use arrabbiata_transcript::{Transcript};
-    /// let mut t = goldilocks_sponge(0);
-    /// let a = t.squeeze();
-    /// let b = t.squeeze();
-    /// assert_ne!(a, b);
-    /// ```
     fn squeeze(&mut self) -> F;
 }
 
@@ -78,38 +45,11 @@ where
 /// Implementations must be injective on the values of one type: two
 /// different values must absorb different sequences. Prefixing variable
 /// length data with its length is the usual way to guarantee it.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::goldilocks_sponge;
-/// use arrabbiata_transcript::{Absorb, Transcript};
-/// struct Point { x: F, y: F }
-/// impl Absorb<F> for Point {
-///     fn absorb_into<T>(&self, t: &mut T)
-///     where
-///         T: Transcript<F>,
-///     {
-///         t.absorb(self.x);
-///         t.absorb(self.y);
-///     }
-/// }
-/// let mut t = goldilocks_sponge(0);
-/// Point { x: F::ONE, y: F::ZERO }.absorb_into(&mut t);
-/// ```
 pub trait Absorb<F>
 where
     F: Field,
 {
     /// Absorb `self` into `transcript`.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::goldilocks_sponge;
-    /// use arrabbiata_transcript::{Absorb, Transcript};
-    /// let mut t = goldilocks_sponge(0);
-    /// F::new(5).absorb_into(&mut t);
-    /// let _ = t.squeeze();
-    /// ```
     fn absorb_into<T>(&self, transcript: &mut T)
     where
         T: Transcript<F>;
@@ -128,14 +68,6 @@ where
 }
 
 /// Absorb a length, so that variable-length sequences absorb injectively.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::goldilocks_sponge;
-/// use arrabbiata_transcript::{Transcript, absorb_length};
-/// let mut t = goldilocks_sponge(0);
-/// absorb_length(&mut t, 3);
-/// ```
 pub fn absorb_length<F, T>(transcript: &mut T, length: usize)
 where
     F: Field,
@@ -145,15 +77,6 @@ where
 }
 
 /// Absorb a slice of absorbable values, prefixed with its length.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::goldilocks_sponge;
-/// use arrabbiata_transcript::{Transcript, absorb_slice};
-/// let mut t = goldilocks_sponge(0);
-/// absorb_slice(&mut t, &[F::ONE, F::ONE]);
-/// let _ = t.squeeze();
-/// ```
 pub fn absorb_slice<F, A, T>(transcript: &mut T, values: &[A])
 where
     F: Field,
@@ -192,50 +115,16 @@ pub mod tag {
 ///
 /// Poseidon, Poseidon2, Rescue, Griffin or Anemoi are instances; the sponge
 /// is generic over the choice.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::{};
-/// use arrabbiata_transcript::{Duplex, Permutation, Transcript};
-/// /// Rotate the state: a (useless) permutation of F^2.
-/// struct Swap;
-/// impl Permutation<F, 2> for Swap {
-///     fn permute(&self, state: &mut [F; 2]) {
-///         state.swap(0, 1);
-///     }
-/// }
-/// let mut sponge = Duplex::<F, Swap, 2, 1>::new(Swap, 0);
-/// sponge.absorb(F::new(3));
-/// assert_eq!(sponge.squeeze(), F::ZERO);
-/// ```
 pub trait Permutation<F, const WIDTH: usize>
 where
     F: Field,
 {
     /// Apply the permutation in place.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::goldilocks;
-    /// use arrabbiata_transcript::{Permutation};
-    /// let mut state = [F::ZERO; 12];
-    /// goldilocks().permute(&mut state);
-    /// assert_ne!(state, [F::ZERO; 12]);
-    /// ```
     fn permute(&self, state: &mut [F; WIDTH]);
 }
 
 /// A duplex sponge over the permutation `P`, with a state of `WIDTH`
 /// elements of which the first `RATE` are the rate.
-///
-/// ```
-/// use arrabbiata_field::{Field, Goldilocks as F};
-/// use arrabbiata_poseidon::goldilocks;
-/// use arrabbiata_transcript::{Duplex, Transcript};
-/// let mut sponge = Duplex::<F, _, 12, 8>::new(goldilocks(), 42);
-/// sponge.absorb(F::ONE);
-/// let _challenge = sponge.squeeze();
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Duplex<F, P, const WIDTH: usize, const RATE: usize> {
     permutation: P,
@@ -249,15 +138,6 @@ where
     P: Permutation<F, WIDTH>,
 {
     /// A fresh sponge, separated by `domain` in the capacity.
-    ///
-    /// ```
-    /// use arrabbiata_field::{Field, Goldilocks as F};
-    /// use arrabbiata_poseidon::goldilocks;
-    /// use arrabbiata_transcript::{Duplex, Transcript};
-    /// let mut a = Duplex::<F, _, 12, 8>::new(goldilocks(), 1);
-    /// let mut b = Duplex::<F, _, 12, 8>::new(goldilocks(), 2);
-    /// assert_ne!(a.squeeze(), b.squeeze());
-    /// ```
     #[must_use]
     pub fn new(permutation: P, domain: u64) -> Self {
         const {

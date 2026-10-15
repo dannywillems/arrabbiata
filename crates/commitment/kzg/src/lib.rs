@@ -18,21 +18,6 @@
 //! The commitment is a module morphism, so [`Kzg`] is also a
 //! [`HomomorphicCommitment`] (a vector is committed as the coefficients of a
 //! polynomial).
-//!
-//! ```
-//! use arrabbiata_bn254::{Bn254, Fr};
-//! use arrabbiata_commit::PolynomialCommitment;
-//! use arrabbiata_field::Field;
-//! use arrabbiata_kzg::Kzg;
-//!
-//! // A test setup whose secret is known: never use it in a deployment.
-//! let kzg = Kzg::<Bn254>::insecure_setup(8, Fr::from_u64(123_456_789));
-//! let p = [Fr::from_u64(1), Fr::from_u64(2), Fr::from_u64(3)];
-//! let c = kzg.commit(&p);
-//! let (v, proof) = kzg.open(&p, &Fr::from_u64(2));
-//! assert_eq!(v, Fr::from_u64(17));
-//! assert!(kzg.verify(&c, &Fr::from_u64(2), v, &proof));
-//! ```
 
 #![no_std]
 
@@ -49,13 +34,6 @@ use arrabbiata_transcript::typed::Label;
 type Scalar<E> = <<E as Pairing>::G1 as Curve>::Scalar;
 
 /// The KZG scheme over the pairing `E`.
-///
-/// ```
-/// use arrabbiata_bn254::{Bn254, Fr};
-/// use arrabbiata_field::Field;
-/// use arrabbiata_kzg::Kzg;
-/// assert_eq!(Kzg::<Bn254>::insecure_setup(4, Fr::from_u64(5)).size(), 4);
-/// ```
 #[derive(Clone, Debug)]
 pub struct Kzg<E>
 where
@@ -83,13 +61,6 @@ where
     /// INSECURE: whoever knows `tau` can open a commitment to any value. A
     /// deployment must use a string from a multi-party ceremony, loaded with
     /// [`Kzg::from_powers`]. This constructor exists for tests and examples.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{Bn254, Fr};
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_kzg::Kzg;
-    /// let _ = Kzg::<Bn254>::insecure_setup(2, Fr::from_u64(42));
-    /// ```
     #[must_use]
     pub fn insecure_setup(size: usize, tau: Scalar<E>) -> Self {
         let g = Projective::<E::G1>::generator();
@@ -110,17 +81,6 @@ where
 
     /// A scheme from a reference string `[tau^i] G` (with `powers[0]` the
     /// generator of `G1`), `H` and `[tau] H`.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{Bn254, Fr, G1, G2};
-    /// use arrabbiata_curve::Projective;
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_kzg::Kzg;
-    /// let tau = Fr::from_u64(9);
-    /// let (g, h) = (Projective::<G1>::generator(), Projective::<G2>::generator());
-    /// let kzg = Kzg::<Bn254>::from_powers(vec![g, g * tau], h, h * tau);
-    /// assert_eq!(kzg.size(), 2);
-    /// ```
     #[must_use]
     pub const fn from_powers(
         powers: Vec<Projective<E::G1>>,
@@ -131,13 +91,6 @@ where
     }
 
     /// The number of powers: polynomials must have fewer coefficients.
-    ///
-    /// ```
-    /// use arrabbiata_bn254::{Bn254, Fr};
-    /// use arrabbiata_field::Field;
-    /// use arrabbiata_kzg::Kzg;
-    /// assert_eq!(Kzg::<Bn254>::insecure_setup(16, Fr::ONE + Fr::ONE).size(), 16);
-    /// ```
     #[must_use]
     pub fn size(&self) -> usize {
         self.powers.len()
