@@ -20,6 +20,10 @@ timeout_multiplier = 3.0
 # - the evaluations of a PlonK proof are absorbed after the last challenge,
 #   so not absorbing them changes no challenge (it is kept for a protocol
 #   that would squeeze after them, such as batched openings);
+# - in `primes::first`, the bound `p * p <= candidate` only shortens trial
+#   division: a larger bound (`p + p`, `p / p`) finds the same primes;
+# - in `primes::first`, the bound `p * p <= candidate` only shortens trial
+#   division: a larger bound (`p + p`, `p / p`) finds the same primes;
 # - the label of a PlonK message, `rotate_left(PC::LABEL, 16) ^ TAG`, takes
 #   the same value with `|`: every scheme label fits in 48 bits, so the
 #   16-bit tag and the rotated label occupy disjoint bits.
@@ -28,4 +32,5 @@ exclude_re = [
   "replace % with \\+ in setup",
   "Absorb<F> for Opened<T, W, X, Q>>::absorb_into",
   "replace \\^ with \\| in message_label",
+  "replace \\* with (\\+|/) in first",
 ]

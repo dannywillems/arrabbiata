@@ -108,6 +108,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-mvpoly"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-field",
+ "arrabbiata-pasta",
+ "arrabbiata-poly",
+ "arrabbiata-relation",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-pasta"
 version = "0.0.0"
 dependencies = [

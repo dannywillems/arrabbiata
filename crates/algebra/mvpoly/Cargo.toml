@@ -1,0 +1,21 @@
+[package]
+name = "arrabbiata-mvpoly"
+description = "Multivariate polynomials in normal form, and the cross-terms of folding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-field = { workspace = true }
+arrabbiata-poly = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-pasta = { workspace = true }
+arrabbiata-relation = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
