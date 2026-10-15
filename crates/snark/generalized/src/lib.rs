@@ -26,6 +26,7 @@
 
 extern crate alloc;
 
+pub mod accumulating;
 pub mod circuit;
 pub mod lookup;
 pub mod plonkish;
@@ -62,6 +63,9 @@ pub enum Error {
     Opening(usize),
     /// The identity does not hold at `zeta`.
     IdentityFailed,
+    /// The scheme's succinct check of the evaluations failed (the
+    /// accumulating protocol).
+    Accumulation,
 }
 
 impl fmt::Display for Error {
@@ -73,6 +77,7 @@ impl fmt::Display for Error {
             Self::CosetShifts => write!(f, "the coset shifts are not in distinct cosets"),
             Self::Unsatisfied => write!(f, "the witness does not satisfy the circuit"),
             Self::Opening(i) => write!(f, "batch opening proof {i} does not verify"),
+            Self::Accumulation => write!(f, "the succinct check of the evaluations failed"),
             Self::IdentityFailed => write!(f, "the identity does not hold at zeta"),
         }
     }

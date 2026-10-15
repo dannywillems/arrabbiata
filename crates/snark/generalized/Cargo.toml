@@ -11,10 +11,12 @@ authors.workspace = true
 [dependencies]
 arrabbiata-commit = { workspace = true }
 arrabbiata-field = { workspace = true }
+arrabbiata-halo = { workspace = true }
 arrabbiata-mvpoly = { workspace = true }
 arrabbiata-permutation = { workspace = true }
 arrabbiata-plonkish = { workspace = true }
 arrabbiata-poly = { workspace = true }
+arrabbiata-reduction = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 
 [dev-dependencies]
@@ -26,6 +28,7 @@ arrabbiata-pasta = { workspace = true }
 arrabbiata-plonk = { workspace = true }
 arrabbiata-poseidon = { workspace = true }
 proptest = { workspace = true }
+sha2 = { workspace = true }
 
 [lints]
 workspace = true

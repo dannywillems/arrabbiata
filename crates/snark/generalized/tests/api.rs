@@ -5,16 +5,22 @@ use arrabbiata_field::Field;
 use arrabbiata_frontend::vanilla::build;
 use arrabbiata_generalized_plonk::{
     Argument, Circuit, Commitments, Error, Gate, GeneralizedPlonk, Lookup, Opened, PublicInputs,
-    Tagged, Variable, max_coefficients, opening_groups,
+    Tagged, Variable,
+    accumulating::{
+        Accumulating, AccumulatingPlonk, AccumulatingProof, Satisfiability, Values, rotations,
+    },
+    max_coefficients, opening_groups,
     plonkish::{columns_read, from_plonkish, polynomial, variable},
     quotient_factor, rotated, setup,
 };
+use arrabbiata_halo::Accumulation;
 use arrabbiata_ipa::Ipa;
 use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
 use arrabbiata_pasta::{Fq as F, Fq, Pallas};
 use arrabbiata_plonkish::{vanilla, vanilla::Vanilla};
 use arrabbiata_poly::{Expr, Rotation, Variable as Read, WitnessColumn};
 use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+use arrabbiata_reduction::{Reduction, Relation};
 use arrabbiata_transcript::{
     Absorb, Transcript,
     typed::{Pattern, Protocol},
@@ -1202,4 +1208,102 @@ fn protocol_setup() {
     let ipa_transcript = vesta_sponge(1);
     let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
     assert!(setup(&c, &pcs).is_ok());
+}
+
+/// One witness column on two rows, no gate, no public input: the smallest
+/// circuit, with its keys over IPA.
+fn smallest() -> (Circuit<F, 1, 1>, Ipa<Pallas, PoseidonSponge<F>>) {
+    let num_rows = 2;
+    let witness_columns = 1;
+    let fixed = vec![];
+    let selectors = vec![];
+    let variables = vec![];
+    let gates = vec![];
+    let sigma = vec![0, 1];
+    let public_inputs = 0;
+    let bindings = vec![];
+    let c = Circuit::<F, 1, 1>::new(
+        num_rows,
+        witness_columns,
+        fixed,
+        selectors,
+        variables,
+        gates,
+        sigma,
+        public_inputs,
+        bindings,
+    )
+    .unwrap();
+    let mut generators = pallas_sponge(0);
+    let size = 8;
+    let ipa_transcript = vesta_sponge(1);
+    let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
+    (c, pcs)
+}
+
+#[test]
+fn protocol_preprocessed_accessors() {
+    let (c, pcs) = smallest();
+    let (_, vk) = setup(&c, &pcs).unwrap();
+    let key = &vk.value;
+    assert_eq!(key.log_size(), 1);
+    assert_eq!(key.witness_columns(), 1);
+    assert!(key.variables().is_empty());
+    assert!(key.lookups().is_empty());
+    assert!(key.fixed_commitments().is_empty());
+    assert!(key.selector_commitments().is_empty());
+    assert_eq!(key.sigma_commitments().len(), 1);
+}
+
+#[test]
+fn error_accumulation() {
+    let found = format!("{}", Error::Accumulation);
+    assert_eq!(found, "the succinct check of the evaluations failed");
+}
+
+#[test]
+fn accumulating_rotations() {
+    // The current row and the next one, always.
+    assert_eq!(rotations(&[]), vec![Rotation::CURR, Rotation::NEXT]);
+}
+
+#[test]
+fn accumulating_values() {
+    // Two polynomials at one point.
+    let values = Values(vec![vec![F::ONE], vec![F::ZERO]]);
+    assert_eq!(values.0.len(), 2);
+}
+
+#[test]
+fn accumulating_satisfiability() {
+    let (c, _) = smallest();
+    let columns = vec![vec![F::ONE, F::ZERO]];
+    assert!(Satisfiability(&c).check(&vec![], &columns).is_ok());
+    assert_eq!(
+        Satisfiability(&c).check(&vec![F::ONE], &columns),
+        Err(Error::PublicInputs)
+    );
+}
+
+#[test]
+fn accumulating_reduction_and_proof() {
+    // Prove, then verify to the same accumulator, which the decider accepts.
+    let (c, pcs) = smallest();
+    let (pk, _) = setup(&c, &pcs).unwrap();
+    let reduction = Accumulating::new(&pk, &pcs);
+    let columns = vec![vec![F::ONE, F::ZERO]];
+    let out = reduction.prove(vesta_sponge(2), &vec![], &columns).unwrap();
+    let proof: AccumulatingProof<F, _, 1, 1> = out.proof;
+    let (accumulator, _) = reduction.verify(vesta_sponge(2), &vec![], proof).unwrap();
+    assert_eq!(accumulator, out.instance);
+    assert!(Accumulation::decide(&pcs, &accumulator));
+}
+
+#[test]
+fn accumulating_plonk_transcript() {
+    // The rounds' 6 messages (wires, lookup columns, z, lookup products,
+    // t, values) and 5 challenges; the opening is the scheme's.
+    type P = <AccumulatingPlonk<F, Ipa<Pallas, PoseidonSponge<F>>, 3, 2> as Protocol>::Transcript;
+    assert_eq!(<P as Pattern>::MESSAGES, 6);
+    assert_eq!(<P as Pattern>::CHALLENGES, 5);
 }

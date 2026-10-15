@@ -47,8 +47,10 @@ use arrabbiata_permutation::{self as permutation, Permutation};
 use arrabbiata_poly::{Domain, Rotation, UniPoly};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_length, absorb_slice,
+    hlist::HCons,
     typed::{
-        Challenge, End, Label, Message, ProofOf, Protocol, Public, prover_tape, verifier_tape,
+        Challenge, End, Label, Message, Pattern, ProofOf, Protocol, Prover, Public, Verifier,
+        prover_tape, verifier_tape,
     },
 };
 
@@ -339,6 +341,48 @@ where
     pub const fn public_inputs(&self) -> usize {
         self.public_inputs
     }
+
+    /// `log2` of the number of rows.
+    #[must_use]
+    pub const fn log_size(&self) -> u32 {
+        self.log_size
+    }
+
+    /// The number of witness columns.
+    #[must_use]
+    pub const fn witness_columns(&self) -> usize {
+        self.witness_columns
+    }
+
+    /// The variables the gates read.
+    #[must_use]
+    pub fn variables(&self) -> &[Variable] {
+        &self.variables
+    }
+
+    /// The lookups.
+    #[must_use]
+    pub fn lookups(&self) -> &[Lookup<F, N, D>] {
+        &self.lookups
+    }
+
+    /// The commitments to the fixed columns.
+    #[must_use]
+    pub fn fixed_commitments(&self) -> &[C] {
+        &self.fixed
+    }
+
+    /// The commitments to the selectors.
+    #[must_use]
+    pub fn selector_commitments(&self) -> &[C] {
+        &self.selectors
+    }
+
+    /// The commitments to the permutation polynomials.
+    #[must_use]
+    pub fn sigma_commitments(&self) -> &[C] {
+        &self.sigmas
+    }
 }
 
 impl<F, C, const N: usize, const D: usize> Absorb<F> for Preprocessed<F, C, N, D>
@@ -427,11 +471,35 @@ where
     pub const fn circuit(&self) -> &Circuit<F, N, D> {
         &self.circuit
     }
+
+    /// The domain of the rows.
+    pub(crate) const fn domain(&self) -> &Domain<F> {
+        &self.domain
+    }
+
+    /// The fixed polynomials.
+    pub(crate) fn fixed_polynomials(&self) -> &[UniPoly<F>] {
+        &self.fixed
+    }
+
+    /// The selector polynomials.
+    pub(crate) fn selector_polynomials(&self) -> &[UniPoly<F>] {
+        &self.selectors
+    }
+
+    /// The permutation polynomials.
+    pub(crate) fn sigma_polynomials(&self) -> &[UniPoly<F>] {
+        &self.sigmas
+    }
 }
 
-/// The transcript of generalized PlonK: the verifier key and the public
-/// inputs, then the rounds.
-pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> = Public<
+/// The rounds of generalized PlonK's polynomial IOP, then `Tail`: the
+/// verifier key and the public inputs, the witness commitments, `theta`,
+/// the lookup columns, `beta, gamma`, the grand product and the lookup
+/// products, `alpha`, the quotient, `zeta`. The protocols compiled from the
+/// IOP differ only in their `Tail`, how the evaluations at `zeta` are sent
+/// and checked.
+pub type Rounds<F, PC, const N: usize, const D: usize, Tail> = Public<
     VerifierKey<F, PC, N, D>,
     Public<
         PublicInputs<F>,
@@ -446,17 +514,7 @@ pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> = Public<
                                 GrandProduct<F, PC>,
                                 Message<
                                     LookupProducts<F, PC>,
-                                    Challenge<
-                                        Message<
-                                            Quotient<F, PC>,
-                                            Challenge<
-                                                Message<
-                                                    Opened<F>,
-                                                    Challenge<Message<Openings<F, PC>, End>>,
-                                                >,
-                                            >,
-                                        >,
-                                    >,
+                                    Challenge<Message<Quotient<F, PC>, Challenge<Tail>>>,
                                 >,
                             >,
                         >,
@@ -466,6 +524,53 @@ pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> = Public<
         >,
     >,
 >;
+
+/// The transcript of generalized PlonK: the [`Rounds`], then the sparse
+/// evaluations, `nu`, and one batch opening per point.
+pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> =
+    Rounds<F, PC, N, D, Message<Opened<F>, Challenge<Message<Openings<F, PC>, End>>>>;
+
+/// The messages a prover of the [`Rounds`] has written, newest first, on
+/// top of `W`.
+pub(crate) type RoundsWritten<F, PC, W> = HCons<
+    Quotient<F, PC>,
+    HCons<
+        LookupProducts<F, PC>,
+        HCons<GrandProduct<F, PC>, HCons<LookupColumns<F, PC>, HCons<Wires<F, PC>, W>>>,
+    >,
+>;
+
+/// The challenges of the [`Rounds`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Challenges<F> {
+    pub(crate) theta: F,
+    pub(crate) beta: F,
+    pub(crate) gamma: F,
+    pub(crate) alpha: F,
+    pub(crate) zeta: F,
+}
+
+/// The commitments of the [`Rounds`]: the witness columns, the lookup
+/// columns before and after `beta, gamma` (all lookups, in order), the
+/// grand product and the quotient.
+#[derive(Clone, Debug)]
+pub(crate) struct Committed<C> {
+    pub(crate) wires: Vec<C>,
+    pub(crate) before: Vec<C>,
+    pub(crate) z: C,
+    pub(crate) after: Vec<C>,
+    pub(crate) t: C,
+}
+
+/// The polynomials the prover of the [`Rounds`] committed to, in the
+/// shape of [`Committed`], with the lookup columns grouped by lookup.
+pub(crate) struct Polynomials<F> {
+    pub(crate) wires: Vec<UniPoly<F>>,
+    pub(crate) before: Vec<Vec<UniPoly<F>>>,
+    pub(crate) z: UniPoly<F>,
+    pub(crate) after: Vec<Vec<UniPoly<F>>>,
+    pub(crate) t: UniPoly<F>,
+}
 
 /// The openings grouped by point: for each distinct point, in the order
 /// it first appears among `points`, the point and the indices of the
@@ -612,7 +717,7 @@ where
 }
 
 /// `w^k` for the generator `w` of `domain` and any `k` in `Z`.
-fn root_power<F>(domain: &Domain<F>, rotation: Rotation) -> F
+pub(crate) fn root_power<F>(domain: &Domain<F>, rotation: Rotation) -> F
 where
     F: TwoAdicField,
 {
@@ -675,30 +780,34 @@ struct LookupWitness<F> {
     after: Vec<Vec<F>>,
 }
 
-/// Prove that the witness columns `columns` satisfy the circuit of `pk`
-/// for the public inputs `public`. Returns the proof and the transcript
-/// after the protocol.
+/// The prover of the [`Rounds`], on the tape of any protocol compiled
+/// from them: the polynomials, their commitments, the challenges, and the
+/// tape at `Tail`.
 ///
 /// # Errors
 ///
-/// [`Error::PublicInputs`] for a wrong number of public inputs,
-/// [`Error::Shape`] for columns of the wrong shape,
-/// [`Error::Unsatisfied`] if they do not satisfy the circuit.
-///
-/// A complete run, from a circuit to a verified proof, is in
-/// `tests/examples.rs`.
+/// As [`prove`].
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
-pub fn prove<F, PC, T, const N: usize, const D: usize>(
+pub(crate) fn prove_rounds<F, PC, T, Full, Tail, W, const N: usize, const D: usize>(
     pk: &ProverKey<F, PC, N, D>,
     pcs: &PC,
-    transcript: T,
+    tape: Prover<F, T, Full, Rounds<F, PC, N, D, Tail>, W>,
     public: &[F],
     columns: &[Vec<F>],
-) -> Result<(Proof<F, PC, N, D>, T), Error>
+) -> Result<
+    (
+        Polynomials<F>,
+        Committed<Com<F, PC>>,
+        Challenges<F>,
+        Prover<F, T, Full, Tail, RoundsWritten<F, PC, W>>,
+    ),
+    Error,
+>
 where
     F: TwoAdicField + PrimeField,
-    PC: BatchOpening<F, Family = Univariate> + Label,
+    PC: PolynomialCommitment<F, Family = Univariate> + Label,
     T: Transcript<F>,
+    Tail: Pattern,
 {
     let circuit = &pk.circuit;
     let key = &pk.vk.value;
@@ -721,10 +830,11 @@ where
 
     // Round 1: the witness columns, then the lookup combiner theta.
     let wires = interpolate_all(columns)?;
-    let tape = prover_tape::<F, T, GeneralizedPlonk<F, PC, N, D>>(transcript)
+    let wire_commitments: Vec<_> = wires.iter().map(commit).collect();
+    let tape = tape
         .public(&pk.vk)
         .public(&PublicInputs(public.to_vec()))
-        .send(Tagged::new(Commitments(wires.iter().map(commit).collect())));
+        .send(Tagged::new(Commitments(wire_commitments.clone())));
     let (theta, tape) = tape.challenge();
 
     // Round 2: the lookup columns drawn before beta, gamma.
@@ -769,9 +879,8 @@ where
     for l in &lookups {
         before_polys.push(interpolate_all(&l.before)?);
     }
-    let tape = tape.send(Tagged::new(Commitments(
-        before_polys.iter().flatten().map(commit).collect(),
-    )));
+    let before_commitments: Vec<_> = before_polys.iter().flatten().map(commit).collect();
+    let tape = tape.send(Tagged::new(Commitments(before_commitments.clone())));
     let (beta, tape) = tape.challenge();
     let (gamma, tape) = tape.challenge();
 
@@ -794,7 +903,8 @@ where
     )
     .map_err(|_| Error::Unsatisfied)?;
     let z = interpolate(domain, &z_values)?;
-    let tape = tape.send(Tagged::new(commit(&z)));
+    let z_commitment = commit(&z);
+    let tape = tape.send(Tagged::new(z_commitment.clone()));
     for (l, data) in circuit.lookups().iter().zip(&mut lookups) {
         data.after = match l.argument() {
             Argument::Plookup => vec![lookup::plookup_product(
@@ -817,9 +927,8 @@ where
     for l in &lookups {
         after_polys.push(interpolate_all(&l.after)?);
     }
-    let tape = tape.send(Tagged::new(Commitments(
-        after_polys.iter().flatten().map(commit).collect(),
-    )));
+    let after_commitments: Vec<_> = after_polys.iter().flatten().map(commit).collect();
+    let tape = tape.send(Tagged::new(Commitments(after_commitments.clone())));
     let (alpha, tape) = tape.challenge();
 
     // Round 4: the quotient, pointwise on the coset g H_E.
@@ -959,8 +1068,70 @@ where
         power = power * shift_inverse;
     }
     let t = UniPoly::new(t_coefficients);
-    let tape = tape.send(Tagged::new(commit(&t)));
+    let t_commitment = commit(&t);
+    let tape = tape.send(Tagged::new(t_commitment.clone()));
     let (zeta, tape) = tape.challenge();
+    let polynomials = Polynomials {
+        wires,
+        before: before_polys,
+        z,
+        after: after_polys,
+        t,
+    };
+    let committed = Committed {
+        wires: wire_commitments,
+        before: before_commitments,
+        z: z_commitment,
+        after: after_commitments,
+        t: t_commitment,
+    };
+    let challenges = Challenges {
+        theta,
+        beta,
+        gamma,
+        alpha,
+        zeta,
+    };
+    Ok((polynomials, committed, challenges, tape))
+}
+
+/// Prove that the witness columns `columns` satisfy the circuit of `pk`
+/// for the public inputs `public`. Returns the proof and the transcript
+/// after the protocol.
+///
+/// # Errors
+///
+/// [`Error::PublicInputs`] for a wrong number of public inputs,
+/// [`Error::Shape`] for columns of the wrong shape,
+/// [`Error::Unsatisfied`] if they do not satisfy the circuit.
+///
+/// A complete run, from a circuit to a verified proof, is in
+/// `tests/examples.rs`.
+#[allow(clippy::type_complexity)]
+pub fn prove<F, PC, T, const N: usize, const D: usize>(
+    pk: &ProverKey<F, PC, N, D>,
+    pcs: &PC,
+    transcript: T,
+    public: &[F],
+    columns: &[Vec<F>],
+) -> Result<(Proof<F, PC, N, D>, T), Error>
+where
+    F: TwoAdicField + PrimeField,
+    PC: BatchOpening<F, Family = Univariate> + Label,
+    T: Transcript<F>,
+{
+    let tape = prover_tape::<F, T, GeneralizedPlonk<F, PC, N, D>>(transcript);
+    let (polys, _, challenges, tape) = prove_rounds(pk, pcs, tape, public, columns)?;
+    let Polynomials {
+        wires,
+        before: before_polys,
+        z,
+        after: after_polys,
+        t,
+    } = polys;
+    let circuit = &pk.circuit;
+    let domain = &pk.domain;
+    let zeta = challenges.zeta;
 
     // Round 5: evaluations and openings.
     let zeta_next = zeta * domain.generator();
@@ -1055,52 +1226,31 @@ where
         return Err(Error::PublicInputs);
     }
     let domain = Domain::<F>::new(key.log_size).ok_or(Error::DomainTooLarge)?;
-    let n = domain.size();
-    let (wires, tape) = verifier_tape::<F, T, GeneralizedPlonk<F, PC, N, D>>(transcript, proof)
-        .public(vk)
-        .public(&PublicInputs(public.to_vec()))
-        .read();
-    let (theta, tape) = tape.challenge();
-    let (lookup_before, tape) = tape.read();
-    let (beta, tape) = tape.challenge();
-    let (gamma, tape) = tape.challenge();
-    let (z_commitment, tape) = tape.read();
-    let (lookup_after, tape) = tape.read();
-    let (alpha, tape) = tape.challenge();
-    let (t_commitment, tape) = tape.read();
-    let (zeta, tape) = tape.challenge();
+    let tape = verifier_tape::<F, T, GeneralizedPlonk<F, PC, N, D>>(transcript, proof);
+    let (committed, challenges, tape) = verify_rounds(vk, tape, public)?;
     let (evaluations, tape) = tape.read();
     let (nu, tape) = tape.challenge();
     let (proofs, tape) = tape.read();
     let transcript = tape.finish();
-    let (wires, lookup_before, z_commitment, lookup_after, t_commitment, proofs) = (
-        wires.value.0,
-        lookup_before.value.0,
-        z_commitment.value,
-        lookup_after.value.0,
-        t_commitment.value,
-        proofs.value.0,
-    );
-
-    let w = key.witness_columns;
+    let proofs = proofs.value.0;
+    let Committed {
+        wires,
+        before: lookup_before,
+        z: z_commitment,
+        after: lookup_after,
+        t: t_commitment,
+    } = committed;
+    let zeta = challenges.zeta;
     let rotated_vars = rotated(&key.variables);
-    let (before_count, after_count) = key.lookups.iter().fold((0, 0), |(b, a), l| {
-        let (lb, la) = l.argument().columns();
-        (b + lb, a + la)
-    });
     let counts = (
-        w,
+        key.witness_columns,
         key.permuted.len(),
         key.fixed.len(),
         key.selectors.len(),
         rotated_vars.len(),
         lookup_openings(&key.lookups),
     );
-    if wires.len() != w
-        || lookup_before.len() != before_count
-        || lookup_after.len() != after_count
-        || !evaluations.has_shape(counts)
-    {
+    if !evaluations.has_shape(counts) {
         return Err(Error::Shape);
     }
 
@@ -1159,10 +1309,108 @@ where
         }
     }
 
+    check_identity(
+        key,
+        &domain,
+        public,
+        &evaluations,
+        &challenges,
+        &rotated_vars,
+    )?;
+    Ok((wires, transcript))
+}
+
+/// The prover's messages of the [`Rounds`], read by the verifier on the
+/// tape of any protocol compiled from them, with their challenges: the
+/// tape is left at `Tail`.
+///
+/// # Errors
+///
+/// [`Error::Shape`] for commitment lists of the wrong lengths.
+#[allow(clippy::type_complexity)]
+pub(crate) fn verify_rounds<F, PC, T, Tail, const N: usize, const D: usize>(
+    vk: &VerifierKey<F, PC, N, D>,
+    tape: Verifier<F, T, Rounds<F, PC, N, D, Tail>>,
+    public: &[F],
+) -> Result<(Committed<Com<F, PC>>, Challenges<F>, Verifier<F, T, Tail>), Error>
+where
+    F: TwoAdicField,
+    PC: PolynomialCommitment<F, Family = Univariate> + Label,
+    T: Transcript<F>,
+    Tail: Pattern,
+{
+    let key = &vk.value;
+    let (wires, tape) = tape
+        .public(vk)
+        .public(&PublicInputs(public.to_vec()))
+        .read();
+    let (theta, tape) = tape.challenge();
+    let (lookup_before, tape) = tape.read();
+    let (beta, tape) = tape.challenge();
+    let (gamma, tape) = tape.challenge();
+    let (z_commitment, tape) = tape.read();
+    let (lookup_after, tape) = tape.read();
+    let (alpha, tape) = tape.challenge();
+    let (t_commitment, tape) = tape.read();
+    let (zeta, tape) = tape.challenge();
+    let committed = Committed {
+        wires: wires.value.0,
+        before: lookup_before.value.0,
+        z: z_commitment.value,
+        after: lookup_after.value.0,
+        t: t_commitment.value,
+    };
+    let (before_count, after_count) = key.lookups.iter().fold((0, 0), |(b, a), l| {
+        let (lb, la) = l.argument().columns();
+        (b + lb, a + la)
+    });
+    if committed.wires.len() != key.witness_columns
+        || committed.before.len() != before_count
+        || committed.after.len() != after_count
+    {
+        return Err(Error::Shape);
+    }
+    let challenges = Challenges {
+        theta,
+        beta,
+        gamma,
+        alpha,
+        zeta,
+    };
+    Ok((committed, challenges, tape))
+}
+
+/// The identity of the polynomial IOP at `zeta`, from the evaluations
+/// (the sparse view, whatever the protocol sent).
+///
+/// # Errors
+///
+/// [`Error::IdentityFailed`] if it does not hold.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn check_identity<F, C, const N: usize, const D: usize>(
+    key: &Preprocessed<F, C, N, D>,
+    domain: &Domain<F>,
+    public: &[F],
+    evaluations: &Opened<F>,
+    challenges: &Challenges<F>,
+    rotated_vars: &[Variable],
+) -> Result<(), Error>
+where
+    F: TwoAdicField,
+{
+    let Challenges {
+        theta,
+        beta,
+        gamma,
+        alpha,
+        zeta,
+    } = *challenges;
+    let n = domain.size();
+    let w = key.witness_columns;
     // The identity at zeta.
     let mut vars = [F::ZERO; N];
     for (slot, v) in vars.iter_mut().zip(&key.variables) {
-        *slot = at_zeta(v, &evaluations, &rotated_vars, public);
+        *slot = at_zeta(v, evaluations, rotated_vars, public);
     }
     let mut lhs = F::ZERO;
     let mut power = F::ONE;
@@ -1250,7 +1498,7 @@ where
             };
     }
     if lhs == evaluations.t * domain.vanishing_at(zeta) {
-        Ok((wires, transcript))
+        Ok(())
     } else {
         Err(Error::IdentityFailed)
     }

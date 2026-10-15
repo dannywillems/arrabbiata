@@ -248,8 +248,15 @@ moves make the state linear, which is the discipline of session types
 (Honda, *Types for dyadic interaction*, CONCUR 1993). The design follows the
 typed Fiat-Shamir experiment of o1-labs/proof-systems#2094.
 
-Every protocol, test and example runs on the Poseidon sponge; the
-repository has no non-cryptographic stand-in.
+Two oracles implement `Transcript`: the duplex sponge over a field
+permutation (Poseidon, in `arrabbiata-poseidon`, also Kimchi's sponge), and
+`hash::HashTranscript`, a hash chain over any `ByteHash` (a 256-bit hash of
+bytes: SHA-256 in the tests, a dev-dependency only), for protocols, such as
+post-quantum ones, that have no reason to use an arithmetic sponge. A
+challenge reduces at least twice the field's bits, so it is uniform up to
+`2^-|p|` in the random oracle model. Every protocol is generic over the
+oracle, and the accumulation laws run on all three. The repository has no
+non-cryptographic stand-in.
 
 ### `arrabbiata-commit`
 
@@ -377,6 +384,19 @@ as folding. Linearity is therefore a property of the scheme, not of the
 SNARK: a scheme with Merkle commitments, such as FRI, batches by combining
 codewords where the verifier queries them, and fits the same trait with a
 proof of its own.
+
+Compiled with an accumulation instead (`accumulating`, a separate
+implementation), generalized PlonK is a reduction `Satisfiability ->
+Accumulated`: the same IOP rounds (shared as `Rounds<.., Tail>`, generic
+over the rest of the transcript, so the batched protocol's transcript is
+unchanged), then every polynomial at every point it reads (`zeta`, and
+`zeta w^r` for each rotation, `rotations`), handed to the scheme's
+`Succinct`. The verifier checks the identity on the sparse view of those
+values and outputs the accumulator without deciding it, so
+`Then(Accumulating, Decide)` is the SNARK, and `Then(Each(Accumulating),
+Fold)` turns many proofs into one accumulator, decided once. It is tested
+on IPA (three oracles) and KZG (two), with rotations `PREV` and `NEXT` and
+both lookup arguments.
 
 ### `arrabbiata-permutation`
 
