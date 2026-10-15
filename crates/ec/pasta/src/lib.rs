@@ -17,6 +17,8 @@
 
 #![no_std]
 
+pub mod glv;
+
 use arrabbiata_curve::Curve;
 use arrabbiata_field::{Field, MontField, MontgomeryConfig};
 

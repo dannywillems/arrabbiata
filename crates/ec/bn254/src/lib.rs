@@ -16,6 +16,7 @@
 #![no_std]
 
 pub mod fq12;
+pub mod glv;
 pub mod pairing;
 
 use arrabbiata_curve::{Curve, Pairing, PairingInput};

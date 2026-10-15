@@ -1,9 +1,10 @@
-//! The laws of `arrabbiata_curve::laws`, property-tested on every curve of
+//! The laws of `arrabbiata_curve::laws` (the group laws, and those of the
+//! GLV endomorphism and split), property-tested on every curve of
 //! the workspace by one generic runner. CI runs each curve as its own job:
 //! `make test-curve CURVE=<name>`.
 
 use arrabbiata_bn254::{G1, G2};
-use arrabbiata_curve::{Curve, Projective, laws};
+use arrabbiata_curve::{Curve, Projective, glv::Glv, laws};
 use arrabbiata_field::Field;
 use arrabbiata_grumpkin::Grumpkin;
 use arrabbiata_pasta::{Pallas, Vesta};
@@ -104,29 +105,72 @@ where
         .unwrap();
 }
 
+/// The GLV laws, on `cases` random inputs, and on the scalars where a split
+/// is most likely to go wrong: 0, 1, -1, `lambda` and `-lambda`.
+fn check_glv<C>(cases: u32)
+where
+    C: Glv,
+{
+    let lambda = C::lambda();
+    for k in [
+        C::Scalar::ZERO,
+        C::Scalar::ONE,
+        -C::Scalar::ONE,
+        lambda,
+        -lambda,
+    ] {
+        assert!(laws::glv_split::<C>(k), "split of an edge scalar");
+        assert!(
+            laws::glv_is_multiplication(Projective::<C>::generator(), k),
+            "GLV of an edge scalar"
+        );
+    }
+    let mut runner = TestRunner::new(Config::with_cases(cases));
+    runner
+        .run(
+            &(
+                arb_point::<C>(),
+                arb_point::<C>(),
+                arb_scalar::<C::Scalar>(),
+            ),
+            |(a, b, k)| {
+                prop_assert!(laws::endomorphism(a, b), "endomorphism");
+                prop_assert!(laws::glv_split::<C>(k), "split");
+                prop_assert!(laws::glv_is_multiplication(a, k), "GLV multiplication");
+                Ok(())
+            },
+        )
+        .unwrap();
+}
+
 const CASES: u32 = 64;
 
 #[test]
 fn pallas() {
     check_laws::<Pallas>(CASES);
+    check_glv::<Pallas>(CASES);
 }
 
 #[test]
 fn vesta() {
     check_laws::<Vesta>(CASES);
+    check_glv::<Vesta>(CASES);
 }
 
 #[test]
 fn bn254_g1() {
     check_laws::<G1>(CASES);
+    check_glv::<G1>(CASES);
 }
 
 #[test]
 fn bn254_g2() {
     check_laws::<G2>(CASES);
+    check_glv::<G2>(CASES);
 }
 
 #[test]
 fn grumpkin() {
     check_laws::<Grumpkin>(CASES);
+    check_glv::<Grumpkin>(CASES);
 }

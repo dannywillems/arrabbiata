@@ -9,7 +9,11 @@
 
 use arrabbiata_field::Field;
 
-use crate::{Affine, Curve, Projective, msm};
+use crate::{
+    Affine, Curve, Projective,
+    glv::{self, Glv},
+    msm,
+};
 
 /// `(E, +, O)` is an abelian group, and every result is on the curve.
 #[must_use]
@@ -136,4 +140,51 @@ where
         i += 1;
     }
     msm(points, scalars) == expected
+}
+
+/// `phi(x, y) = (beta x, y)` is an endomorphism of order 3 acting as
+/// `lambda`: `beta` and `lambda` are primitive cube roots of unity, `phi`
+/// keeps points on the curve, is additive, satisfies `phi^3 = 1`, and
+/// `phi(P) = [lambda] P`.
+#[must_use]
+pub fn endomorphism<C>(a: Projective<C>, b: Projective<C>) -> bool
+where
+    C: Glv,
+{
+    let beta = C::beta();
+    let lambda = C::lambda();
+    let cube_root = |x: C::Base| x * x * x == C::Base::ONE && x != C::Base::ONE;
+    let scalar_cube_root = lambda * lambda * lambda == C::Scalar::ONE && lambda != C::Scalar::ONE;
+    let phi = Projective::endomorphism;
+    cube_root(beta)
+        && scalar_cube_root
+        && phi(&a).is_on_curve()
+        && phi(&(a + b)) == phi(&a) + phi(&b)
+        && phi(&phi(&phi(&a))) == a
+        && phi(&a) == a * lambda
+}
+
+/// The split of `k` recomposes it: `k1 + k2 lambda = k (mod r)`, both halves
+/// of at most 128 bits (which their type, `u128`, already says).
+#[must_use]
+pub fn glv_split<C>(k: C::Scalar) -> bool
+where
+    C: Glv,
+{
+    let ((negative1, k1), (negative2, k2)) = glv::decompose::<C>(&k);
+    let two_64 = C::Scalar::from_u64(1 << 32) * C::Scalar::from_u64(1 << 32);
+    let value = |negative: bool, m: u128| {
+        let v = C::Scalar::from_u64(m as u64) + C::Scalar::from_u64((m >> 64) as u64) * two_64;
+        if negative { -v } else { v }
+    };
+    value(negative1, k1) + value(negative2, k2) * C::lambda() == k
+}
+
+/// GLV multiplication is scalar multiplication.
+#[must_use]
+pub fn glv_is_multiplication<C>(a: Projective<C>, k: C::Scalar) -> bool
+where
+    C: Glv,
+{
+    a.mul_glv(&k) == a * k
 }

@@ -14,6 +14,8 @@
 #![no_std]
 
 use arrabbiata_bn254::{Fq, Fr};
+pub mod glv;
+
 use arrabbiata_curve::Curve;
 use arrabbiata_field::{Field, PrimeField};
 
