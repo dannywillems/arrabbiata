@@ -14,7 +14,7 @@
 //!
 //! ```
 //! use arrabbiata_field::Field;
-//! use arrabbiata_frontend::build;
+//! use arrabbiata_frontend::vanilla::build;
 //! use arrabbiata_pasta::Fq;
 //! use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
 //!
@@ -37,7 +37,7 @@
 //! ```compile_fail
 //! use arrabbiata_bn254::Fr;
 //! use arrabbiata_field::Field;
-//! use arrabbiata_frontend::build;
+//! use arrabbiata_frontend::vanilla::build;
 //! use arrabbiata_plonk::{ipa, kzg, prove, setup, vanilla, verify};
 //!
 //! let (c, w, ()) = build::<Fr, _, _>(|b| {
@@ -96,7 +96,7 @@ where
 /// IPA on Pallas, sized for `circuit`.
 ///
 /// ```
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq;
 /// use arrabbiata_plonk::ipa;
 /// use arrabbiata_plonk::vanilla;
@@ -122,7 +122,7 @@ where
 ///
 /// ```
 /// use arrabbiata_bn254::Fr;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_plonk::ipa;
 /// use arrabbiata_plonk::vanilla;
 /// let (c, _, ()) = build::<Fr, _, _>(|_| ());

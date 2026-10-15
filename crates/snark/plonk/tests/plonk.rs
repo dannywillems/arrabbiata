@@ -12,7 +12,7 @@
 
 use arrabbiata_commit::{PolynomialCommitment, Univariate};
 use arrabbiata_field::Field;
-use arrabbiata_frontend::{Builder, Wire, build};
+use arrabbiata_frontend::vanilla::{Builder, Wire, build};
 use arrabbiata_pasta::Fq as F;
 use arrabbiata_plonk::{
     PlonkError, Witness, ipa,

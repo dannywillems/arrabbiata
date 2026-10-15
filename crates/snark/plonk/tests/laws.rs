@@ -227,7 +227,7 @@ proptest! {
             let i = i % public.len();
             public[i] = n(v);
         }
-        let w = arrabbiata_frontend::Witness::new(wires, public);
+        let w = arrabbiata_frontend::vanilla::Witness::new(wires, public);
         let compiled = vanilla::circuit(&c).unwrap();
         prop_assert_eq!(c.is_satisfied(&w), compiled.is_satisfied(&vanilla::witness(&w)));
         prop_assert_eq!(compiled.num_rows(), c.num_rows());

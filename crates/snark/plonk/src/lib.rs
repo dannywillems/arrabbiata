@@ -169,7 +169,7 @@ pub type Keys<F, PC, G, const W: usize, const X: usize, const Q: usize> =
 /// ```compile_fail
 /// use arrabbiata_commit::{PolynomialCommitment, Univariate};
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::{ipa, ipa::PallasIpa, prove, setup, vanilla, verify};
 /// use arrabbiata_transcript::typed::Label;
@@ -304,7 +304,7 @@ where
 ///
 /// ```compile_fail
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
 /// use arrabbiata_poseidon::{Poseidon, vesta_base};
@@ -606,7 +606,7 @@ where
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::{ipa, vanilla};
 /// let (c, _, ()) = build::<F, _, _>(|b| {
@@ -630,7 +630,7 @@ impl<F, C, G, const W: usize, const X: usize, const Q: usize> Preprocessed<F, C,
     /// The number of rows of the circuit.
     ///
     /// ```
-    /// use arrabbiata_frontend::build;
+    /// use arrabbiata_frontend::vanilla::build;
     /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_plonk::{ipa, vanilla};
     /// let (c, _, ()) = build::<F, _, _>(|_| ());
@@ -647,7 +647,7 @@ impl<F, C, G, const W: usize, const X: usize, const Q: usize> Preprocessed<F, C,
     ///
     /// ```
     /// use arrabbiata_field::Field;
-    /// use arrabbiata_frontend::build;
+    /// use arrabbiata_frontend::vanilla::build;
     /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_plonk::{ipa, vanilla};
     /// let (c, _, ()) = build::<F, _, _>(|b| {
@@ -802,7 +802,7 @@ where
 /// polynomials it commits to.
 ///
 /// ```
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::{ipa, vanilla};
 /// let (c, _, ()) = build::<F, _, _>(|_| ());
@@ -832,7 +832,7 @@ where
     /// The verifier key.
     ///
     /// ```
-    /// use arrabbiata_frontend::build;
+    /// use arrabbiata_frontend::vanilla::build;
     /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_plonk::{ipa, vanilla};
     /// let (c, _, ()) = build::<F, _, _>(|_| ());
@@ -1018,7 +1018,7 @@ where
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::{ipa, vanilla};
 /// let (c, _, ()) = build::<F, _, _>(|b| {
@@ -1136,7 +1136,7 @@ where
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::{PlonkError, ipa, prove, setup, vanilla};
 ///
@@ -1434,7 +1434,7 @@ where
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
 ///
@@ -1582,7 +1582,7 @@ mod tests {
     //! of the relation.
 
     use arrabbiata_field::Field;
-    use arrabbiata_frontend::build;
+    use arrabbiata_frontend::vanilla::build;
     use arrabbiata_pasta::Fq as F;
 
     use super::*;

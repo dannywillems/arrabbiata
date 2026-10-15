@@ -1,6 +1,6 @@
 [package]
 name = "arrabbiata-frontend"
-description = "A typed API to write circuits"
+description = "Frontends: typed circuit builders, for vanilla PlonK first"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

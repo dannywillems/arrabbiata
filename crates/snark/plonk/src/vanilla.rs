@@ -15,7 +15,7 @@
 //!
 //! ```
 //! use arrabbiata_field::Field;
-//! use arrabbiata_frontend::build;
+//! use arrabbiata_frontend::vanilla::build;
 //! use arrabbiata_pasta::Fq as F;
 //! use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
 //!
@@ -39,7 +39,7 @@
 use alloc::{vec, vec::Vec};
 
 use arrabbiata_field::Field;
-use arrabbiata_frontend as frontend;
+use arrabbiata_frontend::vanilla as frontend;
 use arrabbiata_poly::{Expr, FixedColumn, Rotation, WitnessColumn};
 
 use crate::{
@@ -94,7 +94,7 @@ pub type Vanilla = (Arithmetic, ());
 /// A vanilla PlonK circuit.
 ///
 /// ```
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::vanilla::{self, VanillaCircuit};
 /// let (c, _, ()) = build::<F, _, _>(|_| ());
@@ -121,11 +121,11 @@ pub type VanillaPlonk<F, PC, S> = crate::Plonk<F, PC, S, Vanilla, 3, 5, 1>;
 /// # Errors
 ///
 /// [`PlonkError::Shape`] if the frontend circuit is malformed (it is not,
-/// when it comes from [`arrabbiata_frontend::build`]).
+/// when it comes from [`arrabbiata_frontend::vanilla::build`]).
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::vanilla;
 /// let (c, w, ()) = build::<F, _, _>(|b| {
@@ -175,7 +175,7 @@ where
 ///
 /// ```
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_pasta::Fq as F;
 /// use arrabbiata_plonk::vanilla;
 /// let (_, w, ()) = build::<F, _, _>(|b| {

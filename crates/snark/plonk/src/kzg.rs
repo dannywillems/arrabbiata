@@ -6,7 +6,7 @@
 //! ```
 //! use arrabbiata_bn254::Fr;
 //! use arrabbiata_field::Field;
-//! use arrabbiata_frontend::build;
+//! use arrabbiata_frontend::vanilla::build;
 //! use arrabbiata_plonk::{kzg, prove, setup, vanilla, verify};
 //!
 //! let (c, w, ()) = build::<Fr, _, _>(|b| {
@@ -48,7 +48,7 @@ const DOMAIN: u64 = 0x706c_6f6e_6b5f_6b7a;
 /// ```
 /// use arrabbiata_bn254::Fr;
 /// use arrabbiata_field::Field;
-/// use arrabbiata_frontend::build;
+/// use arrabbiata_frontend::vanilla::build;
 /// use arrabbiata_plonk::kzg;
 /// use arrabbiata_plonk::vanilla;
 /// let (c, _, ()) = build::<Fr, _, _>(|_| ());

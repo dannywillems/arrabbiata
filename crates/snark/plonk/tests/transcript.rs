@@ -15,7 +15,7 @@
 
 use arrabbiata_bn254::Fr;
 use arrabbiata_field::Field;
-use arrabbiata_frontend::build;
+use arrabbiata_frontend::vanilla::build;
 use arrabbiata_pasta::Fq;
 use arrabbiata_plonk::{Builder, Gadget, Opened, ipa, kzg, prove, setup, vanilla, verify};
 use arrabbiata_poly::{Expr, FixedColumn, Rotation, WitnessColumn};

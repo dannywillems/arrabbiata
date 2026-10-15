@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use arrabbiata_field::Field;
-use arrabbiata_frontend::{Builder, Wire, build};
+use arrabbiata_frontend::vanilla::{Builder, Wire, build};
 use arrabbiata_plonk::{
     Witness,
     vanilla::{self, VanillaCircuit},
@@ -76,8 +76,8 @@ pub fn frontend<F>(
     program: &[Op],
     lie: bool,
 ) -> (
-    arrabbiata_frontend::Circuit<F>,
-    arrabbiata_frontend::Witness<F>,
+    arrabbiata_frontend::vanilla::Circuit<F>,
+    arrabbiata_frontend::vanilla::Witness<F>,
 )
 where
     F: Field,
