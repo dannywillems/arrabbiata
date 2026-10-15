@@ -92,7 +92,7 @@ the right group.
 | `crates/decider` | `arrabbiata-plonk-decider` | the decider `R' -> R_top` of `plonkish-folding`: the relaxation as a generalized PlonK circuit | no |
 | `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
 | | `arrabbiata-generalized-plonk` | generalized PlonK: any numbers of columns, selectors and public inputs, gates any multivariate polynomials of degree at most `D`; plookup and LogUp lookups | no |
-| `crates/gadgets` | `arrabbiata-kimchi-gadgets` | Kimchi's gates on its 15 columns, as typed gadgets: Poseidon | no |
+| `crates/gadgets` | `arrabbiata-kimchi-gadgets` | Kimchi's gates on its 15 columns, as typed gadgets: Generic, Poseidon | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
@@ -115,7 +115,9 @@ is a test in the crate's `tests/api.rs`. Good entry points:
   (copies on some columns) of `arrabbiata-generalized-plonk`;
 - writing a gadget and proving it: `tests/examples.rs` of `arrabbiata-gadget`
   (a MiMC-style hash) and `tests/poseidon.rs` of
-  `arrabbiata-kimchi-gadgets` (Kimchi's Poseidon, on its test vector);
+  `arrabbiata-kimchi-gadgets` (Kimchi's Poseidon, on its test vector), and
+  `tests/generic.rs` there (Kimchi's Generic gate on Kimchi's own test
+  circuit, and a root of `x^3 + x + 5 = 35`);
 - reductions of knowledge and their composition: `tests/category.rs` of
   `arrabbiata-reduction`;
 - writing custom gates and proving a circuit with PlonK: the crate

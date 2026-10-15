@@ -615,6 +615,18 @@ check Kimchi's permutation, the witness layout row by row, the two-input
 vector of proof-systems' `kimchi.json`, and a proof of knowledge of a
 preimage.
 
+The Generic gate is Kimchi's two half-gates on columns 0-2 and 3-5,
+`c0 w0 + c1 w1 + c2 w2 + c3 w0 w1 + c4` and the same on the next five
+coefficients (`GenericRow`, degree 3). `GenericSpec` mirrors Kimchi's
+`GenericGateSpec` (`Add`, `Mul`, `Const`, `Plus`) and sets the coefficients
+as `create_generic_gadget` does; `Generic` and `GenericPair` compute one or
+two operations, the output in the half's third cell, pinned by the
+constraint. Inputs are wired by copies, as in Kimchi. Kimchi's `Pub`
+half-gate has no counterpart: public inputs are bindings here. The tests
+rebuild Kimchi's own test circuit (`create_circuit`, `fill_in_witness`)
+cell for cell, check that the operations solve their half-gates, and prove
+a root of `x^3 + x + 5 = 35`.
+
 ## deviations and next steps
 
 - **Copy constraints in folding.** `arrabbiata-folding` (the relation of
@@ -679,6 +691,7 @@ preimage.
 | generalized PlonK: completeness, every opening and evaluation checked, public inputs read by gates | yes, IPA and KZG | no |
 | gadgets: the witness satisfies the circuit, the circuit does not depend on the witness, `evaluate` is functorial in `Chain` | yes | no |
 | Kimchi Poseidon gate = Kimchi's permutation and layout | yes, `kimchi.json` | no |
+| Kimchi Generic gate = Kimchi's coefficients, on Kimchi's test circuit and witness | yes | no |
 | lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
 | permutation: `sigma` depends on the partition only; respected iff constant on classes; the product closes and the identities vanish iff respected | yes | no |
 | permuting a subset of columns: same satisfied witnesses, smaller quotient | yes, on a sum of 4-bit numbers | no |
