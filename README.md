@@ -40,11 +40,15 @@ Early, but end to end. Implemented and tested:
   (custom gates of any degree, reading any row at a fixed offset), with
   vanilla PlonK as an instance; instantiated with KZG on BN254 and with IPA
   on Pallas and on BN254;
+- generalized PlonK: any number of witness columns, fixed columns,
+  selectors and public inputs, with gates that are any multivariate
+  polynomials of bounded degree (public inputs read as scalars), into which
+  PlonKish circuits embed;
 - the folding scheme of the Arrabbiata note on PlonKish circuits of any
   degree, with the cross-terms computed from multivariate polynomials, copy
-  constraints and public inputs folded linearly, and a relaxed-PlonK
-  decider: accumulate any number of steps, then prove them with one PlonK
-  proof;
+  constraints and public inputs folded linearly, and a decider that proves
+  the relaxed relation as a generalized PlonK circuit: accumulate any number
+  of steps, then prove them with one proof;
 - the Lean statement and proof of completeness of folding.
 
 Not yet implemented: the IVC verifier circuit on the cycle, zero-knowledge
@@ -79,8 +83,9 @@ the right group.
 | | `arrabbiata-frontend` | typed circuit builders: `vanilla`, for vanilla PlonK | no |
 | `crates/accumulation` | `arrabbiata-folding` | folding of homogeneous relations of any degree; Nova as a special case | yes |
 | | `arrabbiata-plonkish-folding` | accumulation of PlonKish circuits: the embedding `R -> R'` and the fold `R' x R' -> R'`, cross-terms from `mvpoly` | no |
-| `crates/decider` | `arrabbiata-plonk-decider` | the decider `R' -> R_top` of `plonkish-folding`, by relaxed PlonK | no |
-| `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; relaxed PlonK (`relaxed`); KZG (`kzg`) and IPA (`ipa`) | no |
+| `crates/decider` | `arrabbiata-plonk-decider` | the decider `R' -> R_top` of `plonkish-folding`: the relaxation as a generalized PlonK circuit | no |
+| `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
+| | `arrabbiata-generalized-plonk` | generalized PlonK: any numbers of columns, selectors and public inputs, gates any multivariate polynomials of degree at most `D` | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
@@ -99,6 +104,8 @@ as a doctest, so it cannot drift from the code. Good entry points:
   `arrabbiata-reduction`;
 - writing custom gates and proving a circuit with PlonK: the crate
   documentation of `arrabbiata-plonk`;
+- gates as multivariate polynomials reading public inputs: the crate
+  documentation of `arrabbiata-generalized-plonk`;
 - vanilla PlonK from a circuit of `arrabbiata_frontend::vanilla`:
   `arrabbiata_plonk::vanilla`, with
   `arrabbiata_plonk::ipa` and `arrabbiata_plonk::kzg`;

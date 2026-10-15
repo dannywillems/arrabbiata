@@ -428,26 +428,73 @@ circuit's digest each leave `R'`. The completeness tests check `mvpoly`'s
 cross-terms against the relaxation computed independently, by graded
 evaluation of the constraints.
 
+### `arrabbiata-generalized-plonk`
+
+Generalized PlonK: any number of witness columns, fixed columns,
+selectors and public inputs (all chosen at runtime), and gates that are any
+multivariate polynomials of degree at most `D` in `N` variables
+(`arrabbiata-mvpoly`). A variable names a witness or fixed column at a
+rotation of the constrained row, or a public input; a gate is turned on by
+a selector, or holds on every row. Public inputs are scalars the gates read,
+and some are also bound to cells of witness column 0. Selectors are columns
+with any values: one-hot selectors are circuits, not a requirement.
+
+The protocol is PlonK's polynomial IOP with this gate identity, on the
+typed transcript, generic over the commitment and the sponge. Each variable
+becomes, on the coset where the quotient is computed, the rotated column
+(or the scalar input); the quotient is sized by the largest number of
+column variables in a monomial, so a gate's degree in its public inputs
+costs nothing. A proof opens every column at `zeta`, and each column a gate
+reads at a rotation `k` at `zeta w^k`.
+
+PlonKish circuits embed into it (`plonkish::from_plonkish`): the variables
+are the columns the gate set reads at their rotations, the gates the
+gadgets' constraints under their selectors, the public inputs those of the
+public rows. Our framing: this is a faithful embedding of relations, tested
+in both directions (satisfaction is preserved and reflected) on random
+vanilla programs and on gate sets reading other rows and fixed columns, and
+the two protocols accept the same statements.
+
+The tests check completeness with IPA and KZG, that a statement with
+another public input is rejected, that every evaluation and every opening of
+a proof is checked, gates reading public inputs at every degree up to the
+bound, ungated and overlapping gates, and the rejection of malformed
+circuits.
+
 ### `arrabbiata-plonk-decider`
 
-The decider `Dec : R' -> R_top` of `plonkish-folding`, by relaxed PlonK
-(`arrabbiata_plonk::relaxed`). Relaxed PlonK differs from PlonK in two
-places: the witness and error commitments are in the statement (the
-accumulator carries them; the prover opens them), and the gate term is
-`sum_g q_g sum_k c_k f^D_(g,k)(u, w) - E`, the constraints of a row
-combined by the statement's `c` instead of a fresh challenge. The
-public-input, permutation and boundary terms are PlonK's, which is what
-checks the copies the fold kept linear. The homogenization multiplies by the
-scalar `u` only, so the quotient has PlonK's degree.
+The decider `Dec : R' -> R_top` of `plonkish-folding`. It writes the
+relaxation of degree `D` of a circuit `C` as a generalized circuit
+(`relaxation`) and proves it with generalized PlonK:
 
-The link to the accumulator is the law that a scheme's two `commit` agree
-on the same coefficients (`Shared`), tested for IPA and KZG. The SNARK
-`Dec . Embed` (`snark`) is obtained by composition, with no protocol of its
-own. The tests decide accumulators of up to four steps (vanilla, the custom
-gate set, KZG on BN254), reject every perturbed instance (slack,
-coefficient, public input, column or error commitment) and a changed
-evaluation of the error polynomial, compose the decider after accumulation,
-and check that the honest prover refuses an accumulator outside `R'`.
+- witness columns: those of `C`, then the error column `E`;
+- selectors: those of `C`, then `idle = 1 - sum_g q_g`;
+- public inputs: those of `C` (bound to their rows), then `u` and the
+  coefficients `c`, which the gates read as scalars;
+- gates: `sum_k c_k f^D_(g,k)(u, w) - E` under `q_g`, and `E` under `idle`;
+- copies: those of `C`, the identity on `E`.
+
+The homogenization `f^D` is computed syntactically on the constraint, each
+subexpression homogeneous in `(u, w)` and the lower one padded by powers of
+`u`; fixed columns stay variables of degree 0 in the folding. Because the
+selectors of `C` are one-hot, the selectors of the relaxation form a
+partition of unity, which is what makes the error vanish on the rows that
+turn no gadget on; a test checks that the generalized circuit and the
+relaxation of `arrabbiata-plonkish` agree on accumulators and on every
+single change of the error. The circuit does not depend on an accumulator
+(`u` and `c` are inputs), so it is keyed once.
+
+The link to the accumulator: the verifier checks that the proof's witness
+commitments are the accumulator's columns and error, which holds because
+the scheme commits to a column as the polynomial interpolating it and a
+scheme's two `commit` agree on the same coefficients (`Shared`), a law
+tested for IPA and KZG. The SNARK `Dec . Embed` (`snark`) is obtained by
+composition. The tests decide accumulators of up to four steps (vanilla,
+the custom gate set, KZG on BN254), reject every perturbed instance (slack,
+coefficient, public input, column or error commitment), a changed
+evaluation of the error, and another accumulator's proof, compose the
+decider after accumulation, and check that the honest prover refuses an
+accumulator outside `R'`.
 
 ## deviations and next steps
 
@@ -458,7 +505,8 @@ and check that the honest prover refuses an accumulator outside `R'`.
 - **Circuit digest.** `arrabbiata-folding` absorbs the whole constraint
   system on every fold; `arrabbiata-plonkish-folding` absorbs a digest.
 - **The decider is a toy PlonK.** No blinding, unbatched openings, and the
-  error column is committed in full. The accumulation verifier is
+  error column is committed in full. Its gates have the fixed columns as
+  variables, so their degree grows with the fixed factors of a constraint. The accumulation verifier is
   sublinear, but nothing yet runs it inside a circuit (IVC).
 - **The verifier circuit on the cycle.** The fields, curves, Poseidon and the
   commitments of the cycle exist; the in-circuit verifier (non-native
@@ -509,6 +557,9 @@ and check that the honest prover refuses an accumulator outside `R'`.
 | embedding and PlonKish fold: complete, verifier = prover, output in `R'` | yes, chains of up to 4 steps, degree 2 and 5, rotations, fixed columns | no |
 | PlonKish fold: `mvpoly` cross-terms = relaxation evaluated independently | yes, through completeness | no |
 | PlonKish fold soundness probes (bad step, bad accumulator, bad cross-term, swapped instances, digest) | yes | no |
-| decider: complete on accumulators, rejects perturbed instances and evaluations | yes, IPA and KZG | no |
+| generalized PlonK: completeness, every opening and evaluation checked, public inputs read by gates | yes, IPA and KZG | no |
+| PlonKish circuits embed into generalized PlonK, preserving and reflecting satisfaction; both protocols accept the same statements | yes, random vanilla programs and rotated gate sets | no |
+| the decider's generalized circuit = the relaxation of `arrabbiata-plonkish` | yes, on accumulators and every change of the error | no |
+| decider: complete on accumulators, rejects perturbed instances, evaluations and foreign proofs | yes, IPA and KZG | no |
 | `HomomorphicCommitment::commit = PolynomialCommitment::commit` | yes, IPA and KZG | no |
 | `Dec . Embed` is an argument for the circuit relation | yes | no |

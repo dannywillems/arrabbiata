@@ -17,7 +17,7 @@ timeout_multiplier = 3.0
 #
 # - in `setup`, `domain.element(target % n)` and `domain.element(target + n)`
 #   are both `w^target`, since `w^n = 1`;
-# - the evaluations of a PlonK proof, strict or relaxed, are absorbed after
+# - the evaluations of a PlonK proof, plain or generalized, are absorbed after
 #   the last challenge, so not absorbing them changes no challenge (it is
 #   kept for a protocol that would squeeze after them, such as batched
 #   openings);
@@ -30,7 +30,7 @@ exclude_re = [
   "impl (core::)?(fmt::)?(Display|Debug) for",
   "replace % with \\+ in setup",
   "Absorb<F> for Opened<T, W, X, Q>>::absorb_into",
-  "Absorb<F> for RelaxedOpened<T, W, X, Q>>::absorb_into",
+  "Absorb<F> for Opened<T>>::absorb_into",
   "replace \\^ with \\| in message_label",
   "replace \\* with (\\+|/) in first",
 ]
