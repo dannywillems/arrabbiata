@@ -566,6 +566,55 @@ evaluation of the error, and another accumulator's proof, compose the
 decider after accumulation, and check that the honest prover refuses an
 accumulator outside `R'`.
 
+### `arrabbiata-gadget` and `arrabbiata-kimchi-gadgets`
+
+A gadget (`TypedGadget`) has an input and an output shape and one
+`synthesize`, generic in the environment `Env`. The environment is a
+signature: a ring of variables and the operations `constant`, `fixed`,
+`define`, `advice`, `copy`, `place`, `public`, `assert_zero`, `call`. A
+generic `synthesize` cannot inspect a variable, so it is one term of that
+signature, and the builder interprets it in two models at once: a variable
+is a `Wire`, the pair of a polynomial in the cells and its value. Ring
+operations act on both, and evaluation is a ring homomorphism, so the
+witness is the constraints evaluated: `evaluate` is the gadget's function
+and there is no second implementation of it (our framing: a tagless-final
+term, read in the product of two models).
+
+The API is shaped against the usual errors of circuit writing:
+
+- every write says how its cell is constrained: `define` (to a value),
+  `copy` (to another cell, by the permutation), `place` (whichever applies,
+  and nothing when the value is already there), `advice` (not at all, until
+  an `assert_zero`); the under-constrained cell is the one `advice` makes,
+  and it is named;
+- cells are relative to the gadget, gadgets are laid out row after row by
+  `call`, and a cell written twice is an error;
+- the instances of a gadget share their gates and one selector: a gate
+  kind is the gadget and the row of the constraint within it, its
+  constraints are those of the first instance, and every other instance
+  must produce the same ones (`Error::Inconsistent` otherwise); what
+  varies goes in fixed columns (`fixed`), as Kimchi's coefficients do;
+- a constraint the witness breaks is reported while the witness is
+  computed, with the gadget and the row;
+- shapes compose by type: `Chain` needs the second gadget's input shape to
+  be the first's output shape, for every variable type at once, and
+  `Repeat` iterates a gadget whose shapes agree.
+
+`circuit` builds the circuit without a witness, `witness` with one, and a
+test checks that they agree: the circuit does not depend on the witness.
+The other laws tested: the witness satisfies the circuit, `evaluate` of a
+chain is the composite, changing a written cell or breaking a copy is
+caught, and each misuse is rejected with its error.
+
+`arrabbiata-kimchi-gadgets` lays Kimchi's gates on Kimchi's table (15
+witness columns, the first 7 permuted, 15 coefficient columns). The
+Poseidon gate is five rounds on a row in Kimchi's `STATE_ORDER`, its 15
+constraints `x -> MDS x^7 + c` of degree 7 and its round constants in the
+coefficients; 11 rows are the permutation, under one selector. The tests
+check Kimchi's permutation, the witness layout row by row, the two-input
+vector of proof-systems' `kimchi.json`, and a proof of knowledge of a
+preimage.
+
 ## deviations and next steps
 
 - **Copy constraints in folding.** `arrabbiata-folding` (the relation of
@@ -628,6 +677,8 @@ accumulator outside `R'`.
 | PlonKish fold: `mvpoly` cross-terms = relaxation evaluated independently | yes, through completeness | no |
 | PlonKish fold soundness probes (bad step, bad accumulator, bad cross-term, swapped instances, digest) | yes | no |
 | generalized PlonK: completeness, every opening and evaluation checked, public inputs read by gates | yes, IPA and KZG | no |
+| gadgets: the witness satisfies the circuit, the circuit does not depend on the witness, `evaluate` is functorial in `Chain` | yes | no |
+| Kimchi Poseidon gate = Kimchi's permutation and layout | yes, `kimchi.json` | no |
 | lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
 | permutation: `sigma` depends on the partition only; respected iff constant on classes; the product closes and the identities vanish iff respected | yes | no |
 | permuting a subset of columns: same satisfied witnesses, smaller quotient | yes, on a sum of 4-bit numbers | no |

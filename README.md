@@ -86,11 +86,13 @@ the right group.
 | `crates/arithmetization` | `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
 | | `arrabbiata-plonkish` | PlonKish circuits: gadgets, one-hot selectors, rotations, copies; their relaxation; the vanilla gate | no |
 | | `arrabbiata-frontend` | typed circuit builders: `vanilla`, for vanilla PlonK | no |
+| | `arrabbiata-gadget` | typed gadgets: one `synthesize` read as constraints and as a witness, compiled to generalized PlonK | no |
 | `crates/accumulation` | `arrabbiata-folding` | folding of homogeneous relations of any degree; Nova as a special case | yes |
 | | `arrabbiata-plonkish-folding` | accumulation of PlonKish circuits: the embedding `R -> R'` and the fold `R' x R' -> R'`, cross-terms from `mvpoly` | no |
 | `crates/decider` | `arrabbiata-plonk-decider` | the decider `R' -> R_top` of `plonkish-folding`: the relaxation as a generalized PlonK circuit | no |
 | `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
 | | `arrabbiata-generalized-plonk` | generalized PlonK: any numbers of columns, selectors and public inputs, gates any multivariate polynomials of degree at most `D`; plookup and LogUp lookups | no |
+| `crates/gadgets` | `arrabbiata-kimchi-gadgets` | Kimchi's gates on its 15 columns, as typed gadgets: Poseidon | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
@@ -111,6 +113,9 @@ is a test in the crate's `tests/api.rs`. Good entry points:
 - generalized PlonK: `tests/examples.rs` (a map with a public parameter),
   `tests/lookups.rs` (range checks, a XOR table) and `tests/permutation.rs`
   (copies on some columns) of `arrabbiata-generalized-plonk`;
+- writing a gadget and proving it: `tests/examples.rs` of `arrabbiata-gadget`
+  (a MiMC-style hash) and `tests/poseidon.rs` of
+  `arrabbiata-kimchi-gadgets` (Kimchi's Poseidon, on its test vector);
 - reductions of knowledge and their composition: `tests/category.rs` of
   `arrabbiata-reduction`;
 - writing custom gates and proving a circuit with PlonK: the crate
