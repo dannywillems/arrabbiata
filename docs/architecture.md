@@ -653,9 +653,11 @@ rotation, as a Kimchi gate does; so each leaf gadget is one selector.
 constraint (Kimchi's `Expr::degree(1, 0)` convention), the instances and
 the cells read, and per circuit the rows, variables, copies and public
 inputs; a test checks them against the compiled circuit, and
-`tests/figures.rs` of `arrabbiata-kimchi-gadgets` against Kimchi's:
-`CONSTRAINTS` quoted from Kimchi's source, the degrees derived from its
-constraint expressions.
+`tests/figures.rs` of `arrabbiata-kimchi-gadgets` against Kimchi's, as
+Kimchi computes them: the counts and degrees are the output of running each
+gate's `Argument::constraints` and `Expr::degree(1, 0)` on proof-systems
+`9227444890`, for all twelve gates with constraints (the ones not yet
+written here are the targets).
 
 ## deviations and next steps
 
@@ -724,7 +726,7 @@ constraint expressions.
 | Kimchi Generic gate = Kimchi's coefficients, on Kimchi's test circuit and witness | yes | no |
 | Kimchi CompleteAdd = Kimchi's rows; its free cells are exactly Kimchi's | yes | no |
 | Kimchi VarBaseMul = Kimchi's 255-bit test, cell for cell; every cell determined | yes | no |
-| gate figures (constraints, degrees, cells read) = Kimchi's | yes, counts quoted from Kimchi, degrees read from its expressions | no |
+| gate figures (constraints, degrees, cells read) = Kimchi's | yes, against Kimchi's own output | no |
 | lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
 | permutation: `sigma` depends on the partition only; respected iff constant on classes; the product closes and the identities vanish iff respected | yes | no |
 | permuting a subset of columns: same satisfied witnesses, smaller quotient | yes, on a sum of 4-bit numbers | no |
