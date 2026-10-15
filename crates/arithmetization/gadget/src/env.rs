@@ -72,8 +72,9 @@ where
     /// permuted columns.
     fn copy(&mut self, at: Cell, value: &Self::Var) -> Self::Var;
 
-    /// The witness cell `at` holding `value`: a copy when `value` is a cell
-    /// of a permuted column and `at` is in one, a definition otherwise.
+    /// The witness cell `at` holding `value`: `value` itself when it is that
+    /// cell, a copy when it is a cell of a permuted column and `at` is in
+    /// one, a definition otherwise. Placing twice is placing once.
     fn place(&mut self, at: Cell, value: &Self::Var) -> Self::Var;
 
     /// Make the cell `value` is a public input. It must be a cell of the

@@ -376,3 +376,36 @@ fn a_copy_is_enforced_by_the_permutation() {
     columns[0][1] = moved;
     assert!(!compiled.circuit.is_satisfied(&columns, &[moved]));
 }
+
+/// A gadget placing a cell where it already is, twice.
+#[derive(Clone, Copy, Debug)]
+struct PlaceInPlace;
+
+impl TypedGadget<F> for PlaceInPlace {
+    type Input = Scalar;
+    type Output = Scalar;
+    const NAME: &'static str = "place-in-place";
+    const ROWS: usize = 1;
+
+    fn synthesize<E: Env<F>>(&self, env: &mut E, input: Of<Scalar, E::Var>) -> Of<Scalar, E::Var> {
+        let x = env.advice(Cell::new(0, 0), [&input], |[v]| v);
+        let once = env.place(Cell::new(0, 0), &x);
+        let twice = env.place(Cell::new(0, 0), &once);
+        env.public(&twice);
+        twice
+    }
+}
+
+/// Placing is idempotent: a cell placed where it is is not written again.
+#[test]
+fn placing_in_place_is_the_identity() {
+    let input = F::from_u64(11);
+    let (compiled, output) = witness::<F, _, N, D>(&PlaceInPlace, LAYOUT, &input).unwrap();
+    assert_eq!(output, input);
+    assert!(compiled.circuit.gates().is_empty());
+    assert!(
+        compiled
+            .circuit
+            .is_satisfied(&compiled.columns, &compiled.public)
+    );
+}

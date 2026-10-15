@@ -440,7 +440,10 @@ where
 
     fn place(&mut self, at: Cell, value: &Wire<F>) -> Wire<F> {
         let permuted = self.layout.permuted;
+        let target = self.absolute(at);
         match value.cell() {
+            // Already there.
+            Some(cell) if cell == target => value.clone(),
             Some((column, _)) if column < permuted && at.column < permuted => self.copy(at, value),
             _ => self.define(at, value.clone()),
         }
