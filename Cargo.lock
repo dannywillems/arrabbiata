@@ -140,8 +140,61 @@ dependencies = [
  "arrabbiata-ipa",
  "arrabbiata-kzg",
  "arrabbiata-pasta",
+ "arrabbiata-plonkish",
  "arrabbiata-poly",
  "arrabbiata-poseidon",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
+name = "arrabbiata-plonk-decider"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-bn254",
+ "arrabbiata-commit",
+ "arrabbiata-field",
+ "arrabbiata-frontend",
+ "arrabbiata-ipa",
+ "arrabbiata-kzg",
+ "arrabbiata-pasta",
+ "arrabbiata-plonk",
+ "arrabbiata-plonkish",
+ "arrabbiata-plonkish-folding",
+ "arrabbiata-poly",
+ "arrabbiata-poseidon",
+ "arrabbiata-reduction",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
+name = "arrabbiata-plonkish"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-field",
+ "arrabbiata-frontend",
+ "arrabbiata-pasta",
+ "arrabbiata-poly",
+ "arrabbiata-poseidon",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
+name = "arrabbiata-plonkish-folding"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-commit",
+ "arrabbiata-field",
+ "arrabbiata-frontend",
+ "arrabbiata-ipa",
+ "arrabbiata-mvpoly",
+ "arrabbiata-pasta",
+ "arrabbiata-plonkish",
+ "arrabbiata-poly",
+ "arrabbiata-poseidon",
+ "arrabbiata-reduction",
  "arrabbiata-transcript",
  "proptest",
 ]
@@ -161,6 +214,17 @@ dependencies = [
  "arrabbiata-bn254",
  "arrabbiata-field",
  "arrabbiata-pasta",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
+name = "arrabbiata-reduction"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-field",
+ "arrabbiata-pasta",
+ "arrabbiata-poseidon",
  "arrabbiata-transcript",
  "proptest",
 ]

@@ -21,6 +21,7 @@ arrabbiata-ipa = { path = "crates/commitment/ipa" }
 arrabbiata-kzg = { path = "crates/commitment/kzg" }
 arrabbiata-mvpoly = { path = "crates/algebra/mvpoly" }
 arrabbiata-pasta = { path = "crates/ec/pasta" }
+arrabbiata-plonk = { path = "crates/snark/plonk" }
 arrabbiata-plonkish = { path = "crates/arithmetization/plonkish" }
 arrabbiata-plonkish-folding = { path = "crates/accumulation/plonkish" }
 arrabbiata-poly = { path = "crates/algebra/poly" }
