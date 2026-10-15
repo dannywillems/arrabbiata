@@ -5,9 +5,13 @@
 //! writes the cells Kimchi's gate of the same name constrains, in the same
 //! columns, with the same constraints; its coefficients are the fixed
 //! columns.
+//!
+//! - [`generic`]: the Generic gate, two PlonK half-gates per row;
+//! - [`poseidon`]: the Poseidon gate, five rounds per row.
 
 #![no_std]
 
+pub mod generic;
 pub mod poseidon;
 
 use arrabbiata_gadget::Layout;
