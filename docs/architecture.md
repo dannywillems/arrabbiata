@@ -688,6 +688,27 @@ range-checked by `x (x - 1) (x - 2) (x - 3)`. The tests reproduce Kimchi's
 crumb of 4 is rejected, and prove that a public `(a, b)` comes from a
 private challenge.
 
+Tables and reads: a `Rom` is a read-only table stored in fixed columns
+(on every row, the first row repeated below the last), and `env.read`
+asserts that a tuple is one of its rows. A read lives on its gadget's first
+row and shares the gadget's selector, like a constraint, and is checked for
+consistency across instances the same way; it compiles to a plookup lookup
+of generalized PlonK. `env.cell` reads a cell another gadget writes later
+(Kimchi's RangeCheck0 reads the next row); a constraint or a read over a
+value not yet known is checked once the witness is complete.
+
+The RangeCheck gates check three values of up to 88 bits on four rows
+(RangeCheck0, RangeCheck0, RangeCheck1, Zero), each split into 12-bit limbs,
+looked up in the table of `0 .. 2^12`, and 2-bit crumbs, constrained by
+`x (x - 1) (x - 2) (x - 3)`, with Kimchi's 10 and 21 constraints and its
+lookup pattern (columns 3-6, and on the Zero row the copies of the first
+two values' top limbs). The tests check Kimchi's `create_multi` layout cell
+for cell, that a value of `2^88` or more is rejected, and that a limb out
+of range with the recombination kept exact is caught by the lookup alone.
+They do not prove: the table makes the circuit 8192 rows, and with one IPA
+opening per polynomial that takes hours; batched openings are the next
+step that matters for Kimchi.
+
 Terms are built with Kimchi's simplifications (constants fold, `0 + e`,
 `0 e`, `1 e`), which keep the polynomial and make the syntactic degree
 agree with Kimchi's on the same construction; without them a Horner
@@ -772,6 +793,8 @@ written here are the targets).
 | Kimchi VarBaseMul = Kimchi's 255-bit test, cell for cell; every cell determined | yes | no |
 | Kimchi EndoMul = Kimchi's 128-bit test, cell for cell; every cell determined | yes | no |
 | Kimchi EndoMulScalar = Kimchi's test, cell for cell; its scalar is EndoMul's | yes | no |
+| Kimchi RangeCheck0/1 = Kimchi's layout and lookups; only the lookup catches a large limb | yes | no |
+| gadget reads: in-table values pass, out-of-table rejected on their row, proofs with lookups | yes | no |
 | GLV: `phi = [lambda]`, the split recomposes `k`, GLV multiplication = scalar multiplication | yes, on every curve | no |
 | gate figures (constraints, degrees, cells read) = Kimchi's | yes, against Kimchi's own output | no |
 | lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
