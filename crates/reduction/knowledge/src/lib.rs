@@ -45,60 +45,8 @@
 //! [`Then`] of two morphisms, and it is why a decider only needs to know
 //! `R'`.
 //!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_poseidon::vesta_sponge;
-//! use arrabbiata_reduction::{Output, Product, Reduction, Relation};
-//! use arrabbiata_transcript::Transcript;
-//!
-//! /// `a x = y` for a fixed vector `a`: instance `y`, witness `x`.
-//! #[derive(Clone)]
-//! struct Linear(Vec<F>);
-//! impl Relation for Linear {
-//!     type Instance = F;
-//!     type Witness = Vec<F>;
-//!     type Error = ();
-//!     fn check(&self, y: &F, x: &Vec<F>) -> Result<(), ()> {
-//!         let ax = self.0.iter().zip(x).fold(F::ZERO, |s, (a, x)| s + *a * *x);
-//!         if x.len() == self.0.len() && ax == *y { Ok(()) } else { Err(()) }
-//!     }
-//! }
-//!
-//! /// Folding two linear instances: `y1 + r y2`, `x1 + r x2`.
-//! struct Fold(Linear);
-//! impl Reduction<F> for Fold {
-//!     type Source = Product<Linear, Linear>;
-//!     type Target = Linear;
-//!     type Proof = ();
-//!     type Error = ();
-//!     fn source(&self) -> Self::Source { Product(self.0.clone(), self.0.clone()) }
-//!     fn target(&self) -> Self::Target { self.0.clone() }
-//!     fn prove<T: Transcript<F>>(&self, mut t: T, y: &(F, F), x: &(Vec<F>, Vec<F>))
-//!         -> Result<Output<F, Vec<F>, (), T>, ()> {
-//!         t.absorb(y.0);
-//!         t.absorb(y.1);
-//!         let r = t.squeeze();
-//!         let x = x.0.iter().zip(&x.1).map(|(a, b)| *a + r * *b).collect();
-//!         Ok(Output { instance: y.0 + r * y.1, witness: x, proof: (), transcript: t })
-//!     }
-//!     fn verify<T: Transcript<F>>(&self, mut t: T, y: &(F, F), _: ()) -> Result<(F, T), ()> {
-//!         t.absorb(y.0);
-//!         t.absorb(y.1);
-//!         let r = t.squeeze();
-//!         Ok((y.0 + r * y.1, t))
-//!     }
-//! }
-//!
-//! let relation = Linear(vec![F::from_u64(2), F::from_u64(3)]);
-//! let fold = Fold(relation.clone());
-//! let (x1, x2) = (vec![F::ONE, F::ONE], vec![F::from_u64(4), F::ZERO]);
-//! let (y1, y2) = (F::from_u64(5), F::from_u64(8));
-//! let out = fold.prove(vesta_sponge(0), &(y1, y2), &(x1, x2)).unwrap();
-//! let (y, _) = fold.verify(vesta_sponge(0), &(y1, y2), ()).unwrap();
-//! assert_eq!(y, out.instance);
-//! assert!(relation.check(&y, &out.witness).is_ok());
-//! ```
+//! A worked example, the folding of linear relations, is in
+//! `tests/category.rs`.
 
 #![no_std]
 

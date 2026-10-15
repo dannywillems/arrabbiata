@@ -29,22 +29,9 @@ use crate::{
 /// on each row `sum_k a^k f_k(w) = 0` for a random `a`, hence every
 /// `f_k(w) = 0` except with probability `(m - 1) / |F|` per row.
 ///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
-/// use arrabbiata_plonkish_folding::{Embed, Params};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// use arrabbiata_reduction::{Reduction, Relation};
-/// let (circuit, w) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-/// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 2, vesta_sponge(1));
-/// let p = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, ck, vesta_sponge(2)).unwrap();
-/// let out = Embed(&p).prove(vesta_sponge(3), &vec![], &w).unwrap();
-/// let (instance, _) = Embed(&p).verify(vesta_sponge(3), &vec![], out.proof).unwrap();
-/// assert_eq!(instance, out.instance);
-/// assert_eq!(instance.u(), F::ONE);
-/// ```
+/// Complete runs: `tests/examples.rs` (an incremental computation, two
+/// accumulators folded); laws: `tests/accumulation.rs`.
+#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub struct Embed<
     'a,
     F,

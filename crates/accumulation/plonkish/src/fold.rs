@@ -65,35 +65,9 @@ where
 /// output at `D + 2` distinct values of `r` interpolates witnesses for
 /// both inputs (the scheme is `(D + 2)`-special-sound).
 ///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_plonkish::{Builder, vanilla::{Arithmetic, Vanilla}};
-/// use arrabbiata_plonkish_folding::{Embed, Fold, Params};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// use arrabbiata_reduction::{Reduction, Relation};
-/// // a * b = c on one row.
-/// let witness = |a: u64, b: u64| {
-///     let mut builder = Builder::<F, Vanilla, 3, 5, 1>::new();
-///     let one = F::ONE;
-///     builder.row::<Arithmetic, _>([F::from_u64(a), F::from_u64(b), F::from_u64(a * b)], [F::ZERO, F::ZERO, -one, one, F::ZERO]);
-///     builder.build().unwrap()
-/// };
-/// let (circuit, w1) = witness(2, 3);
-/// let (_, w2) = witness(4, 5);
-/// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 2, vesta_sponge(1));
-/// let p = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, ck, vesta_sponge(2)).unwrap();
-/// let a = Embed(&p).prove(vesta_sponge(3), &vec![], &w1).unwrap();
-/// let b = Embed(&p).prove(vesta_sponge(3), &vec![], &w2).unwrap();
-/// let inputs = (a.instance, b.instance);
-/// let out = Fold(&p).prove(vesta_sponge(4), &inputs, &(a.witness, b.witness)).unwrap();
-/// let (folded, _) = Fold(&p).verify(vesta_sponge(4), &inputs, out.proof).unwrap();
-/// assert_eq!(folded, out.instance);
-/// p.relaxed().check(&folded, &out.witness).unwrap();
-/// // The fold of two fresh instances has a nonzero error.
-/// assert!(out.witness.error().iter().any(|e| !e.is_zero()));
-/// ```
+/// Complete runs: `tests/examples.rs` (an incremental computation, two
+/// accumulators folded); laws: `tests/accumulation.rs`.
+#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub struct Fold<
     'a,
     F,
@@ -363,24 +337,9 @@ pub type Accumulate<
 /// The accumulation reduction `R x R' -> R'` of the scheme with parameters
 /// `params`: embed the fresh step, keep the accumulator, fold.
 ///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
-/// use arrabbiata_plonkish_folding::{Embed, Params, accumulate};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// use arrabbiata_reduction::{Reduction, Relation};
-/// let (circuit, w) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-/// let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 2, vesta_sponge(1));
-/// let p = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, ck, vesta_sponge(2)).unwrap();
-/// let acc = Embed(&p).prove(vesta_sponge(3), &vec![], &w).unwrap();
-/// let input = (vec![], acc.instance);
-/// let out = accumulate(&p).prove(vesta_sponge(3), &input, &(w, acc.witness)).unwrap();
-/// let (verified, _) = accumulate(&p).verify(vesta_sponge(3), &input, out.proof).unwrap();
-/// assert_eq!(verified, out.instance);
-/// p.relaxed().check(&verified, &out.witness).unwrap();
-/// ```
+/// Complete runs: `tests/examples.rs` (an incremental computation, two
+/// accumulators folded); laws: `tests/accumulation.rs`.
+#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub const fn accumulate<
     F,
     PC,

@@ -57,46 +57,8 @@
 //! column, which is what lets the decider open the accumulator's
 //! commitments directly ([`Params::commit_column`]).
 //!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_frontend::vanilla::build;
-//! use arrabbiata_ipa::Ipa;
-//! use arrabbiata_pasta::{Fq as F, Pallas};
-//! use arrabbiata_plonkish::vanilla::{self, Vanilla};
-//! use arrabbiata_plonkish_folding::{Embed, Params, accumulate};
-//! use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-//! use arrabbiata_reduction::{Reduction, Relation};
-//!
-//! // x^2 = y, with y public, for three values of x.
-//! let step = |v: u64| {
-//!     let (c, w, ()) = build::<F, _, _>(|b| {
-//!         let x = b.witness(F::from_u64(v));
-//!         let y = b.mul(&x, &x);
-//!         let out = b.public_input(F::from_u64(v * v));
-//!         b.assert_equal(&y, &out);
-//!     });
-//!     (vanilla::circuit(&c).unwrap(), vanilla::witness(&w))
-//! };
-//! let (circuit, w0) = step(3);
-//! let ck = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), circuit.num_rows(), vesta_sponge(1));
-//! // Vanilla: 3 columns read on the current row (N = 3), degree 2 (D = 2).
-//! let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, ck, vesta_sponge(2)).unwrap();
-//!
-//! let fresh = Embed(&params).prove(vesta_sponge(3), &w0.public_inputs().to_vec(), &w0).unwrap();
-//! let (mut instance, mut witness) = (fresh.instance, fresh.witness);
-//! for x in [4, 5] {
-//!     let (_, w) = step(x);
-//!     let input = (w.public_inputs().to_vec(), instance);
-//!     let out = accumulate(&params).prove(vesta_sponge(3), &input, &(w, witness)).unwrap();
-//!     // The verifier folds from the instances and the proof alone.
-//!     let (verified, _) = accumulate(&params).verify(vesta_sponge(3), &input, out.proof).unwrap();
-//!     assert_eq!(verified, out.instance);
-//!     (instance, witness) = (verified, out.witness);
-//! }
-//! // The accumulator is relaxed, and still in R'.
-//! assert_ne!(instance.u(), F::ONE);
-//! params.relaxed().check(&instance, &witness).unwrap();
-//! ```
+//! Complete runs: `tests/examples.rs` (an incremental computation, two
+//! accumulators folded); laws: `tests/accumulation.rs`.
 
 #![no_std]
 
