@@ -21,10 +21,11 @@
 //! must not be folded with arbitrary field challenges; folding asks for the
 //! separate, stronger [`crate::HomomorphicCommitment`].
 
-use core::fmt::Debug;
+use alloc::vec::Vec;
+use core::{borrow::Borrow, fmt::Debug};
 
 use arrabbiata_field::Field;
-use arrabbiata_transcript::{Absorb, typed::Label};
+use arrabbiata_transcript::{Absorb, Transcript, absorb_slice, typed::Label};
 
 /// A family of polynomials over `F`: how a polynomial is represented and
 /// where it is evaluated.
@@ -34,6 +35,10 @@ where
 {
     /// A point of evaluation.
     type Point: ?Sized;
+
+    /// A point of evaluation as an owned value, which claims and
+    /// accumulators hold, and which absorbs into a transcript.
+    type OwnedPoint: Clone + Debug + PartialEq + Absorb<F> + Borrow<Self::Point>;
 
     /// The value of the polynomial with representation `polynomial` at
     /// `point`. This is the reference semantics every scheme of the family
@@ -55,6 +60,7 @@ where
     F: Field,
 {
     type Point = F;
+    type OwnedPoint = F;
 
     fn evaluate(polynomial: &[F], point: &F) -> F {
         let mut acc = F::ZERO;
@@ -81,11 +87,35 @@ impl Label for Multilinear {
     const LABEL: u64 = 0x6d6c_696e;
 }
 
+/// A point of `F^k`, owned: the [`PolynomialFamily::OwnedPoint`] of
+/// [`Multilinear`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Coordinates<F>(pub Vec<F>);
+
+impl<F> Borrow<[F]> for Coordinates<F> {
+    fn borrow(&self) -> &[F] {
+        &self.0
+    }
+}
+
+impl<F> Absorb<F> for Coordinates<F>
+where
+    F: Field,
+{
+    fn absorb_into<T>(&self, transcript: &mut T)
+    where
+        T: Transcript<F>,
+    {
+        absorb_slice(transcript, &self.0);
+    }
+}
+
 impl<F> PolynomialFamily<F> for Multilinear
 where
     F: Field,
 {
     type Point = [F];
+    type OwnedPoint = Coordinates<F>;
 
     fn evaluate(polynomial: &[F], point: &[F]) -> F {
         let k = point.len();

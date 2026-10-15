@@ -34,7 +34,7 @@ pub use batch::{
     BatchOpening, LinearCommitment, Point, Proofs, Unbatched, combine_polynomials, combine_values,
     open_combined, verify_combined,
 };
-pub use pcs::{Multilinear, PolynomialCommitment, PolynomialFamily, Univariate};
+pub use pcs::{Coordinates, Multilinear, PolynomialCommitment, PolynomialFamily, Univariate};
 
 use core::fmt::Debug;
 
