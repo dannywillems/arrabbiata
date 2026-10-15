@@ -7,6 +7,13 @@
 //! two readings of a gadget cannot drift apart: the value is the polynomial
 //! evaluated at the witness, because evaluation is a ring homomorphism
 //! `F[cells] -> F`.
+//!
+//! Terms are simplified as Kimchi's `Expr` simplifies them while building:
+//! constants fold, `0 + e = e`, `0 e = 0` and `1 e = e`. These are ring
+//! identities, so the polynomial does not change; what changes is the
+//! syntactic degree (Kimchi's `Expr::degree`), which then agrees with Kimchi's
+//! on the same construction (for example a Horner evaluation starting from
+//! `0`).
 
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::ops::{Add, Mul, Neg, Sub};
@@ -224,6 +231,7 @@ where
         let value = zip(self.value, other.value, |a, b| a + b);
         let expr = match (self.expr, other.expr) {
             (Expr::Constant(a), Expr::Constant(b)) => Expr::Constant(a + b),
+            (Expr::Constant(z), e) | (e, Expr::Constant(z)) if z == F::ZERO => e,
             (a, b) => Expr::Add(Box::new(a), Box::new(b)),
         };
         Self { expr, value }
@@ -240,6 +248,10 @@ where
         let value = zip(self.value, other.value, |a, b| a * b);
         let expr = match (self.expr, other.expr) {
             (Expr::Constant(a), Expr::Constant(b)) => Expr::Constant(a * b),
+            (Expr::Constant(z), _) | (_, Expr::Constant(z)) if z == F::ZERO => {
+                Expr::Constant(F::ZERO)
+            }
+            (Expr::Constant(o), e) | (e, Expr::Constant(o)) if o == F::ONE => e,
             (a, b) => Expr::Mul(Box::new(a), Box::new(b)),
         };
         Self { expr, value }
