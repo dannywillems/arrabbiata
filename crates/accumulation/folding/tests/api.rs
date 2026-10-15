@@ -1,14 +1,19 @@
 //! The behaviour of each public item, one test per item (these were
 //! the rustdoc examples).
 
+use arrabbiata_field::Field;
+use arrabbiata_folding::{CrossTerms, Fold, FoldingTranscript, Nova};
+use arrabbiata_ipa::Ipa;
+use arrabbiata_pasta::{Fq as F, Pallas};
+use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+use arrabbiata_relation::{
+    aggregation::{Powers, Single},
+    examples,
+};
+use arrabbiata_transcript::typed::Pattern;
+
 #[test]
 fn crate_overview() {
-    use arrabbiata_folding::Fold;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
-    use arrabbiata_relation::{aggregation::Powers, examples};
-
     // Fibonacci: degree 2 constraints, two of them, combined with Powers,
     // so the relation has degree 3 and a fold has 2 cross-terms.
     type Scheme = Fold<F, Ipa<Pallas, PoseidonSponge<F>>, Powers, 2, 1, 2, 2, 2>;
@@ -33,32 +38,22 @@ fn crate_overview() {
 
 #[test]
 fn cross_terms() {
-    use arrabbiata_folding::CrossTerms;
     let t = CrossTerms::new([1u8, 2]);
     assert_eq!(t.commitments(), &[1, 2]);
 }
 
 #[test]
 fn cross_terms_new() {
-    use arrabbiata_folding::CrossTerms;
     assert_eq!(CrossTerms::new(["T1"]).commitments()[0], "T1");
 }
 
 #[test]
 fn cross_terms_commitments() {
-    use arrabbiata_folding::CrossTerms;
     assert_eq!(CrossTerms::new([0u8; 3]).commitments().len(), 3);
 }
 
 #[test]
 fn folding_transcript() {
-    use arrabbiata_folding::FoldingTranscript;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::PoseidonSponge;
-    use arrabbiata_relation::aggregation::Single;
-    use arrabbiata_transcript::typed::Pattern;
-
     type P = FoldingTranscript<F, Ipa<Pallas, PoseidonSponge<F>>, Single, 1, 1, 1, 2, 1>;
     assert_eq!(<P as Pattern>::MESSAGES, 1);
     assert_eq!(<P as Pattern>::CHALLENGES, 1);
@@ -66,12 +61,6 @@ fn folding_transcript() {
 
 #[test]
 fn fold() {
-    use arrabbiata_folding::Fold;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
-    use arrabbiata_relation::{aggregation::Powers, examples};
-
     type Scheme = Fold<F, Ipa<Pallas, PoseidonSponge<F>>, Powers, 2, 1, 2, 2, 2>;
     let cs = examples::fibonacci::<F>(4);
     let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
@@ -87,13 +76,6 @@ fn fold() {
 
 #[test]
 fn nova() {
-    use arrabbiata_field::Field;
-    use arrabbiata_folding::Nova;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
-    use arrabbiata_relation::examples;
-
     let cs = examples::squaring::<F>(4);
     let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
     let relaxed = |x| {
@@ -116,12 +98,6 @@ fn nova() {
 
 #[test]
 fn assignment_prove() {
-    use arrabbiata_folding::Nova;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
-    use arrabbiata_relation::examples;
-
     let cs = examples::squaring::<F>(4);
     let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
     let trace = examples::squaring_trace(&cs, 5);
@@ -133,12 +109,6 @@ fn assignment_prove() {
 
 #[test]
 fn assignment_verify() {
-    use arrabbiata_folding::Nova;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
-    use arrabbiata_relation::examples;
-
     let cs = examples::squaring::<F>(4);
     let ck = Ipa::<Pallas, PoseidonSponge<F>>::setup(&mut pallas_sponge(0), 8, vesta_sponge(1));
     let trace = examples::squaring_trace(&cs, 5);

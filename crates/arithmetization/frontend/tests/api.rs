@@ -1,11 +1,11 @@
 //! The behaviour of each public item, one test per item (these were
 //! the rustdoc examples).
 
+use arrabbiata_field::{Field, Goldilocks as F};
+use arrabbiata_frontend::vanilla::{Cell, Column, Gate, Witness, build};
+
 #[test]
 fn crate_overview() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
-
     let (circuit, witness, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::new(3));
         let y = b.mul(&x, &x);
@@ -17,9 +17,6 @@ fn crate_overview() {
 
 #[test]
 fn vanilla_overview() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
-
     // Prove knowledge of x such that x^3 + x + 5 = 35.
     let (circuit, witness, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::new(3));
@@ -36,25 +33,21 @@ fn vanilla_overview() {
 
 #[test]
 fn vanilla_column() {
-    use arrabbiata_frontend::vanilla::Column;
     assert_eq!(Column::B.index(), 1);
 }
 
 #[test]
 fn vanilla_column_all() {
-    use arrabbiata_frontend::vanilla::Column;
     assert_eq!(Column::ALL.len(), 3);
 }
 
 #[test]
 fn vanilla_column_index() {
-    use arrabbiata_frontend::vanilla::Column;
     assert_eq!(Column::C.index(), 2);
 }
 
 #[test]
 fn vanilla_cell() {
-    use arrabbiata_frontend::vanilla::{Cell, Column};
     let cell = Cell {
         column: Column::A,
         row: 3,
@@ -64,7 +57,6 @@ fn vanilla_cell() {
 
 #[test]
 fn vanilla_cell_index() {
-    use arrabbiata_frontend::vanilla::{Cell, Column};
     assert_eq!(
         Cell {
             column: Column::C,
@@ -77,8 +69,6 @@ fn vanilla_cell_index() {
 
 #[test]
 fn vanilla_wire() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| {
         let x = b.witness(F::new(4));
         assert_eq!(x.value(), F::new(4));
@@ -87,8 +77,6 @@ fn vanilla_wire() {
 
 #[test]
 fn vanilla_wire_value() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| {
         let x = b.witness(F::new(2));
         assert_eq!(b.mul(&x, &x).value(), F::new(4));
@@ -97,8 +85,6 @@ fn vanilla_wire_value() {
 
 #[test]
 fn vanilla_wire_cell() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::{Column, build};
     build::<F, _, _>(|b| {
         let x = b.witness(F::new(2));
         assert_eq!(x.cell().column, Column::A);
@@ -107,8 +93,6 @@ fn vanilla_wire_cell() {
 
 #[test]
 fn vanilla_gate() {
-    use arrabbiata_field::{Field, Goldilocks as F};
-    use arrabbiata_frontend::vanilla::Gate;
     // c = a + b.
     let add = Gate {
         q_l: F::ONE,
@@ -121,8 +105,6 @@ fn vanilla_gate() {
 
 #[test]
 fn vanilla_gate_empty() {
-    use arrabbiata_field::{Field, Goldilocks as F};
-    use arrabbiata_frontend::vanilla::Gate;
     assert_eq!(
         Gate::<F>::empty().evaluate(F::new(1), F::new(2), F::new(3)),
         F::ZERO
@@ -131,8 +113,6 @@ fn vanilla_gate_empty() {
 
 #[test]
 fn vanilla_gate_evaluate() {
-    use arrabbiata_field::{Field, Goldilocks as F};
-    use arrabbiata_frontend::vanilla::Gate;
     let mul = Gate {
         q_m: F::ONE,
         q_o: -F::ONE,
@@ -143,8 +123,6 @@ fn vanilla_gate_evaluate() {
 
 #[test]
 fn vanilla_builder() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (circuit, witness, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::new(2));
         let _ = b.add(&x, &x);
@@ -154,8 +132,6 @@ fn vanilla_builder() {
 
 #[test]
 fn vanilla_build() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (circuit, _, square) = build::<F, _, _>(|b| {
         let x = b.witness(F::new(9));
         b.mul(&x, &x).value()
@@ -166,15 +142,11 @@ fn vanilla_build() {
 
 #[test]
 fn vanilla_builder_witness() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| assert_eq!(b.witness(F::new(1)).value(), F::new(1)));
 }
 
 #[test]
 fn vanilla_builder_public_input() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (_, w, ()) = build::<F, _, _>(|b| {
         b.public_input(F::new(7));
     });
@@ -183,15 +155,11 @@ fn vanilla_builder_public_input() {
 
 #[test]
 fn vanilla_builder_constant() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| assert_eq!(b.constant(F::new(5)).value(), F::new(5)));
 }
 
 #[test]
 fn vanilla_builder_add() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| {
         let (x, y) = (b.witness(F::new(2)), b.witness(F::new(3)));
         assert_eq!(b.add(&x, &y).value(), F::new(5));
@@ -200,8 +168,6 @@ fn vanilla_builder_add() {
 
 #[test]
 fn vanilla_builder_sub() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| {
         let (x, y) = (b.witness(F::new(5)), b.witness(F::new(3)));
         assert_eq!(b.sub(&x, &y).value(), F::new(2));
@@ -210,8 +176,6 @@ fn vanilla_builder_sub() {
 
 #[test]
 fn vanilla_builder_mul() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| {
         let (x, y) = (b.witness(F::new(5)), b.witness(F::new(3)));
         assert_eq!(b.mul(&x, &y).value(), F::new(15));
@@ -220,8 +184,6 @@ fn vanilla_builder_mul() {
 
 #[test]
 fn vanilla_builder_add_constant() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| {
         let x = b.witness(F::new(5));
         assert_eq!(b.add_constant(&x, F::new(1)).value(), F::new(6));
@@ -230,8 +192,6 @@ fn vanilla_builder_add_constant() {
 
 #[test]
 fn vanilla_builder_scale() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     build::<F, _, _>(|b| {
         let x = b.witness(F::new(5));
         assert_eq!(b.scale(&x, F::new(3)).value(), F::new(15));
@@ -240,8 +200,6 @@ fn vanilla_builder_scale() {
 
 #[test]
 fn vanilla_builder_assert_equal() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (circuit, witness, ()) = build::<F, _, _>(|b| {
         let (x, y) = (b.witness(F::new(1)), b.witness(F::new(2)));
         b.assert_equal(&x, &y);
@@ -251,8 +209,6 @@ fn vanilla_builder_assert_equal() {
 
 #[test]
 fn vanilla_builder_assert_zero() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (circuit, witness, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::new(3));
         let y = b.witness(F::new(3));
@@ -264,8 +220,6 @@ fn vanilla_builder_assert_zero() {
 
 #[test]
 fn vanilla_circuit() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (circuit, _, ()) = build::<F, _, _>(|b| {
         b.public_input(F::new(1));
     });
@@ -274,8 +228,6 @@ fn vanilla_circuit() {
 
 #[test]
 fn vanilla_witness() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (_, witness, ()) = build::<F, _, _>(|b| {
         b.witness(F::new(8));
     });
@@ -284,8 +236,6 @@ fn vanilla_witness() {
 
 #[test]
 fn vanilla_witness_new() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::{Witness, build};
     let (circuit, honest, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::new(2));
         b.mul(&x, &x);
@@ -297,24 +247,18 @@ fn vanilla_witness_new() {
 
 #[test]
 fn vanilla_witness_wires() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (c, w, ()) = build::<F, _, _>(|_| ());
     assert_eq!(w.wires()[2].len(), c.num_rows());
 }
 
 #[test]
 fn vanilla_witness_public_inputs() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (_, w, ()) = build::<F, _, _>(|_| ());
     assert!(w.public_inputs().is_empty());
 }
 
 #[test]
 fn vanilla_circuit_num_rows() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (c, _, ()) = build::<F, _, _>(|b| {
         for i in 0..5 {
             b.witness(F::new(i));
@@ -325,8 +269,6 @@ fn vanilla_circuit_num_rows() {
 
 #[test]
 fn vanilla_circuit_gates() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (c, _, ()) = build::<F, _, _>(|b| {
         b.constant(F::new(3));
     });
@@ -335,8 +277,6 @@ fn vanilla_circuit_gates() {
 
 #[test]
 fn vanilla_circuit_sigma() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::{Cell, Column, build};
     let (c, _, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::new(1));
         let y = b.witness(F::new(1));
@@ -359,8 +299,6 @@ fn vanilla_circuit_sigma() {
 
 #[test]
 fn vanilla_circuit_public_rows() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (c, _, ()) = build::<F, _, _>(|b| {
         b.witness(F::new(1));
         b.public_input(F::new(2));
@@ -370,8 +308,6 @@ fn vanilla_circuit_public_rows() {
 
 #[test]
 fn vanilla_circuit_public_input_column() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (c, w, ()) = build::<F, _, _>(|b| {
         b.public_input(F::new(2));
     });
@@ -380,8 +316,6 @@ fn vanilla_circuit_public_input_column() {
 
 #[test]
 fn vanilla_circuit_is_satisfied() {
-    use arrabbiata_field::Goldilocks as F;
-    use arrabbiata_frontend::vanilla::build;
     let (c, w, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::new(6));
         let y = b.mul(&x, &x);

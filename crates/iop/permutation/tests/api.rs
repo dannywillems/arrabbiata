@@ -1,13 +1,15 @@
 //! The behaviour of each public item, one test per item (these were
 //! the rustdoc examples).
 
+use arrabbiata_field::{Field, TwoAdicField};
+use arrabbiata_pasta::Fq as F;
+use arrabbiata_permutation::{
+    At, Error, Permutation, closes, degree, grand_product, labels, shifts, terms,
+};
+use arrabbiata_poly::Domain;
+
 #[test]
 fn crate_overview() {
-    use arrabbiata_field::Field;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_permutation::{Permutation, grand_product, labels, shifts};
-    use arrabbiata_poly::Domain;
-
     // Two columns of four rows; copy (0, 1) to (1, 2).
     let columns = 2;
     let rows = 4;
@@ -52,7 +54,6 @@ fn crate_overview() {
 
 #[test]
 fn error() {
-    use arrabbiata_permutation::Error;
     assert_eq!(
         Error::Shape.to_string(),
         "not a permutation of the cells, or the wrong shape"
@@ -61,7 +62,6 @@ fn error() {
 
 #[test]
 fn permutation() {
-    use arrabbiata_permutation::{Error, Permutation};
     let p = Permutation::new(1, 2, vec![1, 0]).unwrap();
     assert_eq!(p.sigma(), &[1, 0]);
     assert_eq!(
@@ -72,19 +72,16 @@ fn permutation() {
 
 #[test]
 fn permutation_new() {
-    use arrabbiata_permutation::Permutation;
     assert!(Permutation::new(2, 2, vec![3, 1, 2, 0]).is_ok());
 }
 
 #[test]
 fn permutation_identity() {
-    use arrabbiata_permutation::Permutation;
     assert_eq!(Permutation::identity(2, 2).sigma(), &[0, 1, 2, 3]);
 }
 
 #[test]
 fn permutation_from_copies() {
-    use arrabbiata_permutation::Permutation;
     // 0 ~ 2 ~ 3, and 1 alone: the cycle 0 -> 2 -> 3 -> 0.
     let p = Permutation::from_copies(1, 4, &[(3, 0), (2, 3)]).unwrap();
     assert_eq!(p.sigma(), &[2, 1, 3, 0]);
@@ -96,45 +93,35 @@ fn permutation_from_copies() {
 
 #[test]
 fn permutation_sigma() {
-    use arrabbiata_permutation::Permutation;
     assert_eq!(Permutation::identity(1, 2).sigma(), &[0, 1]);
 }
 
 #[test]
 fn permutation_columns() {
-    use arrabbiata_permutation::Permutation;
     assert_eq!(Permutation::identity(3, 2).columns(), 3);
 }
 
 #[test]
 fn permutation_rows() {
-    use arrabbiata_permutation::Permutation;
     assert_eq!(Permutation::identity(3, 2).rows(), 2);
 }
 
 #[test]
 fn permutation_is_respected_by() {
-    use arrabbiata_permutation::Permutation;
     let p = Permutation::new(1, 2, vec![1, 0]).unwrap();
     assert!(p.is_respected_by(&[vec![5, 5]]));
     assert!(!p.is_respected_by(&[vec![5, 6]]));
 }
 
 #[test]
-fn shifts() {
-    use arrabbiata_field::{Field, TwoAdicField};
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_permutation::shifts;
+fn shifts_works() {
     let k = shifts::<F>(3, 8).unwrap();
     assert_eq!(k[0], F::ONE);
     assert_eq!(k[2], F::MULTIPLICATIVE_GENERATOR.pow(2));
 }
 
 #[test]
-fn labels() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_permutation::{Permutation, labels, shifts};
-    use arrabbiata_poly::Domain;
+fn labels_works() {
     let p = Permutation::identity(2, 2);
     let domain = Domain::<F>::new(1).unwrap();
     let k = shifts::<F>(2, 2).unwrap();
@@ -146,11 +133,7 @@ fn labels() {
 }
 
 #[test]
-fn grand_product() {
-    use arrabbiata_field::Field;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_permutation::{Permutation, grand_product, labels, shifts};
-    use arrabbiata_poly::Domain;
+fn grand_product_works() {
     // With the identity, every factor is 1.
     let p = Permutation::identity(1, 4);
     let domain = Domain::<F>::new(2).unwrap();
@@ -169,11 +152,7 @@ fn grand_product() {
 }
 
 #[test]
-fn closes() {
-    use arrabbiata_field::Field;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_permutation::{Permutation, closes, grand_product, labels, shifts};
-    use arrabbiata_poly::Domain;
+fn closes_works() {
     let p = Permutation::new(1, 2, vec![1, 0]).unwrap();
     let domain = Domain::<F>::new(1).unwrap();
     let k = shifts::<F>(1, 2).unwrap();
@@ -186,9 +165,6 @@ fn closes() {
 
 #[test]
 fn at() {
-    use arrabbiata_field::Field;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_permutation::At;
     let at = At {
         x: F::ONE,
         witness: &[F::ONE],
@@ -201,10 +177,7 @@ fn at() {
 }
 
 #[test]
-fn terms() {
-    use arrabbiata_field::Field;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_permutation::{At, terms};
+fn terms_works() {
     // One column, the identity permutation at the point x = sigma = k x:
     // the step is z - z(w x).
     let at = At {
@@ -221,7 +194,6 @@ fn terms() {
 }
 
 #[test]
-fn degree() {
-    use arrabbiata_permutation::degree;
+fn degree_works() {
     assert_eq!(degree(7), 8);
 }

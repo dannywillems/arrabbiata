@@ -1,14 +1,27 @@
 //! The behaviour of each public item, one test per item (these were
 //! the rustdoc examples).
 
+use arrabbiata_field::Field;
+use arrabbiata_frontend::vanilla::build;
+use arrabbiata_generalized_plonk::{
+    Argument, Circuit, Commitments, Error, Gate, GeneralizedPlonk, Lookup, Opened, PublicInputs,
+    Tagged, Variable, max_coefficients,
+    plonkish::{columns_read, from_plonkish, polynomial, variable},
+    quotient_factor, rotated, setup,
+};
+use arrabbiata_ipa::Ipa;
+use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
+use arrabbiata_pasta::{Fq as F, Fq, Pallas};
+use arrabbiata_plonkish::{vanilla, vanilla::Vanilla};
+use arrabbiata_poly::{Expr, Rotation, Variable as Read, WitnessColumn};
+use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
+use arrabbiata_transcript::{
+    Absorb, Transcript,
+    typed::{Pattern, Protocol},
+};
+
 #[test]
 fn circuit_overview() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::{Circuit, Gate, Variable};
-    use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_poly::Rotation;
-
     // One gate, w0 * w0 - x0 = 0 on the rows of selector 0, with x0 public.
     let var = |i| Sparse::<F, 2, 2>::variable(Var::try_new(i).unwrap()).unwrap();
     let selector = Some(0);
@@ -48,8 +61,6 @@ fn circuit_overview() {
 
 #[test]
 fn circuit_variable() {
-    use arrabbiata_generalized_plonk::Variable;
-    use arrabbiata_poly::Rotation;
     let v = Variable::Fixed {
         column: 2,
         rotation: Rotation::NEXT,
@@ -60,8 +71,6 @@ fn circuit_variable() {
 
 #[test]
 fn circuit_variable_is_column() {
-    use arrabbiata_generalized_plonk::Variable;
-    use arrabbiata_poly::Rotation;
     assert!(
         Variable::Witness {
             column: 0,
@@ -73,9 +82,6 @@ fn circuit_variable_is_column() {
 
 #[test]
 fn circuit_gate() {
-    use arrabbiata_generalized_plonk::Gate;
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let selector = None;
     let polynomial = Sparse::<F, 1, 1>::zero();
     let g = Gate::new(selector, polynomial);
@@ -84,9 +90,6 @@ fn circuit_gate() {
 
 #[test]
 fn circuit_gate_new() {
-    use arrabbiata_generalized_plonk::Gate;
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let selector = Some(1);
     let polynomial = Sparse::<F, 1, 1>::one();
     let g = Gate::new(selector, polynomial);
@@ -95,9 +98,6 @@ fn circuit_gate_new() {
 
 #[test]
 fn circuit_gate_selector() {
-    use arrabbiata_generalized_plonk::Gate;
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let selector = Some(0);
     let polynomial = Sparse::<F, 1, 1>::zero();
     assert_eq!(Gate::new(selector, polynomial).selector(), Some(0));
@@ -105,9 +105,6 @@ fn circuit_gate_selector() {
 
 #[test]
 fn circuit_gate_polynomial() {
-    use arrabbiata_generalized_plonk::Gate;
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let selector = None;
     let polynomial = Sparse::<F, 1, 1>::zero();
     assert!(Gate::new(selector, polynomial).polynomial().is_zero());
@@ -115,8 +112,6 @@ fn circuit_gate_polynomial() {
 
 #[test]
 fn circuit_circuit() {
-    use arrabbiata_generalized_plonk::{Circuit, Error};
-    use arrabbiata_pasta::Fq as F;
     // Three rows is not a power of two.
     let num_rows = 3;
     let witness_columns = 1;
@@ -143,9 +138,6 @@ fn circuit_circuit() {
 
 #[test]
 fn circuit_circuit_new() {
-    use arrabbiata_generalized_plonk::{Circuit, Error, Gate};
-    use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    use arrabbiata_pasta::Fq as F;
     // The gate reads variable 0, but no variable is declared.
     let selector = None;
     let polynomial = Sparse::<F, 1, 1>::variable(Var::new::<0>()).unwrap();
@@ -175,8 +167,6 @@ fn circuit_circuit_new() {
 
 #[test]
 fn circuit_circuit_with_permutation() {
-    use arrabbiata_generalized_plonk::{Circuit, Error};
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 3;
     let sigma = (0..6).collect();
@@ -217,8 +207,6 @@ fn circuit_circuit_with_permutation() {
 
 #[test]
 fn circuit_circuit_permuted() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 2;
     let sigma = (0..4).collect();
@@ -245,10 +233,6 @@ fn circuit_circuit_permuted() {
 
 #[test]
 fn circuit_circuit_with_lookups() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::{Argument, Circuit, Error, Lookup};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![vec![F::ZERO; 2]];
@@ -288,8 +272,6 @@ fn circuit_circuit_with_lookups() {
 
 #[test]
 fn circuit_circuit_lookups() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -316,8 +298,6 @@ fn circuit_circuit_lookups() {
 
 #[test]
 fn circuit_circuit_num_rows() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 4;
     let witness_columns = 0;
     let fixed = vec![];
@@ -344,8 +324,6 @@ fn circuit_circuit_num_rows() {
 
 #[test]
 fn circuit_circuit_witness_columns() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 3;
     let fixed = vec![];
@@ -372,9 +350,6 @@ fn circuit_circuit_witness_columns() {
 
 #[test]
 fn circuit_circuit_fixed() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![vec![F::ONE; 2]];
@@ -401,9 +376,6 @@ fn circuit_circuit_fixed() {
 
 #[test]
 fn circuit_circuit_selectors() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -430,8 +402,6 @@ fn circuit_circuit_selectors() {
 
 #[test]
 fn circuit_circuit_variables() {
-    use arrabbiata_generalized_plonk::{Circuit, Variable};
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -458,8 +428,6 @@ fn circuit_circuit_variables() {
 
 #[test]
 fn circuit_circuit_gates() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -486,8 +454,6 @@ fn circuit_circuit_gates() {
 
 #[test]
 fn circuit_circuit_sigma() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 1;
     let fixed = vec![];
@@ -514,8 +480,6 @@ fn circuit_circuit_sigma() {
 
 #[test]
 fn circuit_circuit_public_inputs() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -542,8 +506,6 @@ fn circuit_circuit_public_inputs() {
 
 #[test]
 fn circuit_circuit_bindings() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 2;
     let witness_columns = 1;
     let fixed = vec![];
@@ -570,11 +532,6 @@ fn circuit_circuit_bindings() {
 
 #[test]
 fn circuit_circuit_column_degree() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::{Circuit, Gate, Variable};
-    use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_poly::Rotation;
     let var = |i| Sparse::<F, 2, 2>::variable(Var::try_new(i).unwrap()).unwrap();
     // w0 * x0: one column, one scalar; gated.
     let selector = Some(0);
@@ -613,11 +570,6 @@ fn circuit_circuit_column_degree() {
 
 #[test]
 fn circuit_circuit_query_degree() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::{Argument, Circuit, Lookup, Variable};
-    use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_poly::Rotation;
     let w = Sparse::<F, 1, 2>::variable(Var::new::<0>()).unwrap();
     let vars = vec![Variable::Witness {
         column: 0,
@@ -656,9 +608,6 @@ fn circuit_circuit_query_degree() {
 
 #[test]
 fn circuit_circuit_is_satisfied() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
     // Two cells copied to each other, and one bound to x0.
     let num_rows = 2;
     let witness_columns = 1;
@@ -687,10 +636,6 @@ fn circuit_circuit_is_satisfied() {
 
 #[test]
 fn circuit_circuit_impl() {
-    use arrabbiata_generalized_plonk::Circuit;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_poseidon::vesta_sponge;
-    use arrabbiata_transcript::{Absorb, Transcript};
     // Sponge domain tags: each transcript gets its own, and prover and
     // verifier start from the same one.
     let transcript_domain = 0;
@@ -747,7 +692,6 @@ fn circuit_circuit_impl() {
 
 #[test]
 fn error() {
-    use arrabbiata_generalized_plonk::Error;
     assert_eq!(
         Error::IdentityFailed.to_string(),
         "the identity does not hold at zeta"
@@ -756,15 +700,11 @@ fn error() {
 
 #[test]
 fn lookup_argument() {
-    use arrabbiata_generalized_plonk::Argument;
     assert_ne!(Argument::Plookup, Argument::LogUp);
 }
 
 #[test]
 fn lookup_lookup() {
-    use arrabbiata_generalized_plonk::{Argument, Lookup};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let argument = Argument::LogUp;
     let selector = None;
     let inputs = vec![Sparse::<F, 1, 1>::zero()];
@@ -778,9 +718,6 @@ fn lookup_lookup() {
 
 #[test]
 fn lookup_lookup_new() {
-    use arrabbiata_generalized_plonk::{Argument, Lookup};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let argument = Argument::Plookup;
     let selector = Some(0);
     let inputs = vec![Sparse::<F, 1, 1>::zero(); 2];
@@ -791,9 +728,6 @@ fn lookup_lookup_new() {
 
 #[test]
 fn lookup_lookup_argument() {
-    use arrabbiata_generalized_plonk::{Argument, Lookup};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let argument = Argument::Plookup;
     let selector = Some(0);
     let inputs = vec![Sparse::<F, 1, 1>::zero()];
@@ -806,9 +740,6 @@ fn lookup_lookup_argument() {
 
 #[test]
 fn lookup_lookup_selector() {
-    use arrabbiata_generalized_plonk::{Argument, Lookup};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let argument = Argument::LogUp;
     let selector = Some(2);
     let inputs = vec![Sparse::<F, 1, 1>::zero()];
@@ -821,9 +752,6 @@ fn lookup_lookup_selector() {
 
 #[test]
 fn lookup_lookup_inputs() {
-    use arrabbiata_generalized_plonk::{Argument, Lookup};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let argument = Argument::LogUp;
     let selector = None;
     let inputs = vec![Sparse::<F, 1, 1>::one()];
@@ -833,9 +761,6 @@ fn lookup_lookup_inputs() {
 
 #[test]
 fn lookup_lookup_table() {
-    use arrabbiata_generalized_plonk::{Argument, Lookup};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let argument = Argument::LogUp;
     let selector = None;
     let inputs = vec![Sparse::<F, 1, 1>::zero()];
@@ -845,9 +770,6 @@ fn lookup_lookup_table() {
 
 #[test]
 fn lookup_lookup_default() {
-    use arrabbiata_generalized_plonk::{Argument, Lookup};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
     let argument = Argument::LogUp;
     let selector = None;
     let inputs = vec![Sparse::<F, 1, 1>::zero()];
@@ -861,8 +783,6 @@ fn lookup_lookup_default() {
 
 #[test]
 fn plonkish_variable() {
-    use arrabbiata_generalized_plonk::{Variable, plonkish::variable};
-    use arrabbiata_poly::{Rotation, Variable as Read, WitnessColumn};
     let v = variable::<2, 0>(&Read::Witness(WitnessColumn::new::<1>(), Rotation::NEXT));
     assert_eq!(
         v,
@@ -875,11 +795,6 @@ fn plonkish_variable() {
 
 #[test]
 fn plonkish_polynomial() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::{Variable, plonkish::polynomial};
-    use arrabbiata_mvpoly::{MVPoly, Sparse};
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
     let a = Expr::<F, 1, 0>::witness(WitnessColumn::new::<0>(), Rotation::CURR);
     let p: Sparse<F, 1, 2> = polynomial(&(a.clone() * a), &|_: Variable| Some(0)).unwrap();
     assert_eq!(p.eval(&[F::from_u64(3)]), F::from_u64(9));
@@ -887,20 +802,12 @@ fn plonkish_polynomial() {
 
 #[test]
 fn plonkish_columns_read() {
-    use arrabbiata_generalized_plonk::plonkish::columns_read;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonkish::vanilla::Vanilla;
     // a, b, c and the five fixed columns, on the current row.
     assert_eq!(columns_read::<F, Vanilla, 3, 5>().len(), 8);
 }
 
 #[test]
 fn plonkish_from_plonkish() {
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_generalized_plonk::plonkish::from_plonkish;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonkish::vanilla;
     let (c, w, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::from_u64(3));
         let y = b.mul(&x, &x);
@@ -916,20 +823,12 @@ fn plonkish_from_plonkish() {
 
 #[test]
 fn protocol_tagged() {
-    use arrabbiata_generalized_plonk::Tagged;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq, Pallas};
-    use arrabbiata_poseidon::PoseidonSponge;
     let t = Tagged::<Ipa<Pallas, PoseidonSponge<Fq>>, _, 1>::new(5u8);
     assert_eq!(t.value, 5);
 }
 
 #[test]
 fn protocol_tagged_new() {
-    use arrabbiata_generalized_plonk::Tagged;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq, Pallas};
-    use arrabbiata_poseidon::PoseidonSponge;
     assert_eq!(
         Tagged::<Ipa<Pallas, PoseidonSponge<Fq>>, _, 2>::new("x").value,
         "x"
@@ -938,21 +837,16 @@ fn protocol_tagged_new() {
 
 #[test]
 fn protocol_commitments() {
-    use arrabbiata_generalized_plonk::Commitments;
     assert_eq!(Commitments(vec![1u8, 2]).0.len(), 2);
 }
 
 #[test]
 fn protocol_public_inputs() {
-    use arrabbiata_field::Field;
-    use arrabbiata_generalized_plonk::PublicInputs;
-    use arrabbiata_pasta::Fq as F;
     assert_eq!(PublicInputs(vec![F::ONE]).0, vec![F::ONE]);
 }
 
 #[test]
 fn protocol_opened() {
-    use arrabbiata_generalized_plonk::Opened;
     let o = Opened {
         witness: vec![0u8],
         fixed: vec![],
@@ -972,7 +866,6 @@ fn protocol_opened() {
 
 #[test]
 fn protocol_opened_iter() {
-    use arrabbiata_generalized_plonk::Opened;
     let o = Opened {
         witness: vec![],
         fixed: vec![],
@@ -989,7 +882,6 @@ fn protocol_opened_iter() {
 
 #[test]
 fn protocol_opened_iter_mut() {
-    use arrabbiata_generalized_plonk::Opened;
     let mut o = Opened {
         witness: vec![1u8],
         fixed: vec![],
@@ -1007,8 +899,6 @@ fn protocol_opened_iter_mut() {
 
 #[test]
 fn protocol_rotated() {
-    use arrabbiata_generalized_plonk::{Variable, rotated};
-    use arrabbiata_poly::Rotation;
     let vars = [
         Variable::Witness {
             column: 0,
@@ -1031,10 +921,6 @@ fn protocol_rotated() {
 
 #[test]
 fn protocol_preprocessed() {
-    use arrabbiata_generalized_plonk::{Circuit, setup};
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
     let num_rows = 2;
     let witness_columns = 1;
     let fixed = vec![];
@@ -1066,10 +952,6 @@ fn protocol_preprocessed() {
 
 #[test]
 fn protocol_preprocessed_num_rows() {
-    use arrabbiata_generalized_plonk::{Circuit, setup};
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
     let num_rows = 4;
     let witness_columns = 0;
     let fixed = vec![];
@@ -1100,10 +982,6 @@ fn protocol_preprocessed_num_rows() {
 
 #[test]
 fn protocol_preprocessed_public_inputs() {
-    use arrabbiata_generalized_plonk::{Circuit, setup};
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -1134,10 +1012,6 @@ fn protocol_preprocessed_public_inputs() {
 
 #[test]
 fn protocol_prover_key() {
-    use arrabbiata_generalized_plonk::{Circuit, setup};
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -1169,10 +1043,6 @@ fn protocol_prover_key() {
 
 #[test]
 fn protocol_prover_key_verifier_key() {
-    use arrabbiata_generalized_plonk::{Circuit, setup};
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -1204,10 +1074,6 @@ fn protocol_prover_key_verifier_key() {
 
 #[test]
 fn protocol_prover_key_circuit() {
-    use arrabbiata_generalized_plonk::{Circuit, setup};
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
     let num_rows = 2;
     let witness_columns = 0;
     let fixed = vec![];
@@ -1238,11 +1104,6 @@ fn protocol_prover_key_circuit() {
 
 #[test]
 fn protocol_generalized_plonk() {
-    use arrabbiata_generalized_plonk::GeneralizedPlonk;
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::PoseidonSponge;
-    use arrabbiata_transcript::typed::{Pattern, Protocol};
     type P = <GeneralizedPlonk<F, Ipa<Pallas, PoseidonSponge<F>>, 3, 2> as Protocol>::Transcript;
     // Wires, lookup columns, z, lookup products, t, evaluations, openings.
     assert_eq!(<P as Pattern>::MESSAGES, 7);
@@ -1252,8 +1113,6 @@ fn protocol_generalized_plonk() {
 
 #[test]
 fn protocol_quotient_factor() {
-    use arrabbiata_generalized_plonk::{Circuit, quotient_factor};
-    use arrabbiata_pasta::Fq as F;
     // Three witness columns: the permutation term has degree 4.
     let num_rows = 2;
     let witness_columns = 3;
@@ -1281,8 +1140,6 @@ fn protocol_quotient_factor() {
 
 #[test]
 fn protocol_max_coefficients() {
-    use arrabbiata_generalized_plonk::{Circuit, max_coefficients};
-    use arrabbiata_pasta::Fq as F;
     let num_rows = 4;
     let witness_columns = 3;
     let fixed = vec![];
@@ -1309,10 +1166,6 @@ fn protocol_max_coefficients() {
 
 #[test]
 fn protocol_setup() {
-    use arrabbiata_generalized_plonk::{Circuit, setup};
-    use arrabbiata_ipa::Ipa;
-    use arrabbiata_pasta::{Fq as F, Pallas};
-    use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
     let num_rows = 2;
     let witness_columns = 1;
     let fixed = vec![];

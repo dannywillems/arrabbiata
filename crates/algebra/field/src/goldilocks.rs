@@ -153,7 +153,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::laws;
+    use crate::{TwoAdicField, laws};
 
     fn arb() -> impl Strategy<Value = Goldilocks> {
         prop_oneof![
@@ -177,7 +177,6 @@ mod tests {
 
     #[test]
     fn two_adic_generator_has_exact_order() {
-        use crate::TwoAdicField;
         let w = Goldilocks::two_adic_generator(32).unwrap();
         // Order exactly 2^32: w^(2^31) = -1.
         assert_eq!(w.pow(1 << 31), -Goldilocks::ONE);

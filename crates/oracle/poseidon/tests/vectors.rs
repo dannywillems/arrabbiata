@@ -3,9 +3,9 @@
 //! zcash-hackworks/zcash-test-vectors (`orchard_poseidon/permute`), as
 //! shipped in `halo2_poseidon/src/test_vectors.rs`.
 
-use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_field::{Field, Goldilocks, PrimeField};
 use arrabbiata_pasta::{Fp, Fq};
-use arrabbiata_poseidon::{Poseidon, pallas_base, pallas_sponge, vesta_base};
+use arrabbiata_poseidon::{Poseidon, goldilocks_sponge, pallas_base, pallas_sponge, vesta_base};
 use arrabbiata_transcript::Transcript;
 use proptest::prelude::*;
 
@@ -442,8 +442,6 @@ fn vesta_is_a_different_instance() {
 /// permutations of its rate-8 duplex.
 #[test]
 fn goldilocks_sponge_binds_its_input() {
-    use arrabbiata_field::Goldilocks;
-    use arrabbiata_poseidon::goldilocks_sponge;
     let squeeze = |values: &[u64]| {
         let mut sponge = goldilocks_sponge(3);
         for v in values {

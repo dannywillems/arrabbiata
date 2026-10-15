@@ -25,6 +25,8 @@
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{Array, Cell, Env, Of, TypedGadget};
 
+use self::column::{INF, INF_Z, S, SAME_X, X1, X2, X3, X21_INV, Y1, Y2, Y3};
+
 /// The column of each cell of the row.
 pub mod column {
     /// `x1`.
@@ -89,7 +91,6 @@ where
     where
         E: Env<F>,
     {
-        use column::{INF, INF_Z, S, SAME_X, X1, X2, X3, X21_INV, Y1, Y2, Y3};
         let x1 = env.copy(Cell::new(X1, 0), &input[0]);
         let y1 = env.copy(Cell::new(Y1, 0), &input[1]);
         let x2 = env.copy(Cell::new(X2, 0), &input[2]);

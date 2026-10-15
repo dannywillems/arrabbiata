@@ -1,13 +1,29 @@
 //! The behaviour of each public item, one test per item (these were
 //! the rustdoc examples).
 
+use arrabbiata_bn254::Fr;
+use arrabbiata_field::{Field, Goldilocks as FieldGoldilocks};
+use arrabbiata_frontend::vanilla::build;
+use arrabbiata_pasta::{Fq as F, Fq};
+use arrabbiata_plonk::{
+    CircuitError, Columns, Opened, Plonk, PlonkError, PublicInputs, QuotientSizing, Scheme, With,
+    circuit::{Builder, Cell},
+    gate::Gadget,
+    ipa,
+    ipa::PallasIpa,
+    kzg, prove, setup, vanilla,
+    vanilla::{Vanilla, VanillaPlonk},
+    verify,
+};
+use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
+use arrabbiata_poseidon::PoseidonSponge;
+use arrabbiata_transcript::{
+    Transcript,
+    typed::{Label, Pattern, Protocol},
+};
+
 #[test]
 fn ipa_overview() {
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq;
-    use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
-
     let (c, w, ()) = build::<Fq, _, _>(|b| {
         let x = b.witness(Fq::from_u64(3));
         let y = b.mul(&x, &x);
@@ -30,9 +46,6 @@ fn ipa_overview() {
 
 #[test]
 fn ipa_pallas() {
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq;
-    use arrabbiata_plonk::{ipa, vanilla};
     let (c, _, ()) = build::<Fq, _, _>(|_| ());
     let circuit = vanilla::circuit(&c).unwrap();
     assert_eq!(ipa::pallas(&circuit).size(), 8);
@@ -40,9 +53,6 @@ fn ipa_pallas() {
 
 #[test]
 fn ipa_bn254() {
-    use arrabbiata_bn254::Fr;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_plonk::{ipa, vanilla};
     let (c, _, ()) = build::<Fr, _, _>(|_| ());
     let circuit = vanilla::circuit(&c).unwrap();
     assert_eq!(ipa::bn254(&circuit).size(), 8);
@@ -50,8 +60,6 @@ fn ipa_bn254() {
 
 #[test]
 fn ipa_pallas_transcript() {
-    use arrabbiata_plonk::ipa;
-    use arrabbiata_transcript::Transcript;
     assert_eq!(
         ipa::pallas_transcript().squeeze(),
         ipa::pallas_transcript().squeeze()
@@ -60,8 +68,6 @@ fn ipa_pallas_transcript() {
 
 #[test]
 fn ipa_bn254_transcript() {
-    use arrabbiata_plonk::ipa;
-    use arrabbiata_transcript::Transcript;
     assert_eq!(
         ipa::bn254_transcript().squeeze(),
         ipa::bn254_transcript().squeeze()
@@ -70,11 +76,6 @@ fn ipa_bn254_transcript() {
 
 #[test]
 fn kzg_overview() {
-    use arrabbiata_bn254::Fr;
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_plonk::{kzg, prove, setup, vanilla, verify};
-
     let (c, w, ()) = build::<Fr, _, _>(|b| {
         let x = b.witness(Fr::from_u64(3));
         let y = b.mul(&x, &x);
@@ -90,10 +91,6 @@ fn kzg_overview() {
 
 #[test]
 fn kzg_insecure_srs() {
-    use arrabbiata_bn254::Fr;
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_plonk::{QuotientSizing, kzg, vanilla};
     let (c, _, ()) = build::<Fr, _, _>(|_| ());
     let circuit = vanilla::circuit(&c).unwrap();
     let srs = kzg::insecure_srs(&circuit, Fr::ONE + Fr::ONE);
@@ -102,22 +99,11 @@ fn kzg_insecure_srs() {
 
 #[test]
 fn kzg_transcript() {
-    use arrabbiata_plonk::kzg;
-    use arrabbiata_transcript::Transcript;
     assert_eq!(kzg::transcript().squeeze(), kzg::transcript().squeeze());
 }
 
 #[test]
 fn crate_overview() {
-    use arrabbiata_field::Field;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{
-        circuit::{Builder, Cell},
-        gate::Gadget,
-        ipa, prove, setup, verify,
-    };
-    use arrabbiata_poly::{Expr, Rotation, WitnessColumn};
-
     /// The Poseidon S-box, `b = a^5`.
     struct SBox;
     impl Gadget<F, 2, 0> for SBox {
@@ -167,44 +153,34 @@ fn crate_overview() {
 
 #[test]
 fn scheme() {
-    use arrabbiata_plonk::{Scheme, ipa::PallasIpa};
     let m: Scheme<PallasIpa, u8, 1> = Scheme::new(7);
     assert_eq!(m.value, 7);
 }
 
 #[test]
 fn scheme_new() {
-    use arrabbiata_plonk::{Scheme, ipa::PallasIpa};
     let m = Scheme::<PallasIpa, _, 1>::new("x");
     assert_eq!(m.value, "x");
 }
 
 #[test]
 fn with() {
-    use arrabbiata_pasta::Fq;
-    use arrabbiata_plonk::{With, ipa::PallasIpa};
-    use arrabbiata_poseidon::PoseidonSponge;
-    use arrabbiata_transcript::typed::Label;
     type Setup = With<PallasIpa, PoseidonSponge<Fq>>;
     assert_eq!(Setup::LABEL, <PallasIpa as Label>::LABEL);
 }
 
 #[test]
 fn columns() {
-    use arrabbiata_plonk::Columns;
     assert_eq!(Columns([1, 2, 3]).0[2], 3);
 }
 
 #[test]
 fn public_inputs() {
-    use arrabbiata_field::{Field, Goldilocks as F};
-    use arrabbiata_plonk::PublicInputs;
-    assert_eq!(PublicInputs(vec![F::from_u64(1)]).0.len(), 1);
+    assert_eq!(PublicInputs(vec![FieldGoldilocks::from_u64(1)]).0.len(), 1);
 }
 
 #[test]
 fn opened() {
-    use arrabbiata_plonk::Opened;
     let o = Opened::<u8, 1, 1, 1> {
         witness: [0],
         fixed: [1],
@@ -224,7 +200,6 @@ fn opened() {
 
 #[test]
 fn opened_iter() {
-    use arrabbiata_plonk::Opened;
     let o = Opened::<u8, 2, 0, 0> {
         witness: [1, 2],
         fixed: [],
@@ -241,7 +216,6 @@ fn opened_iter() {
 
 #[test]
 fn opened_iter_mut() {
-    use arrabbiata_plonk::Opened;
     let mut o = Opened::<u8, 1, 0, 0> {
         witness: [1],
         fixed: [],
@@ -259,25 +233,17 @@ fn opened_iter_mut() {
 
 #[test]
 fn opened_rotated_witness() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{Opened, vanilla::Vanilla};
     // Vanilla PlonK reads only the current row.
     assert!(Opened::<F, 3, 5, 1>::rotated_witness::<F, Vanilla>().is_empty());
 }
 
 #[test]
 fn opened_rotated_fixed() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{Opened, vanilla::Vanilla};
     assert!(Opened::<F, 3, 5, 1>::rotated_fixed::<F, Vanilla>().is_empty());
 }
 
 #[test]
 fn preprocessed() {
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa, vanilla};
     let (c, _, ()) = build::<F, _, _>(|b| {
         b.witness(F::from_u64(1));
     });
@@ -288,9 +254,6 @@ fn preprocessed() {
 
 #[test]
 fn preprocessed_num_rows() {
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa, vanilla};
     let (c, _, ()) = build::<F, _, _>(|_| ());
     let circuit = vanilla::circuit(&c).unwrap();
     let (_, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
@@ -299,10 +262,6 @@ fn preprocessed_num_rows() {
 
 #[test]
 fn preprocessed_public_rows() {
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa, vanilla};
     let (c, _, ()) = build::<F, _, _>(|b| {
         b.public_input(F::ONE);
     });
@@ -313,9 +272,6 @@ fn preprocessed_public_rows() {
 
 #[test]
 fn prover_key() {
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa, vanilla};
     let (c, _, ()) = build::<F, _, _>(|_| ());
     let circuit = vanilla::circuit(&c).unwrap();
     let (pk, vk) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
@@ -324,9 +280,6 @@ fn prover_key() {
 
 #[test]
 fn prover_key_verifier_key() {
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa, vanilla};
     let (c, _, ()) = build::<F, _, _>(|_| ());
     let circuit = vanilla::circuit(&c).unwrap();
     let (pk, _) = arrabbiata_plonk::setup(&circuit, &ipa::pallas(&circuit)).unwrap();
@@ -335,10 +288,6 @@ fn prover_key_verifier_key() {
 
 #[test]
 fn plonk() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{Plonk, ipa::PallasIpa, vanilla::Vanilla};
-    use arrabbiata_poseidon::PoseidonSponge;
-    use arrabbiata_transcript::typed::{Pattern, Protocol};
     type P = <Plonk<F, PallasIpa, PoseidonSponge<F>, Vanilla, 3, 5, 1> as Protocol>::Transcript;
     assert_eq!(<P as Pattern>::MESSAGES, 5);
     assert_eq!(<P as Pattern>::CHALLENGES, 4);
@@ -346,7 +295,6 @@ fn plonk() {
 
 #[test]
 fn plonk_error() {
-    use arrabbiata_plonk::PlonkError;
     assert_eq!(
         PlonkError::IdentityFailed.to_string(),
         "the PlonK identity does not hold at zeta"
@@ -355,7 +303,6 @@ fn plonk_error() {
 
 #[test]
 fn plonk_error_impl() {
-    use arrabbiata_plonk::{CircuitError, PlonkError};
     assert_eq!(
         PlonkError::from(CircuitError::Rotation),
         PlonkError::Rotation
@@ -364,8 +311,6 @@ fn plonk_error_impl() {
 
 #[test]
 fn quotient_sizing() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
     let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     // q * q_M a b has degree 4, and so has z (a + ..) (b + ..) (c + ..).
     assert_eq!(c.quotient_factor(), 4);
@@ -374,26 +319,18 @@ fn quotient_sizing() {
 
 #[test]
 fn plonk_error_quotient_factor() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
     let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     assert_eq!(c.quotient_factor(), 4);
 }
 
 #[test]
 fn plonk_error_max_coefficients() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
     let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     assert_eq!(c.max_coefficients(), 3 * c.num_rows());
 }
 
 #[test]
-fn setup() {
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa, vanilla};
+fn setup_works() {
     let (c, _, ()) = build::<F, _, _>(|b| {
         b.constant(F::from_u64(2));
     });
@@ -402,12 +339,7 @@ fn setup() {
 }
 
 #[test]
-fn prove() {
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{PlonkError, ipa, prove, setup, vanilla};
-
+fn prove_works() {
     // A false statement: 2 * 2 = 5.
     let (c, w, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::from_u64(2));
@@ -425,12 +357,7 @@ fn prove() {
 }
 
 #[test]
-fn verify() {
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
-
+fn verify_works() {
     let (c, w, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::from_u64(4));
         let y = b.mul(&x, &x);
@@ -466,11 +393,6 @@ fn verify() {
 
 #[test]
 fn vanilla_overview() {
-    use arrabbiata_field::Field;
-    use arrabbiata_frontend::vanilla::build;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa, prove, setup, vanilla, verify};
-
     // x^3 + x + 5 = 35, with x = 3 private and 35 public.
     let (c, w, ()) = build::<F, _, _>(|b| {
         let x = b.witness(F::from_u64(3));
@@ -497,10 +419,6 @@ fn vanilla_overview() {
 
 #[test]
 fn vanilla_vanilla_plonk() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::{ipa::PallasIpa, vanilla::VanillaPlonk};
-    use arrabbiata_poseidon::PoseidonSponge;
-    use arrabbiata_transcript::typed::{Pattern, Protocol};
     type P = <VanillaPlonk<F, PallasIpa, PoseidonSponge<F>> as Protocol>::Transcript;
     assert_eq!(<P as Pattern>::MESSAGES, 5);
 }

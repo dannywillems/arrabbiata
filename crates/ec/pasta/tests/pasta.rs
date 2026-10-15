@@ -1,8 +1,9 @@
 //! Pasta-specific checks. The group laws of Pallas and Vesta are tested by
 //! the generic curve laws (`crates/ec/curve/tests/laws.rs`).
 
+use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::{Field, MontField, MontgomeryConfig, PrimeField, Sqrt, TwoAdicField};
-use arrabbiata_pasta::{FpConfig, FqConfig};
+use arrabbiata_pasta::{FpConfig, FqConfig, Pallas, Vesta};
 
 fn base_field<C>()
 where
@@ -35,9 +36,6 @@ fn the_moduli_form_a_cycle() {
 /// `(endo_q, endo_r)` is `(beta, lambda)`, for both curves.
 #[test]
 fn glv_constants_are_kimchis_endos() {
-    use arrabbiata_curve::glv::Glv;
-    use arrabbiata_field::PrimeField;
-    use arrabbiata_pasta::{Pallas, Vesta};
     let limbs = |x: &dyn Fn(usize) -> u64| [x(0), x(1), x(2), x(3)];
     let pallas_beta = Pallas::beta();
     let pallas_lambda = Pallas::lambda();

@@ -1,18 +1,25 @@
 //! The behaviour of each public item, one test per item (these were
 //! the rustdoc examples).
 
+use arrabbiata_field::Field;
+use arrabbiata_pasta::Fq as F;
+use arrabbiata_plonk::{ipa, ipa::PallasIpa};
+use arrabbiata_plonk_decider::{Decider, Error, Shared, relaxation};
+use arrabbiata_plonkish::{
+    Builder, RelaxedWitness,
+    vanilla::{Arithmetic, Vanilla},
+};
+use arrabbiata_plonkish_folding::Params;
+use arrabbiata_poseidon::vesta_sponge;
+
 #[test]
 fn shared() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::ipa::PallasIpa;
-    use arrabbiata_plonk_decider::Shared;
     fn shared<PC: Shared<F>>() {}
     shared::<PallasIpa>();
 }
 
 #[test]
 fn error() {
-    use arrabbiata_plonk_decider::Error;
     assert_eq!(
         Error::Commitment(0).to_string(),
         "the proof's commitment 0 is not the accumulator's"
@@ -20,14 +27,7 @@ fn error() {
 }
 
 #[test]
-fn relaxation() {
-    use arrabbiata_field::Field;
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk_decider::relaxation;
-    use arrabbiata_plonkish::{
-        Builder, RelaxedWitness,
-        vanilla::{Arithmetic, Vanilla},
-    };
+fn relaxation_works() {
     // a b - c = 1 on one row: unsatisfied, relaxed with E = 1 at u = 1.
     let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     let one = F::ONE;
@@ -48,12 +48,6 @@ fn relaxation() {
 
 #[test]
 fn error_new() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::ipa;
-    use arrabbiata_plonk_decider::{Decider, Error};
-    use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
-    use arrabbiata_plonkish_folding::Params;
-    use arrabbiata_poseidon::vesta_sponge;
     // Sponge domain tags: each transcript gets its own, and prover and
     // verifier start from the same one.
     let digest_domain = 2;
@@ -72,12 +66,6 @@ fn error_new() {
 
 #[test]
 fn error_verifier_key() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::ipa;
-    use arrabbiata_plonk_decider::Decider;
-    use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
-    use arrabbiata_plonkish_folding::Params;
-    use arrabbiata_poseidon::vesta_sponge;
     // Sponge domain tags: each transcript gets its own, and prover and
     // verifier start from the same one.
     let digest_domain = 2;
@@ -93,12 +81,6 @@ fn error_verifier_key() {
 
 #[test]
 fn error_circuit() {
-    use arrabbiata_pasta::Fq as F;
-    use arrabbiata_plonk::ipa;
-    use arrabbiata_plonk_decider::Decider;
-    use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
-    use arrabbiata_plonkish_folding::Params;
-    use arrabbiata_poseidon::vesta_sponge;
     // Sponge domain tags: each transcript gets its own, and prover and
     // verifier start from the same one.
     let digest_domain = 2;

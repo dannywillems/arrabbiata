@@ -18,6 +18,7 @@ use arrabbiata_relation::{
     aggregation::{Aggregation, Combiner, NoCoefficients, Powers, Single},
     examples,
 };
+use arrabbiata_transcript::Transcript;
 use proptest::prelude::*;
 
 /// Pedersen vector commitments on Pallas.
@@ -261,7 +262,6 @@ proptest! {
 
 #[test]
 fn prover_and_verifier_transcripts_end_in_the_same_state() {
-    use arrabbiata_transcript::Transcript;
     let cs = examples::squaring::<F>(ROWS);
     let ck = key();
     let trace = examples::squaring_trace(&cs, 3);

@@ -15,8 +15,8 @@
 
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{
-    Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, TypedGadget, circuit, evaluate,
-    figures, witness,
+    Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, Shape, TypedGadget, circuit,
+    evaluate, figures, witness,
 };
 use arrabbiata_pasta::Fq as F;
 use proptest::prelude::*;
@@ -438,7 +438,6 @@ fn copying_in_place_is_the_identity() {
 /// its size is the sum of the sizes.
 #[test]
 fn tuples_of_shapes() {
-    use arrabbiata_gadget::Shape;
     type Four = (Array<2>, Scalar, Array<3>, (Scalar, Array<1>));
     let value = ([1u8, 2], 3, [4, 5, 6], (7, [8]));
     let flat = Four::flatten(&value);

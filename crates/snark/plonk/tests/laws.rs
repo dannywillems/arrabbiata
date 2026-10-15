@@ -19,8 +19,10 @@ mod common;
 use arrabbiata_field::Field;
 use arrabbiata_pasta::Fq as F;
 use arrabbiata_plonk::{
-    Builder, Cell, Circuit, CircuitError, Gadget, GateSet, Member, Opened, QuotientSizing, Witness,
+    Builder, Cell, Circuit, CircuitError, Gadget, GateSet, Member, Opened, QuotientSizing, Scheme,
+    Witness,
     gate::Selector,
+    ipa::PallasIpa,
     vanilla::{self, Arithmetic, Vanilla},
 };
 use arrabbiata_poly::{Expr, FixedColumn, Rotation, WitnessColumn};
@@ -686,7 +688,6 @@ fn satisfaction_checks_shapes() {
 /// Messages compare by value.
 #[test]
 fn scheme_equality_is_value_equality() {
-    use arrabbiata_plonk::{Scheme, ipa::PallasIpa};
     let a = Scheme::<PallasIpa, u8, 1>::new(1);
     assert_eq!(a, Scheme::new(1));
     assert_ne!(a, Scheme::new(2));

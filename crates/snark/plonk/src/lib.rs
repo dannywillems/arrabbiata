@@ -1450,7 +1450,7 @@ mod tests {
     //! at `zeta` can reject; these tests show that it does, for each part
     //! of the relation.
 
-    use arrabbiata_field::Field;
+    use arrabbiata_field::{Field, PrimeField};
     use arrabbiata_frontend::vanilla::build;
     use arrabbiata_pasta::Fq as F;
 
@@ -1615,7 +1615,6 @@ mod tests {
     /// The cosets `g^k H` of a subgroup `H` of order `n`, as sets of
     /// canonical integers.
     fn cosets<const W: usize>(shifts: &[Small; W], n: usize) -> Vec<Vec<u64>> {
-        use arrabbiata_field::PrimeField;
         let h = Small::two_adic_generator(n.trailing_zeros()).unwrap();
         shifts
             .iter()
