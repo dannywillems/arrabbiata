@@ -52,6 +52,7 @@ the right group.
 | directory | crate | contents | extracted to Lean |
 | --- | --- | --- | --- |
 | `crates/algebra` | `arrabbiata-field` | the `Field` traits; Montgomery prime fields; quadratic extensions; Goldilocks | yes |
+| | `arrabbiata-mvpoly` | multivariate polynomials in normal form (sparse, and dense through the primes), cross-terms of folding, Hasse derivatives | no |
 | | `arrabbiata-poly` | typed columns, constraint expressions, graded evaluation and homogenization, univariate polynomials, NTT domains | yes |
 | `crates/ec` | `arrabbiata-curve` | the `Curve` and `Pairing` traits, complete formulas, MSM, the group laws | not yet |
 | | `arrabbiata-pasta` | Pallas, Vesta and their fields | not yet |
@@ -63,7 +64,7 @@ the right group.
 | | `arrabbiata-ipa` | the inner-product argument, over any curve | not yet |
 | | `arrabbiata-kzg` | KZG, over any pairing | not yet |
 | `crates/arithmetization` | `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
-| | `arrabbiata-frontend` | a typed circuit builder (vanilla PlonK arithmetization) | no |
+| | `arrabbiata-frontend` | typed circuit builders: `vanilla`, for vanilla PlonK | no |
 | `crates/accumulation` | `arrabbiata-folding` | folding of homogeneous relations of any degree; Nova as a special case | yes |
 | `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
 
@@ -79,7 +80,8 @@ as a doctest, so it cannot drift from the code. Good entry points:
 - folding two instances: the crate documentation of `arrabbiata-folding`;
 - writing custom gates and proving a circuit with PlonK: the crate
   documentation of `arrabbiata-plonk`;
-- vanilla PlonK from a frontend circuit: `arrabbiata_plonk::vanilla`, with
+- vanilla PlonK from a circuit of `arrabbiata_frontend::vanilla`:
+  `arrabbiata_plonk::vanilla`, with
   `arrabbiata_plonk::ipa` and `arrabbiata_plonk::kzg`;
 - the typed transcript: `arrabbiata_transcript::typed`.
 

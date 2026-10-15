@@ -233,9 +233,33 @@ A norm-aware folding (in the style of LatticeFold) would be a third trait.
 The schemes are IPA (Pedersen vector commitments with a logarithmic
 opening, transparent) and KZG (over any pairing, trusted setup).
 
+### `arrabbiata-mvpoly`
+
+Polynomials in `N` variables of degree at most `D`, in normal form, after
+the `mvpoly` crate of o1-labs/proof-systems. One trait, `MVPoly<F, N, D>`,
+two representations: `Sparse` (the nonzero terms, keyed by monomial) and
+`Dense` (every coefficient, the monomial `x^e` indexed by
+`prod_i p_i^(e_i)` over the first `N` primes, an injective monoid
+morphism by unique factorization). Everything but storage is written once
+in the trait, so the two cannot drift; they are tested to be isomorphic.
+The product is partial, `checked_mul`, as `F[x]_(<= D)` is not closed
+under it.
+
+Cross-terms are the coefficients of `P^D(u_1 + r u_2, x_1 + r x_2)` in
+`r`, by the binomial expansion of each monomial; they are the directional
+Hasse derivatives of `P^D`, so the expansion needs no division and holds
+in any characteristic. `combined_cross_terms` combines constraints by
+powers of a folded combiner, as Arrabbiata's folding does. `from_expr`
+turns a constraint into its polynomial on a row, under a `Layout` of
+rotations (the current and the next row, in Arrabbiata's layout). The
+cross-terms agree, coefficient by coefficient, with those the folding
+prover computes by evaluating the relation in `F[r]`: two independent
+computations of the same object.
+
 ### `arrabbiata-frontend`
 
-A circuit builder for the vanilla PlonK arithmetization. Wires carry their
+Frontends, one module per arithmetization. `vanilla` is the circuit
+builder for the vanilla PlonK arithmetization. Wires carry their
 value and their cell; copy constraints become a permutation whose cycles are
 the equivalence classes of cells. Wires are branded by their builder with a
 generative lifetime: `build` takes a closure `for<'id> FnOnce(&mut
@@ -290,7 +314,7 @@ The quotient is computed pointwise on a coset of a domain of size at least
 columns included) and of the permutation term (`W + 1`), so a gate of any
 degree costs one NTT per column. Vanilla PlonK is the instance `W = 3`,
 `X = 5`, one arithmetic gadget (`vanilla`), which circuits of
-`arrabbiata-frontend` compile to.
+`arrabbiata_frontend::vanilla` compile to.
 
 The tests build Poseidon (one row per round, against the Zcash and the
 reference vectors) and elliptic-curve scalar multiplication on Vesta and
@@ -341,6 +365,9 @@ openings, the quotient committed in one piece.
 | multilinear extension interpolates its table | yes | no |
 | PlonK completeness | yes, random circuits, vanilla and custom gates, KZG and IPA | no |
 | folding with Pedersen and KZG commitments | yes | no |
+| mvpoly: ring laws, evaluation morphism, sparse = dense | yes | no |
+| mvpoly cross-terms = folding prover's cross-terms | yes, on the example relations | no |
+| Hasse derivatives: Taylor, `H^(i) H^(j) = C(i+j, i) H^(i+j)` | yes | no |
 | PlonK rejects tampered evaluations, statements, transcripts | yes | no |
 | PlonK identity rejects a cheating prover (gates, copies, public inputs) | yes, every single-cell violation, with and without rotations, mutation-checked | no |
 | copies: `sigma` depends only on the partition; satisfied iff constant on classes | yes | no |
