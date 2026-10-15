@@ -455,6 +455,40 @@ in both directions (satisfaction is preserved and reflected) on random
 vanilla programs and on gate sets reading other rows and fixed columns, and
 the two protocols accept the same statements.
 
+**Lookups.** A lookup asks that on every row its selector turns on, the
+tuple of its input polynomials (in the gates' variables) is a row of a table
+of fixed columns. Tuples are compressed by a challenge `theta` drawn after
+the witness, and a row with the selector off queries the table's first row,
+so the query column is defined everywhere. Two arguments prove it:
+
+- *plookup* (Gabizon and Williamson, ePrint 2020/315): the sorted merge of
+  queries and table in two overlapping halves `h_1, h_2`, and a grand
+  product `Z` whose telescoping checks that the consecutive pairs of the
+  merge are those of the table plus repeats. Our adaptation to a domain of
+  `n` rows reserves the last one (the paper uses a domain of `n + 1` for
+  `n` queries), so a plookup is gated and off on the last row.
+- *LogUp* (Haboeck, ePrint 2022/1530): multiplicities `m` and a running sum
+  `phi` of `1 / (gamma - f) - m / (gamma - t)` that must close on the
+  cycle, which is the fractional identity
+  `sum_i 1 / (gamma - f_i) = sum_j m_j / (gamma - t_j)`; it needs the
+  characteristic to exceed the number of queries, and uses every row.
+
+Our framing of the difference: plookup reduces a subset claim to a
+*multiset equality* of consecutive pairs (a grand product, the same tool
+as the permutation argument), LogUp to an identity of *rational functions*
+(sums of poles), which is additive rather than multiplicative and so needs
+no sorting; that additivity is what makes LogUp the one that folds well.
+Both are prover-side work in `O(n log n)` (a sort or a count, then NTTs)
+and one more round of commitments; the quotient grows to accommodate the
+query's degree plus two.
+
+The tests cover range checks, vector lookups into a XOR table (where every
+coordinate of a wrong tuple is in its column but the tuple is not a row,
+which only the compression by `theta` catches), queries that are
+polynomials of degree 2, rows with the selector off, repeated queries and
+tables with repeated rows, every lookup opening, misplaced lookup
+commitments, the rejection of malformed lookups, and KZG.
+
 The tests check completeness with IPA and KZG, that a statement with
 another public input is rejected, that every evaluation and every opening of
 a proof is checked, gates reading public inputs at every degree up to the
@@ -558,6 +592,7 @@ accumulator outside `R'`.
 | PlonKish fold: `mvpoly` cross-terms = relaxation evaluated independently | yes, through completeness | no |
 | PlonKish fold soundness probes (bad step, bad accumulator, bad cross-term, swapped instances, digest) | yes | no |
 | generalized PlonK: completeness, every opening and evaluation checked, public inputs read by gates | yes, IPA and KZG | no |
+| lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
 | PlonKish circuits embed into generalized PlonK, preserving and reflecting satisfaction; both protocols accept the same statements | yes, random vanilla programs and rotated gate sets | no |
 | the decider's generalized circuit = the relaxation of `arrabbiata-plonkish` | yes, on accumulators and every change of the error | no |
 | decider: complete on accumulators, rejects perturbed instances, evaluations and foreign proofs | yes, IPA and KZG | no |

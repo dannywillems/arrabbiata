@@ -43,7 +43,8 @@ Early, but end to end. Implemented and tested:
 - generalized PlonK: any number of witness columns, fixed columns,
   selectors and public inputs, with gates that are any multivariate
   polynomials of bounded degree (public inputs read as scalars), into which
-  PlonKish circuits embed;
+  PlonKish circuits embed; with lookup arguments, plookup and LogUp, for
+  vector lookups of polynomial queries into fixed tables;
 - the folding scheme of the Arrabbiata note on PlonKish circuits of any
   degree, with the cross-terms computed from multivariate polynomials, copy
   constraints and public inputs folded linearly, and a decider that proves
@@ -85,7 +86,7 @@ the right group.
 | | `arrabbiata-plonkish-folding` | accumulation of PlonKish circuits: the embedding `R -> R'` and the fold `R' x R' -> R'`, cross-terms from `mvpoly` | no |
 | `crates/decider` | `arrabbiata-plonk-decider` | the decider `R' -> R_top` of `plonkish-folding`: the relaxation as a generalized PlonK circuit | no |
 | `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
-| | `arrabbiata-generalized-plonk` | generalized PlonK: any numbers of columns, selectors and public inputs, gates any multivariate polynomials of degree at most `D` | no |
+| | `arrabbiata-generalized-plonk` | generalized PlonK: any numbers of columns, selectors and public inputs, gates any multivariate polynomials of degree at most `D`; plookup and LogUp lookups | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
@@ -183,6 +184,10 @@ MIT. See [LICENSE](LICENSE).
 - Willems. Behind Nova: cross-terms computation for high degree gates.
   <https://hackmd.io/qq_Awc1AR3ywzkruE4Wq9Q>
 - Gabizon, Williamson, Ciobotaru. PlonK. <https://eprint.iacr.org/2019/953>
+- Gabizon, Williamson. plookup: A simplified polynomial protocol for lookup
+  tables. <https://eprint.iacr.org/2020/315>
+- Haboeck. Multivariate lookups based on logarithmic derivatives.
+  <https://eprint.iacr.org/2022/1530>
 - Ho, Protzenko. Aeneas: Rust verification by functional translation. ICFP
   2022. <https://github.com/AeneasVerif/aeneas>
 
