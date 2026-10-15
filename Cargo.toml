@@ -19,8 +19,10 @@ arrabbiata-frontend = { path = "crates/arithmetization/frontend" }
 arrabbiata-grumpkin = { path = "crates/ec/grumpkin" }
 arrabbiata-ipa = { path = "crates/commitment/ipa" }
 arrabbiata-kzg = { path = "crates/commitment/kzg" }
+arrabbiata-mvpoly = { path = "crates/algebra/mvpoly" }
 arrabbiata-pasta = { path = "crates/ec/pasta" }
 arrabbiata-plonkish = { path = "crates/arithmetization/plonkish" }
+arrabbiata-plonkish-folding = { path = "crates/accumulation/plonkish" }
 arrabbiata-poly = { path = "crates/algebra/poly" }
 arrabbiata-poseidon = { path = "crates/oracle/poseidon" }
 arrabbiata-reduction = { path = "crates/reduction/knowledge" }

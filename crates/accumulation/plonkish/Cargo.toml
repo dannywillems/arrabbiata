@@ -1,0 +1,28 @@
+[package]
+name = "arrabbiata-plonkish-folding"
+description = "Accumulation of PlonKish circuits of any degree, with cross-terms from multivariate polynomials"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-commit = { workspace = true }
+arrabbiata-field = { workspace = true }
+arrabbiata-mvpoly = { workspace = true }
+arrabbiata-plonkish = { workspace = true }
+arrabbiata-poly = { workspace = true }
+arrabbiata-reduction = { workspace = true }
+arrabbiata-transcript = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-frontend = { workspace = true }
+arrabbiata-ipa = { workspace = true }
+arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
