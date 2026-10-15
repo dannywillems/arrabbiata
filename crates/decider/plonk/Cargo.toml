@@ -1,6 +1,6 @@
 [package]
 name = "arrabbiata-plonk-decider"
-description = "A PlonK decider for accumulated PlonKish circuits: an argument for the relaxed relation"
+description = "A generalized-PlonK decider for accumulated PlonKish circuits: an argument for the relaxed relation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,11 @@ authors.workspace = true
 [dependencies]
 arrabbiata-commit = { workspace = true }
 arrabbiata-field = { workspace = true }
-arrabbiata-plonk = { workspace = true }
+arrabbiata-generalized-plonk = { workspace = true }
+arrabbiata-mvpoly = { workspace = true }
 arrabbiata-plonkish = { workspace = true }
 arrabbiata-plonkish-folding = { workspace = true }
+arrabbiata-poly = { workspace = true }
 arrabbiata-reduction = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 
@@ -23,7 +25,7 @@ arrabbiata-frontend = { workspace = true }
 arrabbiata-ipa = { workspace = true }
 arrabbiata-kzg = { workspace = true }
 arrabbiata-pasta = { workspace = true }
-arrabbiata-poly = { workspace = true }
+arrabbiata-plonk = { workspace = true }
 arrabbiata-poseidon = { workspace = true }
 proptest = { workspace = true }
 

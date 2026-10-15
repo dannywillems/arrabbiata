@@ -113,7 +113,6 @@ extern crate alloc;
 
 pub mod ipa;
 pub mod kzg;
-pub mod relaxed;
 pub mod vanilla;
 
 use alloc::{collections::BTreeSet, vec, vec::Vec};
@@ -1257,7 +1256,7 @@ where
     // sum_j alpha^j q_g(j) C_j, over the J constraints of all gadgets.
     let constraints: Vec<Vec<Expr<F, W, X>>> = (0..Q).map(|g| G::constraints(g)).collect();
     let ring = Scalars::new();
-    let gates = |view: &CosetView<'_, F, W, X>, selectors: &[F], _: &[F]| -> (F, F) {
+    let gates = |view: &CosetView<'_, F, W, X>, selectors: &[F]| -> (F, F) {
         let mut acc = F::ZERO;
         let mut power = F::ONE;
         for (selector, gadget) in selectors.iter().zip(&constraints) {
@@ -1273,7 +1272,6 @@ where
         &wires,
         &z,
         witness.public_inputs(),
-        &[],
         (beta, gamma, alpha),
         honest,
         gates,
@@ -1326,17 +1324,16 @@ where
 /// `gates`, then `alpha`-weighted the public-input, permutation and
 /// boundary terms, divided by `Z_H`.
 ///
-/// `gates` receives the view of the columns at a point, the selectors at
-/// that point, and the values at that point of the polynomials `extra`;
-/// it returns the gate term and the power of `alpha` the next term starts
-/// at. `honest` refuses a numerator that `Z_H` does not divide.
+/// `gates` receives the view of the columns at a point and the selectors
+/// at that point; it returns the gate term and the power of `alpha` the
+/// next term starts at. `honest` refuses a numerator that `Z_H` does not
+/// divide.
 #[allow(clippy::too_many_arguments)]
 fn quotient<F, PC, G, Gt, const W: usize, const X: usize, const Q: usize>(
     pk: &ProverKey<F, PC, G, W, X, Q>,
     wires: &[UniPoly<F>; W],
     z: &UniPoly<F>,
     public_inputs: &[F],
-    extra: &[UniPoly<F>],
     (beta, gamma, alpha): (F, F, F),
     honest: bool,
     mut gates: Gt,
@@ -1345,7 +1342,7 @@ where
     F: TwoAdicField,
     PC: PolynomialCommitment<F, Family = Univariate>,
     G: GateSet<F, W, X>,
-    Gt: FnMut(&CosetView<'_, F, W, X>, &[F], &[F]) -> (F, F),
+    Gt: FnMut(&CosetView<'_, F, W, X>, &[F]) -> (F, F),
 {
     let key = &pk.vk.value;
     let domain = &pk.domain;
@@ -1367,7 +1364,6 @@ where
     let fixed_values: [Vec<F>; X] = into_array(on_coset_all(&pk.fixed)?);
     let selector_values = on_coset_all(&pk.selectors)?;
     let sigma_values = on_coset_all(&pk.sigmas)?;
-    let extra_values = on_coset_all(extra)?;
     let z_coset = on_coset(z)?;
     let mut first = vec![F::ZERO; n];
     first[0] = F::ONE;
@@ -1393,7 +1389,6 @@ where
     }
     let mut t_values = vec![F::ZERO; size];
     let mut selectors_here = vec![F::ZERO; Q];
-    let mut extra_here = vec![F::ZERO; extra.len()];
     let mut x = shift;
     let mut point = 0;
     while point < size {
@@ -1406,10 +1401,7 @@ where
         for (s, values) in selectors_here.iter_mut().zip(&selector_values) {
             *s = values[point];
         }
-        for (e, values) in extra_here.iter_mut().zip(&extra_values) {
-            *e = values[point];
-        }
-        let (mut acc, mut power) = gates(&view, &selectors_here, &extra_here);
+        let (mut acc, mut power) = gates(&view, &selectors_here);
         if W > 0 {
             acc = acc + power * (lp[point] * wire_values[0][point] - pi[point]);
         }

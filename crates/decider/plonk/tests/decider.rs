@@ -9,9 +9,10 @@ use arrabbiata_bn254::Fr;
 use arrabbiata_commit::{HomomorphicCommitment, PolynomialCommitment};
 use arrabbiata_field::{Field, TwoAdicField};
 use arrabbiata_frontend::vanilla::build;
+use arrabbiata_generalized_plonk::{Error as PlonkError, max_coefficients};
 use arrabbiata_pasta::Fq as F;
-use arrabbiata_plonk::{PlonkError, QuotientSizing, ipa, kzg};
-use arrabbiata_plonk_decider::{Decider, Shared, snark};
+use arrabbiata_plonk::{QuotientSizing, ipa};
+use arrabbiata_plonk_decider::{Decider, Error, Shared, relaxation, snark};
 use arrabbiata_plonkish::{
     GateSet, RelaxedWitness, Witness,
     vanilla::{self, Vanilla},
@@ -76,8 +77,10 @@ fn decides<
     const Q: usize,
     const N: usize,
     const D: usize,
+    const N2: usize,
+    const D2: usize,
 >(
-    decider: &Decider<'_, Fd, PC, G, W, X, Q, N, D>,
+    decider: &Decider<'_, Fd, PC, G, W, X, Q, N, D, N2, D2>,
     instance: &RelaxedInstance<Fd, <PC as HomomorphicCommitment<Fd>>::Commitment, W>,
     witness: &RelaxedWitness<Fd, W>,
     others: &[RelaxedInstance<Fd, <PC as HomomorphicCommitment<Fd>>::Commitment, W>],
@@ -189,7 +192,7 @@ proptest! {
         let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
         let witnesses: Vec<_> = steps.iter().map(|(x, k)| vanilla_step(*x, *k).1).collect();
         let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
-        let decider = Decider::new(&params).unwrap();
+        let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
         let ck = params.ck();
         let one = HomomorphicCommitment::commit(ck, &[F::ONE]);
         let others = perturbations(&instance, |c| ck.add(c, &one));
@@ -205,7 +208,7 @@ proptest! {
         let params = Params::<F, _, Gates, 2, 1, 3, 6, 5>::new(circuit, pcs, vesta_sponge(2)).unwrap();
         let witnesses: Vec<_> = xs.iter().map(|x| custom(*x, q).1).collect();
         let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
-        let decider = Decider::new(&params).unwrap();
+        let decider = Decider::<_, _, _, 2, 1, 3, 6, 5, 9, 7>::new(&params).unwrap();
         let ck = params.ck();
         let one = HomomorphicCommitment::commit(ck, &[F::ONE]);
         let others = perturbations(&instance, |c| ck.add(c, &one));
@@ -222,7 +225,7 @@ proptest! {
         let witnesses: Vec<_> = xs.iter().map(|x| vanilla_step(*x, k).1).collect();
         let (instance, witness) = accumulated(&params, &witnesses[..witnesses.len() - 1], || vesta_sponge(3));
         let last = witnesses.last().unwrap();
-        let decider = Decider::new(&params).unwrap();
+        let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
         let both = Then(accumulate(&params), &decider);
         let input = (last.public_inputs().to_vec(), instance);
         let out = laws::complete::<F, _, _>(&both, || vesta_sponge(5), &input, &(last.clone(), witness));
@@ -235,7 +238,7 @@ proptest! {
         let (circuit, w) = vanilla_step(x, k);
         let pcs = ipa::pallas(&circuit);
         let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
-        let decider = Decider::new(&params).unwrap();
+        let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
         let s = snark(&decider);
         let public = w.public_inputs().to_vec();
         let out = laws::complete::<F, _, _>(&s, || vesta_sponge(6), &public, &w);
@@ -261,13 +264,20 @@ fn kzg_accumulators_are_decided() {
         (vanilla::circuit(&c).unwrap(), vanilla::witness(&w))
     };
     let (circuit, _) = step(0);
-    let srs = kzg::insecure_srs(&circuit, Fr::from_u64(123_456_789));
-    assert!(srs.size() >= circuit.max_coefficients());
+    // The relaxation has one more witness column than the circuit, so its
+    // quotient may be larger than PlonK's: size the key for it.
+    let relaxed = relaxation::<Fr, Vanilla, 3, 5, 1, 11, 4>(&circuit, 2).unwrap();
+    let size = max_coefficients(&relaxed);
+    assert!(size > circuit.max_coefficients());
+    let srs = arrabbiata_kzg::Kzg::<arrabbiata_bn254::Bn254>::insecure_setup(
+        size,
+        Fr::from_u64(123_456_789),
+    );
     let params =
         Params::<Fr, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, srs, bn254_scalar_sponge(2)).unwrap();
     let witnesses: Vec<_> = [2, 3, 4].iter().map(|v| step(*v).1).collect();
     let (instance, witness) = accumulated(&params, &witnesses, || bn254_scalar_sponge(3));
-    let decider = Decider::new(&params).unwrap();
+    let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     let out = decider
         .prove(bn254_scalar_sponge(4), &instance, &witness)
         .unwrap();
@@ -289,7 +299,7 @@ fn the_prover_refuses_an_unsatisfied_accumulator() {
         .map(|(x, k)| vanilla_step(*x, *k).1)
         .collect();
     let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
-    let decider = Decider::new(&params).unwrap();
+    let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     // An error column off on one row, recommitted so it opens.
     let mut error = witness.error().to_vec();
     error[0] = error[0] + F::ONE;
@@ -306,19 +316,21 @@ fn the_prover_refuses_an_unsatisfied_accumulator() {
         decider
             .prove(vesta_sponge(4), &bad_instance, &bad)
             .unwrap_err(),
-        PlonkError::Unsatisfied
+        Error::Plonk(PlonkError::Unsatisfied)
     );
-    // A satisfied witness against an instance it does not open.
+    // A satisfied witness against an instance it does not open: the error
+    // column, commitment 3.
     assert_eq!(
         decider
             .prove(vesta_sponge(4), &bad_instance, &witness)
             .unwrap_err(),
-        PlonkError::Unsatisfied
+        Error::Commitment(3)
     );
 }
 
 /// A proof with a changed evaluation of the error polynomial fails, at
-/// its opening.
+/// its opening; a proof whose error commitment is not the accumulator's
+/// fails the link.
 #[test]
 fn the_error_opening_is_checked() {
     let (circuit, _) = vanilla_step(0, 0);
@@ -330,10 +342,61 @@ fn the_error_opening_is_checked() {
         .map(|(x, k)| vanilla_step(*x, *k).1)
         .collect();
     let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
-    let decider = Decider::new(&params).unwrap();
+    let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     let out = decider.prove(vesta_sponge(4), &instance, &witness).unwrap();
-    let mut proof = out.proof;
-    proof.tail.tail.head.error = proof.tail.tail.head.error + F::ONE;
+    let mut proof = out.proof.clone();
+    // The evaluations are the fourth message; the error column is witness
+    // column 3.
+    proof.tail.tail.tail.head.witness[3] = proof.tail.tail.tail.head.witness[3] + F::ONE;
     let result = decider.verify(vesta_sponge(4), &instance, proof);
-    assert!(matches!(result, Err(PlonkError::Opening(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(Error::Plonk(PlonkError::Opening(3)))),
+        "{result:?}"
+    );
+    // Another accumulator's proof does not verify for this one.
+    let others: Vec<_> = [(6, 7), (8, 9)]
+        .iter()
+        .map(|(x, k)| vanilla_step(*x, *k).1)
+        .collect();
+    let (other, other_witness) = accumulated(&params, &others, || vesta_sponge(3));
+    let foreign = decider
+        .prove(vesta_sponge(4), &other, &other_witness)
+        .unwrap();
+    assert!(
+        decider
+            .verify(vesta_sponge(4), &instance, foreign.proof)
+            .is_err()
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    /// The generalized circuit of the relaxation agrees with the relaxation
+    /// of `arrabbiata_plonkish` on accumulators and on accumulators with
+    /// the error changed on any row, a gadget row or an idle one: the
+    /// partition of unity of the selectors is what makes the idle rows
+    /// force `E = 0`.
+    #[test]
+    fn the_relaxation_is_the_relaxed_relation(xs in prop::collection::vec(any::<u64>(), 1..4), q in any::<u64>(), row in 0usize..8, shift in 0u64..3) {
+        let (circuit, _) = custom(0, q);
+        let relaxed = relaxation::<F, Gates, 2, 1, 3, 9, 7>(&circuit, 5).unwrap();
+        let pcs = ipa::pallas(&circuit);
+        let params = Params::<F, _, Gates, 2, 1, 3, 6, 5>::new(circuit.clone(), pcs, vesta_sponge(2)).unwrap();
+        let witnesses: Vec<_> = xs.iter().map(|x| custom(*x, q).1).collect();
+        let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
+        let mut error = witness.error().to_vec();
+        let n = error.len();
+        error[row % n] = error[row % n] + F::from_u64(shift);
+        let changed = RelaxedWitness::new(witness.columns().clone(), error);
+        let mut columns = changed.columns().to_vec();
+        columns.push(changed.error().to_vec());
+        let mut public = instance.public().to_vec();
+        public.push(instance.u());
+        public.extend_from_slice(instance.coefficients());
+        let ours = relaxed.is_satisfied(&columns, &public);
+        let theirs = circuit.is_relaxed_satisfied(&changed, instance.public(), instance.u(), instance.coefficients(), 5);
+        prop_assert_eq!(ours, theirs);
+        prop_assert_eq!(ours, shift == 0);
+    }
 }

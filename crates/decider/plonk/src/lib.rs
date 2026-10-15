@@ -1,4 +1,4 @@
-//! A PlonK decider for accumulated PlonKish circuits.
+//! A generalized-PlonK decider for accumulated PlonKish circuits.
 //!
 //! A *decider* for an accumulation scheme is an argument of knowledge for
 //! its relaxed relation `R'`: a reduction `R' -> R_top` in the category of
@@ -6,22 +6,46 @@
 //! how an accumulator was reached, which is why it lives apart from the
 //! accumulation scheme.
 //!
-//! [`Decider`] is the one for `arrabbiata_plonkish_folding`: relaxed PlonK
-//! ([`arrabbiata_plonk::relaxed`]) on the statement an accumulator is. The
-//! accumulator's commitments are the statement's: the scheme commits to a
-//! column as the polynomial interpolating it, which is the commitment PlonK
-//! opens. The link is the law
+//! # The relaxed relation is a generalized circuit
 //!
-//! ```text
-//! HomomorphicCommitment::commit(p) = PolynomialCommitment::commit(p)
-//! ```
+//! [`Decider`] proves the relaxed relation of `arrabbiata_plonkish_folding`
+//! with generalized PlonK ([`arrabbiata_generalized_plonk`]). The relaxation
+//! of a circuit `C` of degree `D` is the generalized circuit
+//! [`relaxation`]`(C)`:
 //!
-//! for the coefficients `p` of a polynomial, which the commitment schemes
-//! of this repository satisfy (one key, one map; see the tests).
+//! - the witness columns of `C`, then the error column `E`;
+//! - the fixed and selector columns of `C`, and one more selector, `idle`,
+//!   equal to `1 - sum_g q_g`: on a row turning no gadget on it is 1;
+//! - the public inputs of `C`, bound to their rows as in `C`, then the
+//!   slack `u` and the coefficients `c_0, ..., c_(m-1)`, which no row
+//!   binds: they are scalars the gates read;
+//! - for each gadget `g`, the gate `sum_k c_k f^D_(g,k)(u, w) - E`, turned
+//!   on by `q_g`, where `f^D` homogenizes the constraint `f` with `u`; and
+//!   the gate `E`, turned on by `idle`;
+//! - the copy permutation of `C`, the identity on the error column.
+//!
+//! Since the selectors of `C` are one-hot, the selectors of the relaxation
+//! form a partition of unity, and a witness `(w, E)` satisfies it for the
+//! public inputs `(x, u, c)` exactly when it satisfies the relaxation of
+//! `C` ([`arrabbiata_plonkish::relaxed`]). The circuit does not depend on
+//! the accumulator: `u` and `c` are inputs, so it is keyed once.
+//!
+//! The gates have degree `D + 1` in the folded variables `(u, c, w)` and,
+//! with the fixed columns that multiply them, at most `D + 1 + e` in all
+//! their variables, with `e` the largest number of fixed columns in a
+//! monomial of a constraint. Only the columns count for the size of the
+//! quotient: `u` and `c` are scalars.
+//!
+//! # The link to the accumulator
+//!
+//! The scheme commits to a column as the polynomial interpolating it, the
+//! commitment PlonK makes to its witness columns. The verifier checks that
+//! the proof's witness commitments are the accumulator's, then the proof.
+//! The link is the law that a scheme's two `commit` agree on the same
+//! coefficients ([`Shared`]), tested for IPA and KZG.
 //!
 //! Composed with the embedding `R -> R'` of the accumulation scheme, the
-//! decider is an argument for the circuit relation itself
-//! ([`snark`]): the precomposition of the category, `Dec . Embed`.
+//! decider is an argument for the circuit relation itself ([`snark`]).
 //!
 //! ```
 //! use arrabbiata_field::Field;
@@ -44,7 +68,6 @@
 //!     (vanilla::circuit(&c).unwrap(), vanilla::witness(&w))
 //! };
 //! let (circuit, w0) = step(3);
-//! // One key for the fold (vectors) and the decider (polynomials).
 //! let pcs = ipa::pallas(&circuit);
 //! let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
 //!
@@ -57,8 +80,10 @@
 //!     (instance, witness) = (out.instance, out.witness);
 //! }
 //!
-//! // Decide the accumulator: one PlonK proof for all three steps.
-//! let decider = Decider::new(&params).unwrap();
+//! // Decide the accumulator with one generalized PlonK proof. Vanilla reads
+//! // 8 columns; with E, u and c that is 11 variables, and q_M c u^0 a b has
+//! // degree 4.
+//! let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
 //! let out = decider.prove(vesta_sponge(4), &instance, &witness).unwrap();
 //! decider.verify(vesta_sponge(4), &instance, out.proof).unwrap();
 //! ```
@@ -67,20 +92,25 @@
 
 extern crate alloc;
 
+use alloc::{vec, vec::Vec};
+use core::fmt;
+
 use arrabbiata_commit::{HomomorphicCommitment, PolynomialCommitment, Univariate};
-use arrabbiata_field::TwoAdicField;
-use arrabbiata_plonk::{
-    PlonkError, ProverKey, VerifierKey,
-    relaxed::{self, Relaxation, RelaxedPlonk},
-    setup,
+use arrabbiata_field::{Field, TwoAdicField};
+use arrabbiata_generalized_plonk::{
+    self as generalized, Circuit as GeneralizedCircuit, Gate, Proof, ProverKey, Variable,
+    VerifierKey,
+    plonkish::{columns_read, variable},
 };
-use arrabbiata_plonkish::{RelaxedWitness, gate::GateSet};
+use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
+use arrabbiata_plonkish::{
+    Circuit, RelaxedWitness,
+    gate::{GateSet, combiner_length},
+};
 use arrabbiata_plonkish_folding::{Embed, Params, Relaxed, RelaxedInstance};
+use arrabbiata_poly::{Expr, Rotation};
 use arrabbiata_reduction::{Output, OutputOf, Reduction, Relation, Then, Top};
-use arrabbiata_transcript::{
-    Transcript,
-    typed::{Label, ProofOf},
-};
+use arrabbiata_transcript::{Transcript, typed::Label};
 
 /// A commitment scheme that commits to vectors homomorphically and to
 /// polynomials with evaluation proofs, with one commitment type: what the
@@ -119,31 +149,257 @@ where
 {
 }
 
-/// The decider: relaxed PlonK on the circuit of `params`, keyed once.
+/// Why building, proving or verifying the decider failed.
 ///
-/// As a reduction it goes from the relaxed relation of `params` to
-/// [`Top`]: the prover proves the accumulator, the verifier checks the
-/// proof against the accumulator's instance and outputs `()`.
+/// ```
+/// use arrabbiata_plonk_decider::Error;
+/// assert_eq!(Error::Commitment(0).to_string(), "the proof's commitment 0 is not the accumulator's");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// `N2` or `D2` is too small for the relaxation of the circuit.
+    Size,
+    /// Generalized PlonK failed.
+    Plonk(generalized::Error),
+    /// The proof's (or the witness's) commitment `k` (a witness column for
+    /// `k < W`, the error column for `k = W`) is not the accumulator's.
+    Commitment(usize),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Size => write!(
+                f,
+                "too few variables or too low a degree for the relaxation"
+            ),
+            Self::Plonk(e) => write!(f, "generalized PlonK: {e}"),
+            Self::Commitment(k) => write!(f, "the proof's commitment {k} is not the accumulator's"),
+        }
+    }
+}
+
+impl core::error::Error for Error {}
+
+impl From<generalized::Error> for Error {
+    fn from(e: generalized::Error) -> Self {
+        Self::Plonk(e)
+    }
+}
+
+/// The homogenization of `expr` to degree `degree` with the slack variable
+/// `u`, as a polynomial in the variables numbered by `index`: the sum of
+/// `u^(degree - j)` times the component of degree `j` in the witness
+/// columns (fixed columns are coefficients, of degree 0). `None` if
+/// `degree` is below the degree of `expr` in the witness or the result
+/// does not fit `N, D`.
+fn homogenize<F, I, const W: usize, const X: usize, const N: usize, const D: usize>(
+    expr: &Expr<F, W, X>,
+    index: &I,
+    u: &Sparse<F, N, D>,
+    degree: usize,
+) -> Option<Sparse<F, N, D>>
+where
+    F: Field,
+    I: Fn(Variable) -> Option<usize>,
+{
+    /// The polynomial of `e`, homogeneous of the returned degree in
+    /// `(u, witness)`.
+    fn go<F, I, const W: usize, const X: usize, const N: usize, const D: usize>(
+        e: &Expr<F, W, X>,
+        index: &I,
+        u: &Sparse<F, N, D>,
+    ) -> Option<(Sparse<F, N, D>, usize)>
+    where
+        F: Field,
+        I: Fn(Variable) -> Option<usize>,
+    {
+        let pad = |p: Sparse<F, N, D>, by: usize| -> Option<Sparse<F, N, D>> {
+            let mut p = p;
+            for _ in 0..by {
+                p = p.checked_mul(u)?;
+            }
+            Some(p)
+        };
+        match e {
+            Expr::Constant(c) => Some((Sparse::constant(*c), 0)),
+            Expr::Variable(v) => {
+                let x = Sparse::variable(Var::try_new(index(variable(v))?)?)?;
+                let d = usize::from(matches!(v, arrabbiata_poly::Variable::Witness(_, _)));
+                Some((x, d))
+            }
+            Expr::Neg(a) => {
+                let (p, d) = go(a, index, u)?;
+                Some((-p, d))
+            }
+            Expr::Add(a, b) => {
+                let (p, da) = go(a, index, u)?;
+                let (q, db) = go(b, index, u)?;
+                let d = da.max(db);
+                Some((pad(p, d - da)? + pad(q, d - db)?, d))
+            }
+            Expr::Mul(a, b) => {
+                let (p, da) = go(a, index, u)?;
+                let (q, db) = go(b, index, u)?;
+                Some((p.checked_mul(&q)?, da + db))
+            }
+        }
+    }
+    let (p, d) = go(expr, index, u)?;
+    if d > degree {
+        return None;
+    }
+    let mut p = p;
+    for _ in d..degree {
+        p = p.checked_mul(u)?;
+    }
+    Some(p)
+}
+
+/// The relaxation of degree `degree` of a PlonKish circuit, as a
+/// generalized circuit with gates of degree at most `D2` in `N2`
+/// variables: see the [crate documentation](crate).
+///
+/// Its public inputs are those of `circuit`, then `u`, then the
+/// [combiner length](combiner_length) coefficients; its witness columns
+/// those of `circuit`, then the error column.
+///
+/// # Errors
+///
+/// [`Error::Size`] if `N2` or `D2` is too small, or `degree` is below the
+/// degree of the gate set.
 ///
 /// ```
 /// use arrabbiata_field::Field;
 /// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{PlonkError, ipa};
-/// use arrabbiata_plonk_decider::Decider;
+/// use arrabbiata_plonk_decider::relaxation;
+/// use arrabbiata_plonkish::{Builder, RelaxedWitness, vanilla::{Arithmetic, Vanilla}};
+/// // a b - c = 1 on one row: unsatisfied, relaxed with E = 1 at u = 1.
+/// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
+/// let one = F::ONE;
+/// b.row::<Arithmetic, _>([F::from_u64(2), F::from_u64(3), F::from_u64(5)], [F::ZERO, F::ZERO, -one, one, F::ZERO]);
+/// let (circuit, w) = b.build().unwrap();
+/// let g = relaxation::<F, _, 3, 5, 1, 11, 4>(&circuit, 2).unwrap();
+/// let mut columns = w.columns().to_vec();
+/// columns.push(vec![one, F::ZERO]);
+/// // Public inputs: none of the circuit's, then u = 1 and c_0 = 1.
+/// assert!(g.is_satisfied(&columns, &[one, one]));
+/// // The relaxation of the circuit agrees.
+/// let r = RelaxedWitness::new(w.columns().clone(), vec![one, F::ZERO]);
+/// assert!(circuit.is_relaxed_satisfied(&r, &[], one, &[one], 2));
+/// ```
+pub fn relaxation<
+    F,
+    G,
+    const W: usize,
+    const X: usize,
+    const Q: usize,
+    const N2: usize,
+    const D2: usize,
+>(
+    circuit: &Circuit<F, G, W, X, Q>,
+    degree: usize,
+) -> Result<GeneralizedCircuit<F, N2, D2>, Error>
+where
+    F: Field,
+    G: GateSet<F, W, X>,
+{
+    let n = circuit.num_rows();
+    let public = circuit.public_rows().len();
+    let m = combiner_length::<F, G, W, X>();
+    let error = Variable::Witness {
+        column: W,
+        rotation: Rotation::CURR,
+    };
+    let mut variables = columns_read::<F, G, W, X>();
+    variables.push(error);
+    variables.push(Variable::Public(public));
+    for k in 0..m {
+        variables.push(Variable::Public(public + 1 + k));
+    }
+    if variables.len() > N2 {
+        return Err(Error::Size);
+    }
+    let index = |v: Variable| variables.iter().position(|w| *w == v);
+    let var = |v: Variable| -> Result<Sparse<F, N2, D2>, Error> {
+        Sparse::variable(Var::try_new(index(v).ok_or(Error::Size)?).ok_or(Error::Size)?)
+            .ok_or(Error::Size)
+    };
+    let u = var(Variable::Public(public))?;
+    let e = var(error)?;
+    let mut gates = Vec::with_capacity(Q + 1);
+    for g in 0..Q {
+        let mut p = -e.clone();
+        for (k, c) in G::constraints(g).iter().enumerate() {
+            let h = homogenize(c, &index, &u, degree).ok_or(Error::Size)?;
+            let ck = var(Variable::Public(public + 1 + k))?;
+            p = p + ck.checked_mul(&h).ok_or(Error::Size)?;
+        }
+        gates.push(Gate::new(Some(g), p));
+    }
+    gates.push(Gate::new(Some(Q), e));
+    let mut selectors = circuit.selector_columns().to_vec();
+    let mut idle = vec![F::ONE; n];
+    for column in &selectors {
+        for (i, q) in column.iter().enumerate() {
+            idle[i] = idle[i] - *q;
+        }
+    }
+    selectors.push(idle);
+    let mut sigma = circuit.sigma().to_vec();
+    sigma.extend(W * n..(W + 1) * n);
+    let bindings = circuit.public_rows().iter().copied().enumerate().collect();
+    GeneralizedCircuit::new(
+        n,
+        W + 1,
+        circuit.fixed().to_vec(),
+        selectors,
+        variables,
+        gates,
+        sigma,
+        public + 1 + m,
+        bindings,
+    )
+    .map_err(Error::Plonk)
+}
+
+/// The decider: generalized PlonK on the relaxation of the circuit of
+/// `params`, keyed once.
+///
+/// # Type parameters
+///
+/// Those of [`Params`], then:
+///
+/// - `N2`: the number of variables of the relaxation's gates, at least the
+///   number of columns the gate set reads (at their rotations), plus 2 (the
+///   error and `u`), plus the combiner length;
+/// - `D2`: their degree, at least `D + 1` plus the largest number of fixed
+///   columns in a monomial of a constraint.
+///
+/// As a reduction it goes from the relaxed relation of `params` to
+/// [`Top`].
+///
+/// ```
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::ipa;
+/// use arrabbiata_plonk_decider::{Decider, Error};
 /// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
-/// use arrabbiata_plonkish_folding::{Embed, Params};
+/// use arrabbiata_plonkish_folding::{Embed, Params, RelaxedInstance};
 /// use arrabbiata_poseidon::vesta_sponge;
 /// use arrabbiata_reduction::Reduction;
 /// let (circuit, w) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
 /// let pcs = ipa::pallas(&circuit);
 /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+/// // Ten variables are too few for vanilla's relaxation.
+/// assert_eq!(Decider::<_, _, _, 3, 5, 1, 3, 2, 10, 4>::new(&params).err(), Some(Error::Size));
+/// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
 /// let fresh = Embed(&params).prove(vesta_sponge(3), &vec![], &w).unwrap();
-/// let decider = Decider::new(&params).unwrap();
 /// let out = decider.prove(vesta_sponge(4), &fresh.instance, &fresh.witness).unwrap();
 /// // The proof is bound to the instance: here, to its slack.
-/// let other = arrabbiata_plonkish_folding::RelaxedInstance::new(
+/// let other = RelaxedInstance::new(
 ///     F::from_u64(2), fresh.instance.coefficients().to_vec(), vec![],
-///     fresh.instance.columns().clone(), fresh.instance.error().clone(),
+///     *fresh.instance.columns(), *fresh.instance.error(),
 /// );
 /// assert!(decider.verify(vesta_sponge(4), &other, out.proof.clone()).is_err());
 /// assert!(decider.verify(vesta_sponge(4), &fresh.instance, out.proof).is_ok());
@@ -158,44 +414,61 @@ pub struct Decider<
     const Q: usize,
     const N: usize,
     const D: usize,
+    const N2: usize,
+    const D2: usize,
 > where
     F: TwoAdicField,
     PC: Shared<F>,
     G: GateSet<F, W, X>,
 {
     params: &'a Params<F, PC, G, W, X, Q, N, D>,
-    pk: ProverKey<F, PC, G, W, X, Q>,
-    vk: VerifierKey<F, PC, G, W, X, Q>,
+    pk: ProverKey<F, PC, N2, D2>,
+    vk: VerifierKey<F, PC, N2, D2>,
 }
 
-impl<'a, F, PC, G, const W: usize, const X: usize, const Q: usize, const N: usize, const D: usize>
-    Decider<'a, F, PC, G, W, X, Q, N, D>
+impl<
+    'a,
+    F,
+    PC,
+    G,
+    const W: usize,
+    const X: usize,
+    const Q: usize,
+    const N: usize,
+    const D: usize,
+    const N2: usize,
+    const D2: usize,
+> Decider<'a, F, PC, G, W, X, Q, N, D, N2, D2>
 where
     F: TwoAdicField,
     PC: Shared<F>,
     G: GateSet<F, W, X>,
 {
-    /// The decider for the scheme with parameters `params`: PlonK's setup
-    /// of the circuit, with the scheme's key.
+    /// The decider for the scheme with parameters `params`: the relaxation
+    /// of its circuit, set up with the scheme's key.
     ///
     /// # Errors
     ///
-    /// The errors of [`arrabbiata_plonk::setup`].
+    /// [`Error::Size`] if `N2` or `D2` is too small, and the errors of
+    /// [`arrabbiata_generalized_plonk::setup`].
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
     /// use arrabbiata_plonk::ipa;
-    /// use arrabbiata_plonk_decider::Decider;
+    /// use arrabbiata_plonk_decider::{Decider, Error};
     /// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
     /// use arrabbiata_plonkish_folding::Params;
     /// use arrabbiata_poseidon::vesta_sponge;
     /// let (circuit, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     /// let pcs = ipa::pallas(&circuit);
     /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
-    /// assert!(Decider::new(&params).is_ok());
+    /// // q_M c a b has degree 4: 3 is too low.
+    /// assert_eq!(Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 3>::new(&params).err(), Some(Error::Size));
+    /// assert!(Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).is_ok());
     /// ```
-    pub fn new(params: &'a Params<F, PC, G, W, X, Q, N, D>) -> Result<Self, PlonkError> {
-        let (pk, vk) = setup(params.circuit(), params.ck())?;
+    pub fn new(params: &'a Params<F, PC, G, W, X, Q, N, D>) -> Result<Self, Error> {
+        let circuit = relaxation::<F, G, W, X, Q, N2, D2>(params.circuit(), D)?;
+        let (pk, vk) = generalized::setup(&circuit, params.ck())?;
         Ok(Self { params, pk, vk })
     }
 
@@ -211,30 +484,69 @@ where
     /// let (circuit, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     /// let pcs = ipa::pallas(&circuit);
     /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
-    /// let decider = Decider::new(&params).unwrap();
-    /// assert_eq!(decider.verifier_key().value.num_rows(), 2);
+    /// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
+    /// // No public input of the circuit, then u and one coefficient.
+    /// assert_eq!(decider.verifier_key().value.public_inputs(), 2);
     /// ```
-    pub const fn verifier_key(&self) -> &VerifierKey<F, PC, G, W, X, Q> {
+    pub const fn verifier_key(&self) -> &VerifierKey<F, PC, N2, D2> {
         &self.vk
     }
 
-    /// The statement of relaxed PlonK an accumulator is.
-    fn statement(
+    /// The relaxation of the circuit, as a generalized circuit.
+    ///
+    /// ```
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::ipa;
+    /// use arrabbiata_plonk_decider::Decider;
+    /// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish_folding::Params;
+    /// use arrabbiata_poseidon::vesta_sponge;
+    /// let (circuit, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
+    /// let pcs = ipa::pallas(&circuit);
+    /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+    /// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
+    /// // The witness columns and the error column; one gate per gadget, and idle.
+    /// assert_eq!(decider.circuit().witness_columns(), 4);
+    /// assert_eq!(decider.circuit().gates().len(), 2);
+    /// ```
+    pub const fn circuit(&self) -> &GeneralizedCircuit<F, N2, D2> {
+        self.pk.circuit()
+    }
+
+    /// The public inputs of the relaxation for an accumulator: its public
+    /// inputs, its slack, its coefficients.
+    fn public(
         instance: &RelaxedInstance<F, <PC as HomomorphicCommitment<F>>::Commitment, W>,
-    ) -> Relaxation<F, <PC as HomomorphicCommitment<F>>::Commitment, W> {
-        Relaxation::new(
-            D,
-            instance.u(),
-            instance.coefficients().to_vec(),
-            instance.public().to_vec(),
-            instance.columns().clone(),
-            instance.error().clone(),
-        )
+    ) -> Vec<F> {
+        let mut public = instance.public().to_vec();
+        public.push(instance.u());
+        public.extend_from_slice(instance.coefficients());
+        public
+    }
+
+    /// The accumulator's commitments, the error last.
+    fn commitments(
+        instance: &RelaxedInstance<F, <PC as HomomorphicCommitment<F>>::Commitment, W>,
+    ) -> Vec<<PC as HomomorphicCommitment<F>>::Commitment> {
+        let mut c = instance.columns().to_vec();
+        c.push(instance.error().clone());
+        c
     }
 }
 
-impl<'a, F, PC, G, const W: usize, const X: usize, const Q: usize, const N: usize, const D: usize>
-    Reduction<F> for Decider<'a, F, PC, G, W, X, Q, N, D>
+impl<
+    'a,
+    F,
+    PC,
+    G,
+    const W: usize,
+    const X: usize,
+    const Q: usize,
+    const N: usize,
+    const D: usize,
+    const N2: usize,
+    const D2: usize,
+> Reduction<F> for Decider<'a, F, PC, G, W, X, Q, N, D, N2, D2>
 where
     F: TwoAdicField,
     PC: Shared<F>,
@@ -242,8 +554,8 @@ where
 {
     type Source = Relaxed<'a, F, PC, G, W, X, Q, N, D>;
     type Target = Top;
-    type Proof = ProofOf<RelaxedPlonk<F, PC, G, W, X, Q>>;
-    type Error = PlonkError;
+    type Proof = Proof<F, PC, N2, D2>;
+    type Error = Error;
 
     fn source(&self) -> Self::Source {
         self.params.relaxed()
@@ -258,16 +570,24 @@ where
         transcript: T,
         instance: &<Self::Source as Relation>::Instance,
         witness: &RelaxedWitness<F, W>,
-    ) -> Result<OutputOf<F, Self, T>, PlonkError>
+    ) -> Result<OutputOf<F, Self, T>, Error>
     where
         T: Transcript<F>,
     {
-        let (proof, transcript) = relaxed::prove(
+        let mut columns = witness.columns().to_vec();
+        columns.push(witness.error().to_vec());
+        for (k, (column, c)) in columns.iter().zip(Self::commitments(instance)).enumerate() {
+            let opens = self.params.commit_column(column).is_ok_and(|own| own == c);
+            if !opens {
+                return Err(Error::Commitment(k));
+            }
+        }
+        let (proof, transcript) = generalized::prove(
             &self.pk,
             self.params.ck(),
             transcript,
-            &Self::statement(instance),
-            witness,
+            &Self::public(instance),
+            &columns,
         )?;
         Ok(Output {
             instance: (),
@@ -282,17 +602,22 @@ where
         transcript: T,
         instance: &<Self::Source as Relation>::Instance,
         proof: Self::Proof,
-    ) -> Result<((), T), PlonkError>
+    ) -> Result<((), T), Error>
     where
         T: Transcript<F>,
     {
-        let transcript = relaxed::verify(
+        let (wires, transcript) = generalized::verify(
             &self.vk,
             self.params.ck(),
             transcript,
-            &Self::statement(instance),
+            &Self::public(instance),
             proof,
         )?;
+        for (k, (ours, theirs)) in wires.iter().zip(Self::commitments(instance)).enumerate() {
+            if *ours != theirs {
+                return Err(Error::Commitment(k));
+            }
+        }
         Ok(((), transcript))
     }
 }
@@ -310,7 +635,9 @@ pub type Snark<
     const Q: usize,
     const N: usize,
     const D: usize,
-> = Then<Embed<'a, F, PC, G, W, X, Q, N, D>, &'d Decider<'a, F, PC, G, W, X, Q, N, D>>;
+    const N2: usize,
+    const D2: usize,
+> = Then<Embed<'a, F, PC, G, W, X, Q, N, D>, &'d Decider<'a, F, PC, G, W, X, Q, N, D, N2, D2>>;
 
 /// The SNARK `Dec . Embed` for the circuit of `decider`: an argument of
 /// knowledge for the circuit relation, obtained from the category by
@@ -331,7 +658,7 @@ pub type Snark<
 /// let (circuit, w) = b.build().unwrap();
 /// let pcs = ipa::pallas(&circuit);
 /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
-/// let decider = Decider::new(&params).unwrap();
+/// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
 /// let s = snark(&decider);
 /// fn argument<A: Argument<F>>(_: &A) {}
 /// argument(&s);
@@ -350,9 +677,11 @@ pub const fn snark<
     const Q: usize,
     const N: usize,
     const D: usize,
+    const N2: usize,
+    const D2: usize,
 >(
-    decider: &'d Decider<'a, F, PC, G, W, X, Q, N, D>,
-) -> Snark<'a, 'd, F, PC, G, W, X, Q, N, D>
+    decider: &'d Decider<'a, F, PC, G, W, X, Q, N, D, N2, D2>,
+) -> Snark<'a, 'd, F, PC, G, W, X, Q, N, D, N2, D2>
 where
     F: TwoAdicField,
     PC: Shared<F>,
