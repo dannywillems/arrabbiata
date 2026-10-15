@@ -429,6 +429,9 @@ where
             return value.clone();
         };
         let target = self.absolute(at);
+        if source == target {
+            return value.clone();
+        }
         for column in [source.0, target.0] {
             if column >= self.layout.permuted {
                 self.fail(Error::NotPermuted { gadget, column });

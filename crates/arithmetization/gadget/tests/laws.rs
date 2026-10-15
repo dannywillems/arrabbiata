@@ -409,3 +409,27 @@ fn placing_in_place_is_the_identity() {
             .is_satisfied(&compiled.columns, &compiled.public)
     );
 }
+
+/// A gadget copying a cell onto itself, in a column the permutation does
+/// not cover.
+#[derive(Clone, Copy, Debug)]
+struct CopyInPlace;
+
+impl TypedGadget<F> for CopyInPlace {
+    type Input = Scalar;
+    type Output = Scalar;
+    const NAME: &'static str = "copy-in-place";
+    const ROWS: usize = 1;
+
+    fn synthesize<E: Env<F>>(&self, env: &mut E, input: Of<Scalar, E::Var>) -> Of<Scalar, E::Var> {
+        let x = env.advice(Cell::new(2, 0), [&input], |[v]| v);
+        env.copy(Cell::new(2, 0), &x)
+    }
+}
+
+/// A copy onto the same cell is that cell: no copy, so no permutation needed.
+#[test]
+fn copying_in_place_is_the_identity() {
+    let input = F::from_u64(13);
+    assert_eq!(evaluate(&CopyInPlace, LAYOUT, &input).unwrap(), input);
+}

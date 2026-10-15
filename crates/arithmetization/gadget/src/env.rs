@@ -69,7 +69,8 @@ where
 
     /// The witness cell `at`, wired to the cell `value` is: a copy
     /// constraint of the permutation argument. Both cells must be in
-    /// permuted columns.
+    /// permuted columns, unless they are the same cell, which is `value`
+    /// itself.
     fn copy(&mut self, at: Cell, value: &Self::Var) -> Self::Var;
 
     /// The witness cell `at` holding `value`: `value` itself when it is that
