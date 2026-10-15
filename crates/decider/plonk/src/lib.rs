@@ -57,6 +57,11 @@
 //! use arrabbiata_plonkish_folding::{Embed, Params, accumulate};
 //! use arrabbiata_poseidon::vesta_sponge;
 //! use arrabbiata_reduction::Reduction;
+//! // Sponge domain tags: each transcript gets its own, and prover and
+//! // verifier start from the same one.
+//! let digest_domain = 2;
+//! let accumulation_domain = 3;
+//! let decider_domain = 4;
 //!
 //! let step = |v: u64| {
 //!     let (c, w, ()) = build::<F, _, _>(|b| {
@@ -69,14 +74,14 @@
 //! };
 //! let (circuit, w0) = step(3);
 //! let pcs = ipa::pallas(&circuit);
-//! let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+//! let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
 //!
 //! // Accumulate three steps.
-//! let fresh = Embed(&params).prove(vesta_sponge(3), &w0.public_inputs().to_vec(), &w0).unwrap();
+//! let fresh = Embed(&params).prove(vesta_sponge(accumulation_domain), &w0.public_inputs().to_vec(), &w0).unwrap();
 //! let (mut instance, mut witness) = (fresh.instance, fresh.witness);
 //! for v in [4, 5] {
 //!     let (_, w) = step(v);
-//!     let out = accumulate(&params).prove(vesta_sponge(3), &(w.public_inputs().to_vec(), instance), &(w, witness)).unwrap();
+//!     let out = accumulate(&params).prove(vesta_sponge(accumulation_domain), &(w.public_inputs().to_vec(), instance), &(w, witness)).unwrap();
 //!     (instance, witness) = (out.instance, out.witness);
 //! }
 //!
@@ -84,8 +89,8 @@
 //! // 8 columns; with E, u and c that is 11 variables, and q_M c u^0 a b has
 //! // degree 4.
 //! let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
-//! let out = decider.prove(vesta_sponge(4), &instance, &witness).unwrap();
-//! decider.verify(vesta_sponge(4), &instance, out.proof).unwrap();
+//! let out = decider.prove(vesta_sponge(decider_domain), &instance, &witness).unwrap();
+//! decider.verify(vesta_sponge(decider_domain), &instance, out.proof).unwrap();
 //! ```
 
 #![no_std]
@@ -96,7 +101,7 @@ use alloc::{vec, vec::Vec};
 use core::fmt;
 
 use arrabbiata_commit::{HomomorphicCommitment, PolynomialCommitment, Univariate};
-use arrabbiata_field::{Field, TwoAdicField};
+use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_generalized_plonk::{
     self as generalized, Circuit as GeneralizedCircuit, Gate, Proof, ProverKey, Variable,
     VerifierKey,
@@ -335,9 +340,12 @@ where
             let ck = var(Variable::Public(public + 1 + k))?;
             p = p + ck.checked_mul(&h).ok_or(Error::Size)?;
         }
-        gates.push(Gate::new(Some(g), p));
+        let selector = Some(g);
+        gates.push(Gate::new(selector, p));
     }
-    gates.push(Gate::new(Some(Q), e));
+    // The idle selector is the last one, after the Q of the circuit.
+    let idle_selector = Some(Q);
+    gates.push(Gate::new(idle_selector, e));
     let mut selectors = circuit.selector_columns().to_vec();
     let mut idle = vec![F::ONE; n];
     for column in &selectors {
@@ -348,16 +356,22 @@ where
     selectors.push(idle);
     let mut sigma = circuit.sigma().to_vec();
     sigma.extend(W * n..(W + 1) * n);
+    let num_rows = n;
+    // The columns of the circuit, then the error.
+    let witness_columns = W + 1;
+    let fixed = circuit.fixed().to_vec();
+    // The public inputs of the circuit, then u and the m coefficients.
+    let public_inputs = public + 1 + m;
     let bindings = circuit.public_rows().iter().copied().enumerate().collect();
     GeneralizedCircuit::new(
-        n,
-        W + 1,
-        circuit.fixed().to_vec(),
+        num_rows,
+        witness_columns,
+        fixed,
         selectors,
         variables,
         gates,
         sigma,
-        public + 1 + m,
+        public_inputs,
         bindings,
     )
     .map_err(Error::Plonk)
@@ -388,21 +402,26 @@ where
 /// use arrabbiata_plonkish_folding::{Embed, Params, RelaxedInstance};
 /// use arrabbiata_poseidon::vesta_sponge;
 /// use arrabbiata_reduction::Reduction;
+/// // Sponge domain tags: each transcript gets its own, and prover and
+/// // verifier start from the same one.
+/// let digest_domain = 2;
+/// let accumulation_domain = 3;
+/// let decider_domain = 4;
 /// let (circuit, w) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
 /// let pcs = ipa::pallas(&circuit);
-/// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+/// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
 /// // Ten variables are too few for vanilla's relaxation.
 /// assert_eq!(Decider::<_, _, _, 3, 5, 1, 3, 2, 10, 4>::new(&params).err(), Some(Error::Size));
 /// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
-/// let fresh = Embed(&params).prove(vesta_sponge(3), &vec![], &w).unwrap();
-/// let out = decider.prove(vesta_sponge(4), &fresh.instance, &fresh.witness).unwrap();
+/// let fresh = Embed(&params).prove(vesta_sponge(accumulation_domain), &vec![], &w).unwrap();
+/// let out = decider.prove(vesta_sponge(decider_domain), &fresh.instance, &fresh.witness).unwrap();
 /// // The proof is bound to the instance: here, to its slack.
 /// let other = RelaxedInstance::new(
 ///     F::from_u64(2), fresh.instance.coefficients().to_vec(), vec![],
 ///     *fresh.instance.columns(), *fresh.instance.error(),
 /// );
-/// assert!(decider.verify(vesta_sponge(4), &other, out.proof.clone()).is_err());
-/// assert!(decider.verify(vesta_sponge(4), &fresh.instance, out.proof).is_ok());
+/// assert!(decider.verify(vesta_sponge(decider_domain), &other, out.proof.clone()).is_err());
+/// assert!(decider.verify(vesta_sponge(decider_domain), &fresh.instance, out.proof).is_ok());
 /// ```
 pub struct Decider<
     'a,
@@ -417,7 +436,7 @@ pub struct Decider<
     const N2: usize,
     const D2: usize,
 > where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField,
     PC: Shared<F>,
     G: GateSet<F, W, X>,
 {
@@ -440,7 +459,7 @@ impl<
     const D2: usize,
 > Decider<'a, F, PC, G, W, X, Q, N, D, N2, D2>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField,
     PC: Shared<F>,
     G: GateSet<F, W, X>,
 {
@@ -459,9 +478,12 @@ where
     /// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
     /// use arrabbiata_plonkish_folding::Params;
     /// use arrabbiata_poseidon::vesta_sponge;
+    /// // Sponge domain tags: each transcript gets its own, and prover and
+    /// // verifier start from the same one.
+    /// let digest_domain = 2;
     /// let (circuit, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     /// let pcs = ipa::pallas(&circuit);
-    /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+    /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
     /// // q_M c a b has degree 4: 3 is too low.
     /// assert_eq!(Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 3>::new(&params).err(), Some(Error::Size));
     /// assert!(Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).is_ok());
@@ -481,9 +503,12 @@ where
     /// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
     /// use arrabbiata_plonkish_folding::Params;
     /// use arrabbiata_poseidon::vesta_sponge;
+    /// // Sponge domain tags: each transcript gets its own, and prover and
+    /// // verifier start from the same one.
+    /// let digest_domain = 2;
     /// let (circuit, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     /// let pcs = ipa::pallas(&circuit);
-    /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+    /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
     /// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     /// // No public input of the circuit, then u and one coefficient.
     /// assert_eq!(decider.verifier_key().value.public_inputs(), 2);
@@ -501,9 +526,12 @@ where
     /// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
     /// use arrabbiata_plonkish_folding::Params;
     /// use arrabbiata_poseidon::vesta_sponge;
+    /// // Sponge domain tags: each transcript gets its own, and prover and
+    /// // verifier start from the same one.
+    /// let digest_domain = 2;
     /// let (circuit, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     /// let pcs = ipa::pallas(&circuit);
-    /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+    /// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
     /// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     /// // The witness columns and the error column; one gate per gadget, and idle.
     /// assert_eq!(decider.circuit().witness_columns(), 4);
@@ -548,7 +576,7 @@ impl<
     const D2: usize,
 > Reduction<F> for Decider<'a, F, PC, G, W, X, Q, N, D, N2, D2>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField,
     PC: Shared<F>,
     G: GateSet<F, W, X>,
 {
@@ -652,19 +680,23 @@ pub type Snark<
 /// use arrabbiata_plonkish_folding::Params;
 /// use arrabbiata_poseidon::vesta_sponge;
 /// use arrabbiata_reduction::{Argument, Reduction};
+/// // Sponge domain tags: each transcript gets its own, and prover and
+/// // verifier start from the same one.
+/// let digest_domain = 2;
+/// let snark_domain = 5;
 /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
 /// let r = b.plain_row([F::from_u64(7), F::ZERO, F::ZERO], [F::ZERO; 5]);
 /// b.public(r);
 /// let (circuit, w) = b.build().unwrap();
 /// let pcs = ipa::pallas(&circuit);
-/// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+/// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
 /// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
 /// let s = snark(&decider);
 /// fn argument<A: Argument<F>>(_: &A) {}
 /// argument(&s);
-/// let out = s.prove(vesta_sponge(5), &vec![F::from_u64(7)], &w).unwrap();
-/// assert!(s.verify(vesta_sponge(5), &vec![F::from_u64(7)], out.proof.clone()).is_ok());
-/// assert!(s.verify(vesta_sponge(5), &vec![F::from_u64(8)], out.proof).is_err());
+/// let out = s.prove(vesta_sponge(snark_domain), &vec![F::from_u64(7)], &w).unwrap();
+/// assert!(s.verify(vesta_sponge(snark_domain), &vec![F::from_u64(7)], out.proof.clone()).is_ok());
+/// assert!(s.verify(vesta_sponge(snark_domain), &vec![F::from_u64(8)], out.proof).is_err());
 /// ```
 pub const fn snark<
     'a,
@@ -683,7 +715,7 @@ pub const fn snark<
     decider: &'d Decider<'a, F, PC, G, W, X, Q, N, D, N2, D2>,
 ) -> Snark<'a, 'd, F, PC, G, W, X, Q, N, D, N2, D2>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField,
     PC: Shared<F>,
     G: GateSet<F, W, X>,
 {

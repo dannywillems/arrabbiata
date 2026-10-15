@@ -29,12 +29,19 @@ use arrabbiata_poseidon::{bn254_scalar_sponge, pallas_sponge, vesta_sponge};
 use common::{arb_program, circuit};
 use proptest::prelude::*;
 
+/// The domain tag of the sponge deriving the IPA generators.
+const GENERATORS_DOMAIN: u64 = 0;
+/// The domain tag of IPA's own transcript (its opening proofs).
+const IPA_DOMAIN: u64 = 1;
+/// The domain tag of the proofs' Fiat-Shamir transcripts, apart from the
+/// two above.
+const PROOF_DOMAIN: u64 = 2;
+
 fn ipa(size: usize) -> Ipa<Pallas, arrabbiata_poseidon::PoseidonSponge<Fq>> {
-    Ipa::<Pallas, _>::setup(
-        &mut pallas_sponge(0),
-        size.next_power_of_two(),
-        vesta_sponge(1),
-    )
+    let mut generators = pallas_sponge(GENERATORS_DOMAIN);
+    let size = size.next_power_of_two();
+    let ipa_transcript = vesta_sponge(IPA_DOMAIN);
+    Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript)
 }
 
 /// Proving and verifying a generalized circuit with IPA: `Ok` exactly when
@@ -46,8 +53,8 @@ fn proves<const N: usize, const D: usize>(
 ) -> Result<(), Error> {
     let pcs = ipa(max_coefficients(c));
     let (pk, vk) = setup(c, &pcs)?;
-    let (proof, _) = prove(&pk, &pcs, vesta_sponge(2), public, columns)?;
-    verify(&vk, &pcs, vesta_sponge(2), public, proof).map(|_| ())
+    let (proof, _) = prove(&pk, &pcs, vesta_sponge(PROOF_DOMAIN), public, columns)?;
+    verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), public, proof).map(|_| ())
 }
 
 proptest! {
@@ -170,7 +177,15 @@ fn scaled_power<const D: usize>(d: u32, n: usize) -> Circuit<Fq, 3, D> {
     for _ in 0..d {
         power = power.checked_mul(&v(0)).unwrap();
     }
-    let gate = Gate::new(Some(0), v(1) - v(2).checked_mul(&power).unwrap());
+    let selector = Some(0);
+    let polynomial = v(1) - v(2).checked_mul(&power).unwrap();
+    let gate = Gate::new(selector, polynomial);
+    let mut selector = vec![Fq::ONE; n];
+    selector[n - 1] = Fq::ZERO;
+    let num_rows = n;
+    let witness_columns = 1;
+    let fixed = vec![];
+    let selectors = vec![selector];
     let variables = vec![
         Variable::Witness {
             column: 0,
@@ -182,18 +197,20 @@ fn scaled_power<const D: usize>(d: u32, n: usize) -> Circuit<Fq, 3, D> {
         },
         Variable::Public(0),
     ];
-    let mut selector = vec![Fq::ONE; n];
-    selector[n - 1] = Fq::ZERO;
+    let gates = vec![gate];
+    let sigma = (0..n).collect();
+    let public_inputs = 2;
+    let bindings = vec![(1, n - 1)];
     Circuit::new(
-        n,
-        1,
-        vec![],
-        vec![selector],
+        num_rows,
+        witness_columns,
+        fixed,
+        selectors,
         variables,
-        vec![gate],
-        (0..n).collect(),
-        2,
-        vec![(1, n - 1)],
+        gates,
+        sigma,
+        public_inputs,
+        bindings,
     )
     .unwrap()
 }
@@ -222,9 +239,9 @@ proptest! {
         prop_assert_eq!(proves(&c, std::slice::from_ref(&column), &public), Ok(()));
         let pcs = ipa(max_coefficients(&c));
         let (pk, vk) = setup(&c, &pcs).unwrap();
-        let (proof, _) = prove(&pk, &pcs, vesta_sponge(2), &public, &[column]).unwrap();
+        let (proof, _) = prove(&pk, &pcs, vesta_sponge(PROOF_DOMAIN), &public, &[column]).unwrap();
         let wrong = [s + Fq::ONE, public[1]];
-        prop_assert!(verify(&vk, &pcs, vesta_sponge(2), &wrong, proof).is_err());
+        prop_assert!(verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), &wrong, proof).is_err());
     }
 
     /// Every opening and every evaluation of a proof is checked.
@@ -237,21 +254,21 @@ proptest! {
         let public = [s, column[n - 1]];
         let pcs = ipa(max_coefficients(&c));
         let (pk, vk) = setup(&c, &pcs).unwrap();
-        let (proof, _) = prove(&pk, &pcs, vesta_sponge(2), &public, &[column]).unwrap();
-        let count = proof.tail.tail.tail.head.iter().count();
+        let (proof, _) = prove(&pk, &pcs, vesta_sponge(PROOF_DOMAIN), &public, &[column]).unwrap();
+        let count = proof.tail.tail.tail.tail.tail.head.iter().count();
         for i in 0..count {
             let mut bad = proof.clone();
-            let value = bad.tail.tail.tail.head.iter_mut().nth(i).unwrap();
+            let value = bad.tail.tail.tail.tail.tail.head.iter_mut().nth(i).unwrap();
             *value = *value + Fq::ONE;
-            prop_assert!(verify(&vk, &pcs, vesta_sponge(2), &public, bad).is_err(), "evaluation {}", i);
+            prop_assert!(verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), &public, bad).is_err(), "evaluation {}", i);
         }
         // Swapping two opening proofs breaks both.
         let mut bad = proof.clone();
-        let proofs = &mut bad.tail.tail.tail.tail.head.value;
+        let proofs = &mut bad.tail.tail.tail.tail.tail.tail.head.value;
         let first = proofs.witness[0].clone();
         proofs.witness[0] = proofs.z.clone();
         proofs.z = first;
-        prop_assert!(matches!(verify(&vk, &pcs, vesta_sponge(2), &public, bad), Err(Error::Opening(_))));
+        prop_assert!(matches!(verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), &public, bad), Err(Error::Opening(_))));
     }
 }
 
@@ -262,9 +279,20 @@ fn ungated_and_overlapping_gates() {
     let n = 4;
     let v = |i| Sparse::<Fq, 2, 2>::variable(Var::try_new(i).unwrap()).unwrap();
     // On every row, b = a^2; on rows 0 and 1, also a = 3 and b = 9.
-    let square = Gate::new(None, v(1) - v(0).checked_mul(&v(0)).unwrap());
-    let three = Gate::new(Some(0), v(0) - Sparse::constant(Fq::from_u64(3)));
-    let nine = Gate::new(Some(1), v(1) - Sparse::constant(Fq::from_u64(9)));
+    let selector = None;
+    let polynomial = v(1) - v(0).checked_mul(&v(0)).unwrap();
+    let square = Gate::new(selector, polynomial);
+    let selector = Some(0);
+    let polynomial = v(0) - Sparse::constant(Fq::from_u64(3));
+    let three = Gate::new(selector, polynomial);
+    let selector = Some(1);
+    let polynomial = v(1) - Sparse::constant(Fq::from_u64(9));
+    let nine = Gate::new(selector, polynomial);
+    let on = vec![Fq::ONE, Fq::ONE, Fq::ZERO, Fq::ZERO];
+    let num_rows = n;
+    let witness_columns = 2;
+    let fixed = vec![];
+    let selectors = vec![on.clone(), on];
     let variables = vec![
         Variable::Witness {
             column: 0,
@@ -275,17 +303,20 @@ fn ungated_and_overlapping_gates() {
             rotation: Rotation::CURR,
         },
     ];
-    let on = vec![Fq::ONE, Fq::ONE, Fq::ZERO, Fq::ZERO];
+    let gates = vec![square, three, nine];
+    let sigma = (0..2 * n).collect();
+    let public_inputs = 0;
+    let bindings = vec![];
     let c = Circuit::new(
-        n,
-        2,
-        vec![],
-        vec![on.clone(), on],
+        num_rows,
+        witness_columns,
+        fixed,
+        selectors,
         variables,
-        vec![square, three, nine],
-        (0..2 * n).collect(),
-        0,
-        vec![],
+        gates,
+        sigma,
+        public_inputs,
+        bindings,
     )
     .unwrap();
     let a = [3u64, 3, 5, 7].map(Fq::from_u64).to_vec();
@@ -302,7 +333,15 @@ fn kzg() {
     let n = 8;
     let v = |i| Sparse::<Fr, 3, 4>::variable(Var::try_new(i).unwrap()).unwrap();
     let cube = v(0).checked_mul(&v(0)).unwrap().checked_mul(&v(0)).unwrap();
-    let gate = Gate::new(Some(0), v(1) - v(2).checked_mul(&cube).unwrap());
+    let selector = Some(0);
+    let polynomial = v(1) - v(2).checked_mul(&cube).unwrap();
+    let gate = Gate::new(selector, polynomial);
+    let mut selector = vec![Fr::ONE; n];
+    selector[n - 1] = Fr::ZERO;
+    let num_rows = n;
+    let witness_columns = 1;
+    let fixed = vec![];
+    let selectors = vec![selector];
     let variables = vec![
         Variable::Witness {
             column: 0,
@@ -314,18 +353,20 @@ fn kzg() {
         },
         Variable::Public(0),
     ];
-    let mut selector = vec![Fr::ONE; n];
-    selector[n - 1] = Fr::ZERO;
+    let gates = vec![gate];
+    let sigma = (0..n).collect();
+    let public_inputs = 2;
+    let bindings = vec![(1, n - 1)];
     let c = Circuit::new(
-        n,
-        1,
-        vec![],
-        vec![selector],
+        num_rows,
+        witness_columns,
+        fixed,
+        selectors,
         variables,
-        vec![gate],
-        (0..n).collect(),
-        2,
-        vec![(1, n - 1)],
+        gates,
+        sigma,
+        public_inputs,
+        bindings,
     )
     .unwrap();
     let s = Fr::from_u64(3);
@@ -334,128 +375,182 @@ fn kzg() {
         column.push(s * column[i].pow(3));
     }
     let public = [s, column[n - 1]];
-    let pcs = Kzg::<arrabbiata_bn254::Bn254>::insecure_setup(
-        max_coefficients(&c),
-        Fr::from_u64(987_654_321),
-    );
+    // The KZG trapdoor: known, so the key is for tests only.
+    let tau = Fr::from_u64(987_654_321);
+    let pcs = Kzg::<arrabbiata_bn254::Bn254>::insecure_setup(max_coefficients(&c), tau);
     let (pk, vk) = setup(&c, &pcs).unwrap();
-    let (proof, _) = prove(&pk, &pcs, bn254_scalar_sponge(2), &public, &[column]).unwrap();
-    verify(&vk, &pcs, bn254_scalar_sponge(2), &public, proof.clone()).unwrap();
-    assert!(verify(&vk, &pcs, bn254_scalar_sponge(2), &[s, Fr::ZERO], proof).is_err());
+    let (proof, _) = prove(
+        &pk,
+        &pcs,
+        bn254_scalar_sponge(PROOF_DOMAIN),
+        &public,
+        &[column],
+    )
+    .unwrap();
+    verify(
+        &vk,
+        &pcs,
+        bn254_scalar_sponge(PROOF_DOMAIN),
+        &public,
+        proof.clone(),
+    )
+    .unwrap();
+    assert!(
+        verify(
+            &vk,
+            &pcs,
+            bn254_scalar_sponge(PROOF_DOMAIN),
+            &[s, Fr::ZERO],
+            proof
+        )
+        .is_err()
+    );
+}
+
+/// The parts of a circuit, named, for the malformed cases: each case
+/// changes one part of a well-formed circuit.
+#[derive(Clone)]
+struct Parts {
+    num_rows: usize,
+    witness_columns: usize,
+    fixed: Vec<Vec<Fq>>,
+    selectors: Vec<Vec<Fq>>,
+    variables: Vec<Variable>,
+    gates: Vec<Gate<Fq, 2, 1>>,
+    sigma: Vec<usize>,
+    public_inputs: usize,
+    bindings: Vec<(usize, usize)>,
+}
+
+impl Parts {
+    fn build(self) -> Result<Circuit<Fq, 2, 1>, Error> {
+        let Parts {
+            num_rows,
+            witness_columns,
+            fixed,
+            selectors,
+            variables,
+            gates,
+            sigma,
+            public_inputs,
+            bindings,
+        } = self;
+        Circuit::new(
+            num_rows,
+            witness_columns,
+            fixed,
+            selectors,
+            variables,
+            gates,
+            sigma,
+            public_inputs,
+            bindings,
+        )
+    }
 }
 
 /// Malformed circuits are rejected.
 #[test]
 fn malformed_circuits() {
-    let v = Sparse::<Fq, 2, 1>::variable(Var::new::<1>()).unwrap();
-    let one_var = vec![Variable::Witness {
+    let curr = Variable::Witness {
         column: 0,
         rotation: Rotation::CURR,
-    }];
-    let cases: Vec<Result<Circuit<Fq, 2, 1>, Error>> = vec![
-        // Reads variable 1, but only one is declared.
-        Circuit::new(
-            2,
-            1,
-            vec![],
-            vec![],
-            one_var.clone(),
-            vec![Gate::new(None, v.clone())],
-            vec![0, 1],
-            0,
-            vec![],
+    };
+    let good = Parts {
+        num_rows: 2,
+        witness_columns: 1,
+        fixed: vec![],
+        selectors: vec![],
+        variables: vec![curr],
+        gates: vec![],
+        sigma: vec![0, 1],
+        public_inputs: 0,
+        bindings: vec![],
+    };
+    assert!(good.clone().build().is_ok());
+    let reads_undeclared = Sparse::<Fq, 2, 1>::variable(Var::new::<1>()).unwrap();
+    let cases = [
+        (
+            "reads an undeclared variable",
+            Parts {
+                gates: vec![Gate::new(None, reads_undeclared)],
+                ..good.clone()
+            },
         ),
-        // Selector 0 does not exist.
-        Circuit::new(
-            2,
-            1,
-            vec![],
-            vec![],
-            one_var.clone(),
-            vec![Gate::new(Some(0), Sparse::zero())],
-            vec![0, 1],
-            0,
-            vec![],
+        (
+            "selector 0 does not exist",
+            Parts {
+                gates: vec![Gate::new(Some(0), Sparse::zero())],
+                ..good.clone()
+            },
         ),
-        // Column 1 does not exist.
-        Circuit::new(
-            2,
-            1,
-            vec![],
-            vec![],
-            vec![Variable::Witness {
-                column: 1,
-                rotation: Rotation::CURR,
-            }],
-            vec![],
-            vec![0, 1],
-            0,
-            vec![],
+        (
+            "column 1 does not exist",
+            Parts {
+                variables: vec![Variable::Witness {
+                    column: 1,
+                    rotation: Rotation::CURR,
+                }],
+                ..good.clone()
+            },
         ),
-        // Public input 0 does not exist.
-        Circuit::new(
-            2,
-            1,
-            vec![],
-            vec![],
-            vec![Variable::Public(0)],
-            vec![],
-            vec![0, 1],
-            0,
-            vec![],
+        (
+            "public input 0 does not exist",
+            Parts {
+                variables: vec![Variable::Public(0)],
+                ..good.clone()
+            },
         ),
-        // Not a permutation.
-        Circuit::new(2, 1, vec![], vec![], vec![], vec![], vec![0, 0], 0, vec![]),
-        // A row bound twice.
-        Circuit::new(
-            2,
-            1,
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            vec![0, 1],
-            2,
-            vec![(0, 1), (1, 1)],
+        (
+            "not a permutation",
+            Parts {
+                sigma: vec![0, 0],
+                ..good.clone()
+            },
         ),
-        // No witness column to bind to.
-        Circuit::new(
-            2,
-            0,
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            1,
-            vec![(0, 0)],
+        (
+            "a row bound twice",
+            Parts {
+                public_inputs: 2,
+                bindings: vec![(0, 1), (1, 1)],
+                ..good.clone()
+            },
         ),
-        // A fixed column of the wrong length.
-        Circuit::new(
-            2,
-            0,
-            vec![vec![Fq::ONE]],
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            0,
-            vec![],
+        (
+            "no witness column to bind to",
+            Parts {
+                witness_columns: 0,
+                variables: vec![],
+                sigma: vec![],
+                public_inputs: 1,
+                bindings: vec![(0, 0)],
+                ..good.clone()
+            },
         ),
-        // Too many variables for N.
-        Circuit::new(
-            2,
-            1,
-            vec![],
-            vec![],
-            vec![one_var[0]; 3],
-            vec![],
-            vec![0, 1],
-            0,
-            vec![],
+        (
+            "a fixed column of the wrong length",
+            Parts {
+                fixed: vec![vec![Fq::ONE]],
+                ..good.clone()
+            },
+        ),
+        (
+            "too many variables for N",
+            Parts {
+                variables: vec![curr; 3],
+                ..good.clone()
+            },
+        ),
+        (
+            "three rows",
+            Parts {
+                num_rows: 3,
+                sigma: vec![0, 1, 2],
+                ..good.clone()
+            },
         ),
     ];
-    for (i, c) in cases.into_iter().enumerate() {
-        assert_eq!(c.unwrap_err(), Error::Shape, "case {i}");
+    for (name, parts) in cases {
+        assert_eq!(parts.build().unwrap_err(), Error::Shape, "{name}");
     }
 }

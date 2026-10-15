@@ -32,7 +32,7 @@ use alloc::{collections::BTreeSet, vec, vec::Vec};
 use core::{fmt, iter, marker::PhantomData};
 
 use arrabbiata_commit::{PolynomialCommitment, Univariate};
-use arrabbiata_field::{Field, TwoAdicField};
+use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_mvpoly::MVPoly;
 use arrabbiata_poly::{Domain, Rotation, UniPoly};
 use arrabbiata_transcript::{
@@ -42,7 +42,11 @@ use arrabbiata_transcript::{
     },
 };
 
-use crate::{Circuit, Error, Gate, Variable, circuit::absorb_parts};
+use crate::{
+    Circuit, Error, Gate, Variable,
+    circuit::absorb_parts,
+    lookup::{self, Argument, At, Lookup},
+};
 
 /// The commitment type of a scheme.
 type Com<F, PC> = <PC as PolynomialCommitment<F>>::Commitment;
@@ -192,12 +196,15 @@ where
 /// witness, fixed, selector and permutation polynomials, `z` and `t` at
 /// `zeta`; `z` at `zeta w`; then each column some gate reads at a rotation
 /// other than the current row, in the order of [`rotated`], at
-/// `zeta w^k`.
+/// `zeta w^k`; then the lookup openings, in the order of the lookups:
+/// each committed lookup column (`h_1, h_2, Z` for plookup, `m, phi` for
+/// LogUp) at `zeta` and `zeta w`, then, for plookup, each table column at
+/// `zeta w`.
 ///
 /// ```
 /// use arrabbiata_generalized_plonk::Opened;
-/// let o = Opened { witness: vec![0u8], fixed: vec![], selectors: vec![1], sigmas: vec![2], z: 3, t: 4, z_next: 5, rotated: vec![6] };
-/// assert_eq!(o.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5, 6]);
+/// let o = Opened { witness: vec![0u8], fixed: vec![], selectors: vec![1], sigmas: vec![2], z: 3, t: 4, z_next: 5, rotated: vec![6], lookups: vec![7] };
+/// assert_eq!(o.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5, 6, 7]);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opened<T> {
@@ -217,6 +224,8 @@ pub struct Opened<T> {
     pub z_next: T,
     /// The rotated columns, in the order of [`rotated`].
     pub rotated: Vec<T>,
+    /// The lookup openings.
+    pub lookups: Vec<T>,
 }
 
 impl<T> Opened<T> {
@@ -224,7 +233,7 @@ impl<T> Opened<T> {
     ///
     /// ```
     /// use arrabbiata_generalized_plonk::Opened;
-    /// let o = Opened { witness: vec![], fixed: vec![], selectors: vec![], sigmas: vec![], z: 1u8, t: 2, z_next: 3, rotated: vec![] };
+    /// let o = Opened { witness: vec![], fixed: vec![], selectors: vec![], sigmas: vec![], z: 1u8, t: 2, z_next: 3, rotated: vec![], lookups: vec![] };
     /// assert_eq!(o.iter().count(), 3);
     /// ```
     pub fn iter(&self) -> impl Iterator<Item = &T> {
@@ -237,13 +246,14 @@ impl<T> Opened<T> {
             .chain(iter::once(&self.t))
             .chain(iter::once(&self.z_next))
             .chain(&self.rotated)
+            .chain(&self.lookups)
     }
 
     /// Every value, mutably, in the order of the openings.
     ///
     /// ```
     /// use arrabbiata_generalized_plonk::Opened;
-    /// let mut o = Opened { witness: vec![1u8], fixed: vec![], selectors: vec![], sigmas: vec![], z: 0, t: 0, z_next: 0, rotated: vec![] };
+    /// let mut o = Opened { witness: vec![1u8], fixed: vec![], selectors: vec![], sigmas: vec![], z: 0, t: 0, z_next: 0, rotated: vec![], lookups: vec![] };
     /// *o.iter_mut().next().unwrap() = 9;
     /// assert_eq!(o.witness, vec![9]);
     /// ```
@@ -257,17 +267,19 @@ impl<T> Opened<T> {
             .chain(iter::once(&mut self.t))
             .chain(iter::once(&mut self.z_next))
             .chain(&mut self.rotated)
+            .chain(&mut self.lookups)
     }
 
     /// Whether there is one value per witness, fixed, selector,
-    /// permutation and rotated polynomial, for the counts
-    /// `(witness, fixed, selectors, rotated)`.
-    fn has_shape(&self, (w, x, q, r): (usize, usize, usize, usize)) -> bool {
+    /// permutation, rotated polynomial and lookup opening, for the counts
+    /// `(witness, fixed, selectors, rotated, lookups)`.
+    fn has_shape(&self, (w, x, q, r, l): (usize, usize, usize, usize, usize)) -> bool {
         self.witness.len() == w
             && self.fixed.len() == x
             && self.selectors.len() == q
             && self.sigmas.len() == w
             && self.rotated.len() == r
+            && self.lookups.len() == l
     }
 
     fn map<U>(self, mut f: impl FnMut(T) -> U) -> Opened<U> {
@@ -280,6 +292,7 @@ impl<T> Opened<T> {
             t: f(self.t),
             z_next: f(self.z_next),
             rotated: self.rotated.into_iter().map(&mut f).collect(),
+            lookups: self.lookups.into_iter().map(&mut f).collect(),
         }
     }
 }
@@ -301,6 +314,7 @@ where
         absorb_length(transcript, self.fixed.len());
         absorb_length(transcript, self.selectors.len());
         absorb_length(transcript, self.rotated.len());
+        absorb_length(transcript, self.lookups.len());
         for value in self.iter() {
             value.absorb_into(transcript);
         }
@@ -346,8 +360,20 @@ pub fn rotated(variables: &[Variable]) -> Vec<Variable> {
 /// use arrabbiata_ipa::Ipa;
 /// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// let c = Circuit::<F, 1, 1>::new(2, 1, vec![], vec![], vec![], vec![], vec![0, 1], 0, vec![]).unwrap();
-/// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+/// let num_rows = 2;
+/// let witness_columns = 1;
+/// let fixed = vec![];
+/// let selectors = vec![];
+/// let variables = vec![];
+/// let gates = vec![];
+/// let sigma = vec![0, 1];
+/// let public_inputs = 0;
+/// let bindings = vec![];
+/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+/// let mut generators = pallas_sponge(0);
+/// let size = 4;
+/// let ipa_transcript = vesta_sponge(1);
+/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
 /// let (_, vk) = setup(&c, &pcs).unwrap();
 /// assert_eq!(vk.value.num_rows(), 2);
 /// ```
@@ -362,6 +388,7 @@ where
     variables: Vec<Variable>,
     gates: Vec<Gate<F, N, D>>,
     bindings: Vec<(usize, usize)>,
+    lookups: Vec<Lookup<F, N, D>>,
     shifts: Vec<F>,
     fixed: Vec<C>,
     selectors: Vec<C>,
@@ -379,8 +406,20 @@ where
     /// use arrabbiata_ipa::Ipa;
     /// use arrabbiata_pasta::{Fq as F, Pallas};
     /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// let c = Circuit::<F, 1, 1>::new(4, 0, vec![], vec![], vec![], vec![], vec![], 0, vec![]).unwrap();
-    /// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    /// let num_rows = 4;
+    /// let witness_columns = 0;
+    /// let fixed = vec![];
+    /// let selectors = vec![];
+    /// let variables = vec![];
+    /// let gates = vec![];
+    /// let sigma = vec![];
+    /// let public_inputs = 0;
+    /// let bindings = vec![];
+    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+    /// let mut generators = pallas_sponge(0);
+    /// let size = 4;
+    /// let ipa_transcript = vesta_sponge(1);
+    /// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
     /// assert_eq!(setup(&c, &pcs).unwrap().1.value.num_rows(), 4);
     /// ```
     #[must_use]
@@ -395,8 +434,20 @@ where
     /// use arrabbiata_ipa::Ipa;
     /// use arrabbiata_pasta::{Fq as F, Pallas};
     /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// let c = Circuit::<F, 1, 1>::new(2, 0, vec![], vec![], vec![], vec![], vec![], 3, vec![]).unwrap();
-    /// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    /// let num_rows = 2;
+    /// let witness_columns = 0;
+    /// let fixed = vec![];
+    /// let selectors = vec![];
+    /// let variables = vec![];
+    /// let gates = vec![];
+    /// let sigma = vec![];
+    /// let public_inputs = 3;
+    /// let bindings = vec![];
+    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+    /// let mut generators = pallas_sponge(0);
+    /// let size = 4;
+    /// let ipa_transcript = vesta_sponge(1);
+    /// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
     /// assert_eq!(setup(&c, &pcs).unwrap().1.value.public_inputs(), 3);
     /// ```
     #[must_use]
@@ -426,6 +477,7 @@ where
             &self.variables,
             &self.gates,
             &self.bindings,
+            &self.lookups,
         );
         for s in &self.shifts {
             transcript.absorb(*s);
@@ -443,6 +495,12 @@ pub type VerifierKey<F, PC, const N: usize, const D: usize> =
 pub type Wires<F, PC> = Tagged<PC, Commitments<Com<F, PC>>, 0x7769>;
 /// The commitment to the grand product `z`.
 pub type GrandProduct<F, PC> = Tagged<PC, Com<F, PC>, 0x7a7a>;
+/// The commitments to the lookup columns drawn before `beta, gamma`
+/// (`h_1, h_2` for plookup, `m` for LogUp), in the order of the lookups.
+pub type LookupColumns<F, PC> = Tagged<PC, Commitments<Com<F, PC>>, 0x6c63>;
+/// The commitments to the lookup columns drawn after `beta, gamma` (`Z`
+/// for plookup, `phi` for LogUp), in the order of the lookups.
+pub type LookupProducts<F, PC> = Tagged<PC, Commitments<Com<F, PC>>, 0x6c70>;
 /// The commitment to the quotient `t`.
 pub type Quotient<F, PC> = Tagged<PC, Com<F, PC>, 0x7474>;
 /// The opening proofs.
@@ -460,8 +518,20 @@ pub type Keys<F, PC, const N: usize, const D: usize> =
 /// use arrabbiata_ipa::Ipa;
 /// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// let c = Circuit::<F, 1, 1>::new(2, 0, vec![], vec![], vec![], vec![], vec![], 0, vec![]).unwrap();
-/// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+/// let num_rows = 2;
+/// let witness_columns = 0;
+/// let fixed = vec![];
+/// let selectors = vec![];
+/// let variables = vec![];
+/// let gates = vec![];
+/// let sigma = vec![];
+/// let public_inputs = 0;
+/// let bindings = vec![];
+/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+/// let mut generators = pallas_sponge(0);
+/// let size = 4;
+/// let ipa_transcript = vesta_sponge(1);
+/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
 /// let (pk, vk) = setup(&c, &pcs).unwrap();
 /// assert_eq!(pk.verifier_key(), &vk);
 /// ```
@@ -491,8 +561,20 @@ where
     /// use arrabbiata_ipa::Ipa;
     /// use arrabbiata_pasta::{Fq as F, Pallas};
     /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// let c = Circuit::<F, 1, 1>::new(2, 0, vec![], vec![], vec![], vec![], vec![], 0, vec![]).unwrap();
-    /// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    /// let num_rows = 2;
+    /// let witness_columns = 0;
+    /// let fixed = vec![];
+    /// let selectors = vec![];
+    /// let variables = vec![];
+    /// let gates = vec![];
+    /// let sigma = vec![];
+    /// let public_inputs = 0;
+    /// let bindings = vec![];
+    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+    /// let mut generators = pallas_sponge(0);
+    /// let size = 4;
+    /// let ipa_transcript = vesta_sponge(1);
+    /// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
     /// let (pk, _) = setup(&c, &pcs).unwrap();
     /// assert_eq!(pk.verifier_key().value.num_rows(), 2);
     /// ```
@@ -507,8 +589,20 @@ where
     /// use arrabbiata_ipa::Ipa;
     /// use arrabbiata_pasta::{Fq as F, Pallas};
     /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-    /// let c = Circuit::<F, 1, 1>::new(2, 0, vec![], vec![], vec![], vec![], vec![], 0, vec![]).unwrap();
-    /// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    /// let num_rows = 2;
+    /// let witness_columns = 0;
+    /// let fixed = vec![];
+    /// let selectors = vec![];
+    /// let variables = vec![];
+    /// let gates = vec![];
+    /// let sigma = vec![];
+    /// let public_inputs = 0;
+    /// let bindings = vec![];
+    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+    /// let mut generators = pallas_sponge(0);
+    /// let size = 4;
+    /// let ipa_transcript = vesta_sponge(1);
+    /// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
     /// assert_eq!(setup(&c, &pcs).unwrap().0.circuit(), &c);
     /// ```
     pub const fn circuit(&self) -> &Circuit<F, N, D> {
@@ -525,13 +619,23 @@ pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> = Public<
         Message<
             Wires<F, PC>,
             Challenge<
-                Challenge<
-                    Message<
-                        GrandProduct<F, PC>,
+                Message<
+                    LookupColumns<F, PC>,
+                    Challenge<
                         Challenge<
                             Message<
-                                Quotient<F, PC>,
-                                Challenge<Message<Opened<F>, Message<Openings<F, PC>, End>>>,
+                                GrandProduct<F, PC>,
+                                Message<
+                                    LookupProducts<F, PC>,
+                                    Challenge<
+                                        Message<
+                                            Quotient<F, PC>,
+                                            Challenge<
+                                                Message<Opened<F>, Message<Openings<F, PC>, End>>,
+                                            >,
+                                        >,
+                                    >,
+                                >,
                             >,
                         >,
                     >,
@@ -551,8 +655,10 @@ pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> = Public<
 /// use arrabbiata_poseidon::PoseidonSponge;
 /// use arrabbiata_transcript::typed::{Pattern, Protocol};
 /// type P = <GeneralizedPlonk<F, Ipa<Pallas, PoseidonSponge<F>>, 3, 2> as Protocol>::Transcript;
-/// assert_eq!(<P as Pattern>::MESSAGES, 5);
-/// assert_eq!(<P as Pattern>::CHALLENGES, 4);
+/// // Wires, lookup columns, z, lookup products, t, evaluations, openings.
+/// assert_eq!(<P as Pattern>::MESSAGES, 7);
+/// // theta, beta, gamma, alpha, zeta.
+/// assert_eq!(<P as Pattern>::CHALLENGES, 5);
 /// ```
 #[derive(Debug)]
 pub struct GeneralizedPlonk<F, PC, const N: usize, const D: usize>(PhantomData<Parameters<F, PC>>);
@@ -603,7 +709,16 @@ where
 /// use arrabbiata_generalized_plonk::{Circuit, quotient_factor};
 /// use arrabbiata_pasta::Fq as F;
 /// // Three witness columns: the permutation term has degree 4.
-/// let c = Circuit::<F, 1, 1>::new(2, 3, vec![], vec![], vec![], vec![], (0..6).collect(), 0, vec![]).unwrap();
+/// let num_rows = 2;
+/// let witness_columns = 3;
+/// let fixed = vec![];
+/// let selectors = vec![];
+/// let variables = vec![];
+/// let gates = vec![];
+/// let sigma = (0..6).collect();
+/// let public_inputs = 0;
+/// let bindings = vec![];
+/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
 /// assert_eq!(quotient_factor(&c), 4);
 /// ```
 #[must_use]
@@ -615,6 +730,12 @@ where
     for gate in circuit.gates() {
         factor = factor.max(circuit.column_degree(gate));
     }
+    // A lookup's terms multiply its query by two columns (plookup: Z and
+    // the table; LogUp: the running sum and the table), and plookup's
+    // other side multiplies three columns.
+    for lookup in circuit.lookups() {
+        factor = factor.max(circuit.query_degree(lookup) + 2).max(3);
+    }
     factor
 }
 
@@ -624,7 +745,16 @@ where
 /// ```
 /// use arrabbiata_generalized_plonk::{Circuit, max_coefficients};
 /// use arrabbiata_pasta::Fq as F;
-/// let c = Circuit::<F, 1, 1>::new(4, 3, vec![], vec![], vec![], vec![], (0..12).collect(), 0, vec![]).unwrap();
+/// let num_rows = 4;
+/// let witness_columns = 3;
+/// let fixed = vec![];
+/// let selectors = vec![];
+/// let variables = vec![];
+/// let gates = vec![];
+/// let sigma = (0..12).collect();
+/// let public_inputs = 0;
+/// let bindings = vec![];
+/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
 /// assert_eq!(max_coefficients(&c), 12);
 /// ```
 #[must_use]
@@ -648,8 +778,20 @@ where
 /// use arrabbiata_ipa::Ipa;
 /// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// let c = Circuit::<F, 1, 1>::new(2, 1, vec![], vec![], vec![], vec![], vec![0, 1], 0, vec![]).unwrap();
-/// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+/// let num_rows = 2;
+/// let witness_columns = 1;
+/// let fixed = vec![];
+/// let selectors = vec![];
+/// let variables = vec![];
+/// let gates = vec![];
+/// let sigma = vec![0, 1];
+/// let public_inputs = 0;
+/// let bindings = vec![];
+/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+/// let mut generators = pallas_sponge(0);
+/// let size = 4;
+/// let ipa_transcript = vesta_sponge(1);
+/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
 /// assert!(setup(&c, &pcs).is_ok());
 /// ```
 pub fn setup<F, PC, const N: usize, const D: usize>(
@@ -689,6 +831,7 @@ where
         variables: circuit.variables().to_vec(),
         gates: circuit.gates().to_vec(),
         bindings: circuit.bindings().to_vec(),
+        lookups: circuit.lookups().to_vec(),
         shifts,
         fixed: fixed.iter().map(commit).collect(),
         selectors: selectors.iter().map(commit).collect(),
@@ -754,6 +897,37 @@ where
     }
 }
 
+/// The number of lookup openings a proof of `lookups` makes: each
+/// committed lookup column at `zeta` and `zeta w`, and plookup's table
+/// columns at `zeta w`.
+fn lookup_openings<F, const N: usize, const D: usize>(lookups: &[Lookup<F, N, D>]) -> usize
+where
+    F: Field,
+{
+    lookups
+        .iter()
+        .map(|l| {
+            let (before, after) = l.argument().columns();
+            let table = if l.argument() == Argument::Plookup {
+                l.table().len()
+            } else {
+                0
+            };
+            2 * (before + after) + table
+        })
+        .sum()
+}
+
+/// What the prover computes for one lookup: the query and the table on
+/// every row, and the polynomials it commits to before and after
+/// `beta, gamma`.
+struct LookupWitness<F> {
+    queries: Vec<F>,
+    table: Vec<F>,
+    before: Vec<Vec<F>>,
+    after: Vec<Vec<F>>,
+}
+
 /// Prove that the witness columns `columns` satisfy the circuit of `pk`
 /// for the public inputs `public`. Returns the proof and the transcript
 /// after the protocol.
@@ -770,13 +944,28 @@ where
 /// use arrabbiata_ipa::Ipa;
 /// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
+/// // Sponge domain tags: each transcript gets its own, and prover and
+/// // verifier start from the same one.
+/// let proof_domain = 2;
 /// // Column 0 at row 1 is public input 0.
-/// let c = Circuit::<F, 1, 1>::new(2, 1, vec![], vec![], vec![], vec![], vec![0, 1], 1, vec![(0, 1)]).unwrap();
-/// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+/// let num_rows = 2;
+/// let witness_columns = 1;
+/// let fixed = vec![];
+/// let selectors = vec![];
+/// let variables = vec![];
+/// let gates = vec![];
+/// let sigma = vec![0, 1];
+/// let public_inputs = 1;
+/// let bindings = vec![(0, 1)];
+/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+/// let mut generators = pallas_sponge(0);
+/// let size = 4;
+/// let ipa_transcript = vesta_sponge(1);
+/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
 /// let (pk, _) = setup(&c, &pcs).unwrap();
 /// let columns = [vec![F::ZERO, F::from_u64(7)]];
-/// assert!(prove(&pk, &pcs, vesta_sponge(2), &[F::from_u64(7)], &columns).is_ok());
-/// assert_eq!(prove(&pk, &pcs, vesta_sponge(2), &[F::from_u64(8)], &columns).unwrap_err(), Error::Unsatisfied);
+/// assert!(prove(&pk, &pcs, vesta_sponge(proof_domain), &[F::from_u64(7)], &columns).is_ok());
+/// assert_eq!(prove(&pk, &pcs, vesta_sponge(proof_domain), &[F::from_u64(8)], &columns).unwrap_err(), Error::Unsatisfied);
 /// ```
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
 pub fn prove<F, PC, T, const N: usize, const D: usize>(
@@ -787,7 +976,7 @@ pub fn prove<F, PC, T, const N: usize, const D: usize>(
     columns: &[Vec<F>],
 ) -> Result<(Proof<F, PC, N, D>, T), Error>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField,
     PC: PolynomialCommitment<F, Family = Univariate> + Label,
     T: Transcript<F>,
 {
@@ -806,20 +995,68 @@ where
         return Err(Error::Unsatisfied);
     }
     let commit = |p: &UniPoly<F>| pcs.commit(p.coefficients());
+    let interpolate_all = |values: &[Vec<F>]| -> Result<Vec<UniPoly<F>>, Error> {
+        values.iter().map(|c| interpolate(domain, c)).collect()
+    };
 
-    // Round 1: the witness columns.
-    let wires: Vec<UniPoly<F>> = columns
-        .iter()
-        .map(|c| interpolate(domain, c))
-        .collect::<Result<_, _>>()?;
+    // Round 1: the witness columns, then the lookup combiner theta.
+    let wires = interpolate_all(columns)?;
     let tape = prover_tape::<F, T, GeneralizedPlonk<F, PC, N, D>>(transcript)
         .public(&pk.vk)
         .public(&PublicInputs(public.to_vec()))
         .send(Tagged::new(Commitments(wires.iter().map(commit).collect())));
+    let (theta, tape) = tape.challenge();
+
+    // Round 2: the lookup columns drawn before beta, gamma.
+    let row_point = |row: usize| {
+        circuit.point(|v| match v {
+            Variable::Witness { column, rotation } => columns[*column][rotation.apply(row, n)],
+            Variable::Fixed { column, rotation } => {
+                circuit.fixed()[*column][rotation.apply(row, n)]
+            }
+            Variable::Public(i) => public[*i],
+        })
+    };
+    let mut lookups = Vec::with_capacity(circuit.lookups().len());
+    for l in circuit.lookups() {
+        let queries: Vec<F> = (0..n)
+            .map(|row| {
+                let selector = match l.selector() {
+                    Some(q) => circuit.selectors()[q][row],
+                    None => F::ONE,
+                };
+                lookup::query(l, &row_point(row), selector, theta)
+            })
+            .collect();
+        let table: Vec<F> = (0..n)
+            .map(|row| lookup::compress(l.table().iter().map(|k| circuit.fixed()[*k][row]), theta))
+            .collect();
+        let before = match l.argument() {
+            Argument::Plookup => {
+                let (h1, h2) = lookup::sorted_halves(&queries, &table)?;
+                vec![h1, h2]
+            }
+            Argument::LogUp => vec![lookup::multiplicities(&queries, &table)?],
+        };
+        lookups.push(LookupWitness {
+            queries,
+            table,
+            before,
+            after: Vec::new(),
+        });
+    }
+    let mut before_polys = Vec::new();
+    for l in &lookups {
+        before_polys.push(interpolate_all(&l.before)?);
+    }
+    let tape = tape.send(Tagged::new(Commitments(
+        before_polys.iter().flatten().map(commit).collect(),
+    )));
     let (beta, tape) = tape.challenge();
     let (gamma, tape) = tape.challenge();
 
-    // Round 2: the grand product of the copy permutation.
+    // Round 3: the grand product of the copy permutation, then the lookup
+    // columns drawn after beta, gamma.
     let mut z_values = vec![F::ONE; n];
     for i in 0..n - 1 {
         let x = domain.element(i);
@@ -834,9 +1071,34 @@ where
     }
     let z = interpolate(domain, &z_values)?;
     let tape = tape.send(Tagged::new(commit(&z)));
+    for (l, data) in circuit.lookups().iter().zip(&mut lookups) {
+        data.after = match l.argument() {
+            Argument::Plookup => vec![lookup::plookup_product(
+                &data.queries,
+                &data.table,
+                &data.before[0],
+                &data.before[1],
+                beta,
+                gamma,
+            )?],
+            Argument::LogUp => vec![lookup::logup_sum(
+                &data.queries,
+                &data.table,
+                &data.before[0],
+                gamma,
+            )?],
+        };
+    }
+    let mut after_polys = Vec::new();
+    for l in &lookups {
+        after_polys.push(interpolate_all(&l.after)?);
+    }
+    let tape = tape.send(Tagged::new(Commitments(
+        after_polys.iter().flatten().map(commit).collect(),
+    )));
     let (alpha, tape) = tape.challenge();
 
-    // Round 3: the quotient, pointwise on the coset g H_E.
+    // Round 4: the quotient, pointwise on the coset g H_E.
     let factor = quotient_factor(circuit);
     let ext = Domain::<F>::containing(factor * n).ok_or(Error::DomainTooLarge)?;
     let size = ext.size();
@@ -850,10 +1112,21 @@ where
     let fixed_values = on_coset_all(&pk.fixed)?;
     let selector_values = on_coset_all(&pk.selectors)?;
     let sigma_values = on_coset_all(&pk.sigmas)?;
+    let mut lookup_values = Vec::with_capacity(lookups.len());
+    for (before, after) in before_polys.iter().zip(&after_polys) {
+        let mut values = on_coset_all(before)?;
+        values.extend(on_coset_all(after)?);
+        lookup_values.push(values);
+    }
     let z_coset = on_coset(&z)?;
-    let mut first = vec![F::ZERO; n];
-    first[0] = F::ONE;
-    let l1 = on_coset(&interpolate(domain, &first)?)?;
+    let indicator = |row: usize| -> Result<Vec<F>, Error> {
+        let mut values = vec![F::ZERO; n];
+        values[row] = F::ONE;
+        on_coset(&interpolate(domain, &values)?)
+    };
+    let l1 = indicator(0)?;
+    let l_last = indicator(n - 1)?;
+    let w_last = domain.element(n - 1);
     let mut bound = vec![F::ZERO; n];
     let mut bound_values = vec![F::ZERO; n];
     for (j, row) in circuit.bindings() {
@@ -912,6 +1185,28 @@ where
         acc = acc + power * (left - right);
         power = power * alpha;
         acc = acc + power * l1[point] * (z_coset[point] - F::ONE);
+        for (l, values) in circuit.lookups().iter().zip(&lookup_values) {
+            power = power * alpha;
+            let selector = match l.selector() {
+                Some(q) => selector_values[q][point],
+                None => F::ONE,
+            };
+            let table =
+                |p: usize| lookup::compress(l.table().iter().map(|k| fixed_values[*k][p]), theta);
+            let at = At {
+                f: lookup::query(l, &vars, selector, theta),
+                t: (table(point), table(next)),
+                columns: values.iter().map(|v| (v[point], v[next])).collect(),
+                boundary: (l1[point], l_last[point], x - w_last),
+            };
+            let terms = lookup::terms(l.argument(), &at, beta, gamma);
+            for (i, term) in terms.iter().enumerate() {
+                if i > 0 {
+                    power = power * alpha;
+                }
+                acc = acc + power * *term;
+            }
+        }
         *t_value = acc * vanishing_inverse[point % step];
         x = x * ext.generator();
     }
@@ -935,9 +1230,27 @@ where
     let tape = tape.send(Tagged::new(commit(&t)));
     let (zeta, tape) = tape.challenge();
 
-    // Round 4: evaluations and openings.
+    // Round 5: evaluations and openings.
+    let zeta_next = zeta * domain.generator();
     let rotated_vars = rotated(circuit.variables());
     let open = |p: &UniPoly<F>, point: &F| pcs.open(p.coefficients(), point);
+    let mut lookup_openings = Vec::new();
+    for ((l, before), after) in circuit
+        .lookups()
+        .iter()
+        .zip(&before_polys)
+        .zip(&after_polys)
+    {
+        for p in before.iter().chain(after) {
+            lookup_openings.push(open(p, &zeta));
+            lookup_openings.push(open(p, &zeta_next));
+        }
+        if l.argument() == Argument::Plookup {
+            for k in l.table() {
+                lookup_openings.push(open(&pk.fixed[*k], &zeta_next));
+            }
+        }
+    }
     let opened = Opened {
         witness: wires.iter().map(|p| open(p, &zeta)).collect(),
         fixed: pk.fixed.iter().map(|p| open(p, &zeta)).collect(),
@@ -945,7 +1258,7 @@ where
         sigmas: pk.sigmas.iter().map(|p| open(p, &zeta)).collect(),
         z: open(&z, &zeta),
         t: open(&t, &zeta),
-        z_next: open(&z, &(zeta * domain.generator())),
+        z_next: open(&z, &zeta_next),
         rotated: rotated_vars
             .iter()
             .map(|v| match v {
@@ -958,6 +1271,7 @@ where
                 Variable::Public(_) => unreachable!("rotated variables read columns"),
             })
             .collect(),
+        lookups: lookup_openings,
     };
     let evaluations = opened.clone().map(|(v, _)| v);
     let proofs = opened.map(|(_, p)| p);
@@ -982,14 +1296,31 @@ where
 /// use arrabbiata_ipa::Ipa;
 /// use arrabbiata_pasta::{Fq as F, Pallas};
 /// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// let c = Circuit::<F, 1, 1>::new(2, 1, vec![], vec![], vec![], vec![], vec![0, 1], 1, vec![(0, 1)]).unwrap();
-/// let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+/// // Sponge domain tags: each transcript gets its own, and prover and
+/// // verifier start from the same one.
+/// let proof_domain = 2;
+/// let num_rows = 2;
+/// let witness_columns = 1;
+/// let fixed = vec![];
+/// let selectors = vec![];
+/// let variables = vec![];
+/// let gates = vec![];
+/// let sigma = vec![0, 1];
+/// let public_inputs = 1;
+/// let bindings = vec![(0, 1)];
+/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+/// let mut generators = pallas_sponge(0);
+/// let size = 4;
+/// let ipa_transcript = vesta_sponge(1);
+/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
 /// let (pk, vk) = setup(&c, &pcs).unwrap();
-/// let (proof, _) = prove(&pk, &pcs, vesta_sponge(2), &[F::from_u64(7)], &[vec![F::ZERO, F::from_u64(7)]]).unwrap();
-/// assert!(verify(&vk, &pcs, vesta_sponge(2), &[F::from_u64(7)], proof.clone()).is_ok());
-/// assert!(verify(&vk, &pcs, vesta_sponge(2), &[F::from_u64(8)], proof).is_err());
+/// let seven = F::from_u64(7);
+/// let columns = [vec![F::ZERO, seven]];
+/// let (proof, _) = prove(&pk, &pcs, vesta_sponge(proof_domain), &[seven], &columns).unwrap();
+/// assert!(verify(&vk, &pcs, vesta_sponge(proof_domain), &[seven], proof.clone()).is_ok());
+/// assert!(verify(&vk, &pcs, vesta_sponge(proof_domain), &[F::from_u64(8)], proof).is_err());
 /// ```
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_lines)]
 pub fn verify<F, PC, T, const N: usize, const D: usize>(
     vk: &VerifierKey<F, PC, N, D>,
     pcs: &PC,
@@ -1007,36 +1338,76 @@ where
         return Err(Error::PublicInputs);
     }
     let domain = Domain::<F>::new(key.log_size).ok_or(Error::DomainTooLarge)?;
+    let n = domain.size();
     let (wires, tape) = verifier_tape::<F, T, GeneralizedPlonk<F, PC, N, D>>(transcript, proof)
         .public(vk)
         .public(&PublicInputs(public.to_vec()))
         .read();
+    let (theta, tape) = tape.challenge();
+    let (lookup_before, tape) = tape.read();
     let (beta, tape) = tape.challenge();
     let (gamma, tape) = tape.challenge();
     let (z_commitment, tape) = tape.read();
+    let (lookup_after, tape) = tape.read();
     let (alpha, tape) = tape.challenge();
     let (t_commitment, tape) = tape.read();
     let (zeta, tape) = tape.challenge();
     let (evaluations, tape) = tape.read();
     let (proofs, tape) = tape.read();
     let transcript = tape.finish();
-    let (wires, z_commitment, t_commitment, proofs) = (
+    let (wires, lookup_before, z_commitment, lookup_after, t_commitment, proofs) = (
         wires.value.0,
+        lookup_before.value.0,
         z_commitment.value,
+        lookup_after.value.0,
         t_commitment.value,
         proofs.value,
     );
 
     let w = key.witness_columns;
     let rotated_vars = rotated(&key.variables);
-    let counts = (w, key.fixed.len(), key.selectors.len(), rotated_vars.len());
-    if wires.len() != w || !evaluations.has_shape(counts) || !proofs.has_shape(counts) {
+    let (before_count, after_count) = key.lookups.iter().fold((0, 0), |(b, a), l| {
+        let (lb, la) = l.argument().columns();
+        (b + lb, a + la)
+    });
+    let counts = (
+        w,
+        key.fixed.len(),
+        key.selectors.len(),
+        rotated_vars.len(),
+        lookup_openings(&key.lookups),
+    );
+    if wires.len() != w
+        || lookup_before.len() != before_count
+        || lookup_after.len() != after_count
+        || !evaluations.has_shape(counts)
+        || !proofs.has_shape(counts)
+    {
         return Err(Error::Shape);
     }
 
     // The commitment and the point of every opening, in the shape of the
     // evaluations and the proofs.
     let at = |r: Rotation| zeta * root_power(&domain, r);
+    let zeta_next = at(Rotation::NEXT);
+    let mut lookup_claims = Vec::new();
+    let (mut b, mut a) = (0, 0);
+    for l in &key.lookups {
+        let (lb, la) = l.argument().columns();
+        for c in lookup_before[b..b + lb]
+            .iter()
+            .chain(&lookup_after[a..a + la])
+        {
+            lookup_claims.push((c, zeta));
+            lookup_claims.push((c, zeta_next));
+        }
+        (b, a) = (b + lb, a + la);
+        if l.argument() == Argument::Plookup {
+            for k in l.table() {
+                lookup_claims.push((&key.fixed[*k], zeta_next));
+            }
+        }
+    }
     let claims = Opened {
         witness: wires.iter().map(|c| (c, zeta)).collect(),
         fixed: key.fixed.iter().map(|c| (c, zeta)).collect(),
@@ -1044,7 +1415,7 @@ where
         sigmas: key.sigmas.iter().map(|c| (c, zeta)).collect(),
         z: (&z_commitment, zeta),
         t: (&t_commitment, zeta),
-        z_next: (&z_commitment, at(Rotation::NEXT)),
+        z_next: (&z_commitment, zeta_next),
         rotated: rotated_vars
             .iter()
             .map(|v| match v {
@@ -1053,6 +1424,7 @@ where
                 Variable::Public(_) => unreachable!("rotated variables read columns"),
             })
             .collect(),
+        lookups: lookup_claims,
     };
     for (i, ((commitment, point), (value, opening))) in claims
         .iter()
@@ -1099,7 +1471,54 @@ where
     }
     lhs = lhs + power * (left - right);
     power = power * alpha;
-    lhs = lhs + power * domain.first_lagrange_at(zeta) * (evaluations.z - F::ONE);
+    let l0 = domain.first_lagrange_at(zeta);
+    lhs = lhs + power * l0 * (evaluations.z - F::ONE);
+    let boundary = (
+        l0,
+        domain.lagrange_at(n - 1, zeta),
+        zeta - domain.element(n - 1),
+    );
+    let mut offset = 0;
+    for l in &key.lookups {
+        power = power * alpha;
+        let (lb, la) = l.argument().columns();
+        let opened = &evaluations.lookups[offset..];
+        let columns: Vec<(F, F)> = (0..lb + la)
+            .map(|c| (opened[2 * c], opened[2 * c + 1]))
+            .collect();
+        let table_next = if l.argument() == Argument::Plookup {
+            let next = &opened[2 * (lb + la)..2 * (lb + la) + l.table().len()];
+            lookup::compress(next.iter().copied(), theta)
+        } else {
+            F::ZERO
+        };
+        let selector = match l.selector() {
+            Some(q) => evaluations.selectors[q],
+            None => F::ONE,
+        };
+        let table = lookup::compress(l.table().iter().map(|k| evaluations.fixed[*k]), theta);
+        let at = At {
+            f: lookup::query(l, &vars, selector, theta),
+            t: (table, table_next),
+            columns,
+            boundary,
+        };
+        for (i, term) in lookup::terms(l.argument(), &at, beta, gamma)
+            .iter()
+            .enumerate()
+        {
+            if i > 0 {
+                power = power * alpha;
+            }
+            lhs = lhs + power * *term;
+        }
+        offset += 2 * (lb + la)
+            + if l.argument() == Argument::Plookup {
+                l.table().len()
+            } else {
+                0
+            };
+    }
     if lhs == evaluations.t * domain.vanishing_at(zeta) {
         Ok((wires, transcript))
     } else {

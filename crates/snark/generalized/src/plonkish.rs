@@ -153,19 +153,26 @@ where
     for selector in 0..Q {
         for c in G::constraints(selector) {
             let p = polynomial::<F, _, W, X, N, D>(&c, &index).ok_or(Error::Shape)?;
-            gates.push(Gate::new(Some(selector), p));
+            let gated_by = Some(selector);
+            gates.push(Gate::new(gated_by, p));
         }
     }
+    let num_rows = circuit.num_rows();
+    let witness_columns = W;
+    let fixed = circuit.fixed().to_vec();
+    let selectors = circuit.selector_columns().to_vec();
+    let sigma = circuit.sigma().to_vec();
+    let public_inputs = circuit.public_rows().len();
     let bindings = circuit.public_rows().iter().copied().enumerate().collect();
     Circuit::new(
-        circuit.num_rows(),
-        W,
-        circuit.fixed().to_vec(),
-        circuit.selector_columns().to_vec(),
+        num_rows,
+        witness_columns,
+        fixed,
+        selectors,
         variables,
         gates,
-        circuit.sigma().to_vec(),
-        circuit.public_rows().len(),
+        sigma,
+        public_inputs,
         bindings,
     )
 }

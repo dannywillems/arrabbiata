@@ -24,19 +24,32 @@
 //! use arrabbiata_pasta::{Fq as F, Pallas};
 //! use arrabbiata_poly::Rotation;
 //! use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
+//! // Sponge domain tags: each transcript gets its own, and prover and
+//! // verifier start from the same one.
+//! let proof_domain = 2;
 //!
 //! // w(next) = s * w^3, a cubic recurrence scaled by the public input s,
 //! // on rows 0 to 2; the last value is bound to public input 1.
 //! let v = |i| Sparse::<F, 3, 4>::variable(Var::try_new(i).unwrap()).unwrap();
 //! let cube = v(0).checked_mul(&v(0)).unwrap().checked_mul(&v(0)).unwrap();
-//! let gate = Gate::new(Some(0), v(1) - v(2).checked_mul(&cube).unwrap());
+//! let selector = Some(0);
+//! let polynomial = v(1) - v(2).checked_mul(&cube).unwrap();
+//! let gate = Gate::new(selector, polynomial);
 //! let variables = vec![
 //!     Variable::Witness { column: 0, rotation: Rotation::CURR },
 //!     Variable::Witness { column: 0, rotation: Rotation::NEXT },
 //!     Variable::Public(0),
 //! ];
 //! let selector = vec![F::ONE, F::ONE, F::ONE, F::ZERO];
-//! let circuit = Circuit::new(4, 1, vec![], vec![selector], variables, vec![gate], (0..4).collect(), 2, vec![(1, 3)]).unwrap();
+//! let num_rows = 4;
+//! let witness_columns = 1;
+//! let fixed = vec![];
+//! let selectors = vec![selector];
+//! let gates = vec![gate];
+//! let sigma = (0..4).collect();
+//! let public_inputs = 2;
+//! let bindings = vec![(1, 3)];
+//! let circuit = Circuit::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
 //!
 //! let s = F::from_u64(2);
 //! let mut column = vec![F::from_u64(3)];
@@ -45,10 +58,13 @@
 //!     column.push(s * x * x * x);
 //! }
 //! let public = [s, column[3]];
-//! let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 16, vesta_sponge(1));
+//! let mut generators = pallas_sponge(0);
+//! let size = 16;
+//! let ipa_transcript = vesta_sponge(1);
+//! let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
 //! let (pk, vk) = setup(&circuit, &pcs).unwrap();
-//! let (proof, _) = prove(&pk, &pcs, vesta_sponge(2), &public, &[column]).unwrap();
-//! verify(&vk, &pcs, vesta_sponge(2), &public, proof).unwrap();
+//! let (proof, _) = prove(&pk, &pcs, vesta_sponge(proof_domain), &public, &[column]).unwrap();
+//! verify(&vk, &pcs, vesta_sponge(proof_domain), &public, proof).unwrap();
 //! ```
 
 #![no_std]
@@ -56,6 +72,7 @@
 extern crate alloc;
 
 pub mod circuit;
+pub mod lookup;
 pub mod plonkish;
 pub mod protocol;
 
@@ -63,6 +80,7 @@ use core::fmt;
 
 pub use crate::{
     circuit::{Circuit, Gate, Variable},
+    lookup::{Argument, Lookup},
     protocol::{
         Commitments, GeneralizedPlonk, GeneralizedTranscript, Keys, Opened, Preprocessed, Proof,
         ProverKey, PublicInputs, Tagged, VerifierKey, max_coefficients, prove, quotient_factor,

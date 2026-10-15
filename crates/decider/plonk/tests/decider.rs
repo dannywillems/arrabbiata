@@ -7,7 +7,7 @@ mod common;
 
 use arrabbiata_bn254::Fr;
 use arrabbiata_commit::{HomomorphicCommitment, PolynomialCommitment};
-use arrabbiata_field::{Field, TwoAdicField};
+use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_frontend::vanilla::build;
 use arrabbiata_generalized_plonk::{Error as PlonkError, max_coefficients};
 use arrabbiata_pasta::Fq as F;
@@ -23,6 +23,15 @@ use arrabbiata_reduction::{Reduction, Relation, Then, laws};
 use arrabbiata_transcript::Transcript;
 use common::{Gates, custom, vanilla as vanilla_step};
 use proptest::prelude::*;
+
+/// The domain tags of the sponges, one per role, so the transcripts are
+/// independent: the circuit digest, accumulation, the decider, the decider
+/// composed after accumulation, and the SNARK `Dec . Embed`.
+const DIGEST_DOMAIN: u64 = 2;
+const ACCUMULATION_DOMAIN: u64 = 3;
+const DECIDER_DOMAIN: u64 = 4;
+const COMPOSED_DOMAIN: u64 = 5;
+const SNARK_DOMAIN: u64 = 6;
 
 /// Accumulate the witnesses with the scheme of `params`.
 #[allow(clippy::type_complexity)]
@@ -87,7 +96,7 @@ fn decides<
     sponge: impl Fn() -> T,
 ) -> Result<(), TestCaseError>
 where
-    Fd: TwoAdicField,
+    Fd: TwoAdicField + PrimeField,
     PC: Shared<Fd>,
     G: GateSet<Fd, W, X>,
     T: Transcript<Fd>,
@@ -189,14 +198,14 @@ proptest! {
     fn vanilla_accumulators_are_decided(steps in prop::collection::vec((any::<u64>(), any::<u64>()), 1..5)) {
         let (circuit, _) = vanilla_step(0, 0);
         let pcs = ipa::pallas(&circuit);
-        let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+        let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(DIGEST_DOMAIN)).unwrap();
         let witnesses: Vec<_> = steps.iter().map(|(x, k)| vanilla_step(*x, *k).1).collect();
-        let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
+        let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(ACCUMULATION_DOMAIN));
         let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
         let ck = params.ck();
         let one = HomomorphicCommitment::commit(ck, &[F::ONE]);
         let others = perturbations(&instance, |c| ck.add(c, &one));
-        decides(&decider, &instance, &witness, &others, || vesta_sponge(4))?;
+        decides(&decider, &instance, &witness, &others, || vesta_sponge(DECIDER_DOMAIN))?;
     }
 
     /// The custom gate set: degree 5, rotations, a fixed column, two
@@ -205,14 +214,14 @@ proptest! {
     fn custom_accumulators_are_decided(xs in prop::collection::vec(any::<u64>(), 1..4), q in any::<u64>()) {
         let (circuit, _) = custom(0, q);
         let pcs = ipa::pallas(&circuit);
-        let params = Params::<F, _, Gates, 2, 1, 3, 6, 5>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+        let params = Params::<F, _, Gates, 2, 1, 3, 6, 5>::new(circuit, pcs, vesta_sponge(DIGEST_DOMAIN)).unwrap();
         let witnesses: Vec<_> = xs.iter().map(|x| custom(*x, q).1).collect();
-        let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
+        let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(ACCUMULATION_DOMAIN));
         let decider = Decider::<_, _, _, 2, 1, 3, 6, 5, 9, 7>::new(&params).unwrap();
         let ck = params.ck();
         let one = HomomorphicCommitment::commit(ck, &[F::ONE]);
         let others = perturbations(&instance, |c| ck.add(c, &one));
-        decides(&decider, &instance, &witness, &others, || vesta_sponge(4))?;
+        decides(&decider, &instance, &witness, &others, || vesta_sponge(DECIDER_DOMAIN))?;
     }
 
     /// The decider composed with accumulation, `Dec . Fold . (Embed x Id)`:
@@ -221,14 +230,14 @@ proptest! {
     fn accumulate_then_decide(xs in prop::collection::vec(any::<u64>(), 2..4), k in any::<u64>()) {
         let (circuit, _) = vanilla_step(0, 0);
         let pcs = ipa::pallas(&circuit);
-        let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+        let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(DIGEST_DOMAIN)).unwrap();
         let witnesses: Vec<_> = xs.iter().map(|x| vanilla_step(*x, k).1).collect();
-        let (instance, witness) = accumulated(&params, &witnesses[..witnesses.len() - 1], || vesta_sponge(3));
+        let (instance, witness) = accumulated(&params, &witnesses[..witnesses.len() - 1], || vesta_sponge(ACCUMULATION_DOMAIN));
         let last = witnesses.last().unwrap();
         let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
         let both = Then(accumulate(&params), &decider);
         let input = (last.public_inputs().to_vec(), instance);
-        let out = laws::complete::<F, _, _>(&both, || vesta_sponge(5), &input, &(last.clone(), witness));
+        let out = laws::complete::<F, _, _>(&both, || vesta_sponge(COMPOSED_DOMAIN), &input, &(last.clone(), witness));
         prop_assert!(out.is_ok(), "{:?}", out.err());
     }
 
@@ -237,15 +246,15 @@ proptest! {
     fn the_snark_is_an_argument(x in any::<u64>(), k in any::<u64>()) {
         let (circuit, w) = vanilla_step(x, k);
         let pcs = ipa::pallas(&circuit);
-        let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+        let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(DIGEST_DOMAIN)).unwrap();
         let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
         let s = snark(&decider);
         let public = w.public_inputs().to_vec();
-        let out = laws::complete::<F, _, _>(&s, || vesta_sponge(6), &public, &w);
+        let out = laws::complete::<F, _, _>(&s, || vesta_sponge(SNARK_DOMAIN), &public, &w);
         prop_assert!(out.is_ok(), "{:?}", out.err());
         let proof = out.unwrap().proof;
         let wrong = vec![public[0] + F::ONE];
-        prop_assert!(s.verify(vesta_sponge(6), &wrong, proof).is_err());
+        prop_assert!(s.verify(vesta_sponge(SNARK_DOMAIN), &wrong, proof).is_err());
     }
 }
 
@@ -269,20 +278,25 @@ fn kzg_accumulators_are_decided() {
     let relaxed = relaxation::<Fr, Vanilla, 3, 5, 1, 11, 4>(&circuit, 2).unwrap();
     let size = max_coefficients(&relaxed);
     assert!(size > circuit.max_coefficients());
-    let srs = arrabbiata_kzg::Kzg::<arrabbiata_bn254::Bn254>::insecure_setup(
-        size,
-        Fr::from_u64(123_456_789),
-    );
-    let params =
-        Params::<Fr, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, srs, bn254_scalar_sponge(2)).unwrap();
+    // The KZG trapdoor: known, so the key is for tests only.
+    let tau = Fr::from_u64(123_456_789);
+    let srs = arrabbiata_kzg::Kzg::<arrabbiata_bn254::Bn254>::insecure_setup(size, tau);
+    let params = Params::<Fr, _, Vanilla, 3, 5, 1, 3, 2>::new(
+        circuit,
+        srs,
+        bn254_scalar_sponge(DIGEST_DOMAIN),
+    )
+    .unwrap();
     let witnesses: Vec<_> = [2, 3, 4].iter().map(|v| step(*v).1).collect();
-    let (instance, witness) = accumulated(&params, &witnesses, || bn254_scalar_sponge(3));
+    let (instance, witness) = accumulated(&params, &witnesses, || {
+        bn254_scalar_sponge(ACCUMULATION_DOMAIN)
+    });
     let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     let out = decider
-        .prove(bn254_scalar_sponge(4), &instance, &witness)
+        .prove(bn254_scalar_sponge(DECIDER_DOMAIN), &instance, &witness)
         .unwrap();
     decider
-        .verify(bn254_scalar_sponge(4), &instance, out.proof)
+        .verify(bn254_scalar_sponge(DECIDER_DOMAIN), &instance, out.proof)
         .unwrap();
 }
 
@@ -293,12 +307,14 @@ fn the_prover_refuses_an_unsatisfied_accumulator() {
     let (circuit, _) = vanilla_step(0, 0);
     let pcs = ipa::pallas(&circuit);
     let params =
-        Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+        Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(DIGEST_DOMAIN))
+            .unwrap();
     let witnesses: Vec<_> = [(2, 3), (4, 5)]
         .iter()
         .map(|(x, k)| vanilla_step(*x, *k).1)
         .collect();
-    let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
+    let (instance, witness) =
+        accumulated(&params, &witnesses, || vesta_sponge(ACCUMULATION_DOMAIN));
     let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     // An error column off on one row, recommitted so it opens.
     let mut error = witness.error().to_vec();
@@ -314,7 +330,7 @@ fn the_prover_refuses_an_unsatisfied_accumulator() {
     assert!(params.relaxed().check(&bad_instance, &bad).is_err());
     assert_eq!(
         decider
-            .prove(vesta_sponge(4), &bad_instance, &bad)
+            .prove(vesta_sponge(DECIDER_DOMAIN), &bad_instance, &bad)
             .unwrap_err(),
         Error::Plonk(PlonkError::Unsatisfied)
     );
@@ -322,7 +338,7 @@ fn the_prover_refuses_an_unsatisfied_accumulator() {
     // column, commitment 3.
     assert_eq!(
         decider
-            .prove(vesta_sponge(4), &bad_instance, &witness)
+            .prove(vesta_sponge(DECIDER_DOMAIN), &bad_instance, &witness)
             .unwrap_err(),
         Error::Commitment(3)
     );
@@ -336,19 +352,24 @@ fn the_error_opening_is_checked() {
     let (circuit, _) = vanilla_step(0, 0);
     let pcs = ipa::pallas(&circuit);
     let params =
-        Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(2)).unwrap();
+        Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(DIGEST_DOMAIN))
+            .unwrap();
     let witnesses: Vec<_> = [(2, 3), (4, 5)]
         .iter()
         .map(|(x, k)| vanilla_step(*x, *k).1)
         .collect();
-    let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
+    let (instance, witness) =
+        accumulated(&params, &witnesses, || vesta_sponge(ACCUMULATION_DOMAIN));
     let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
-    let out = decider.prove(vesta_sponge(4), &instance, &witness).unwrap();
+    let out = decider
+        .prove(vesta_sponge(DECIDER_DOMAIN), &instance, &witness)
+        .unwrap();
     let mut proof = out.proof.clone();
-    // The evaluations are the fourth message; the error column is witness
+    // The evaluations are the sixth message; the error column is witness
     // column 3.
-    proof.tail.tail.tail.head.witness[3] = proof.tail.tail.tail.head.witness[3] + F::ONE;
-    let result = decider.verify(vesta_sponge(4), &instance, proof);
+    proof.tail.tail.tail.tail.tail.head.witness[3] =
+        proof.tail.tail.tail.tail.tail.head.witness[3] + F::ONE;
+    let result = decider.verify(vesta_sponge(DECIDER_DOMAIN), &instance, proof);
     assert!(
         matches!(result, Err(Error::Plonk(PlonkError::Opening(3)))),
         "{result:?}"
@@ -358,13 +379,14 @@ fn the_error_opening_is_checked() {
         .iter()
         .map(|(x, k)| vanilla_step(*x, *k).1)
         .collect();
-    let (other, other_witness) = accumulated(&params, &others, || vesta_sponge(3));
+    let (other, other_witness) =
+        accumulated(&params, &others, || vesta_sponge(ACCUMULATION_DOMAIN));
     let foreign = decider
-        .prove(vesta_sponge(4), &other, &other_witness)
+        .prove(vesta_sponge(DECIDER_DOMAIN), &other, &other_witness)
         .unwrap();
     assert!(
         decider
-            .verify(vesta_sponge(4), &instance, foreign.proof)
+            .verify(vesta_sponge(DECIDER_DOMAIN), &instance, foreign.proof)
             .is_err()
     );
 }
@@ -382,9 +404,9 @@ proptest! {
         let (circuit, _) = custom(0, q);
         let relaxed = relaxation::<F, Gates, 2, 1, 3, 9, 7>(&circuit, 5).unwrap();
         let pcs = ipa::pallas(&circuit);
-        let params = Params::<F, _, Gates, 2, 1, 3, 6, 5>::new(circuit.clone(), pcs, vesta_sponge(2)).unwrap();
+        let params = Params::<F, _, Gates, 2, 1, 3, 6, 5>::new(circuit.clone(), pcs, vesta_sponge(DIGEST_DOMAIN)).unwrap();
         let witnesses: Vec<_> = xs.iter().map(|x| custom(*x, q).1).collect();
-        let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(3));
+        let (instance, witness) = accumulated(&params, &witnesses, || vesta_sponge(ACCUMULATION_DOMAIN));
         let mut error = witness.error().to_vec();
         let n = error.len();
         error[row % n] = error[row % n] + F::from_u64(shift);
