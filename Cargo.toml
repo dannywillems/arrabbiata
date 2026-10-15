@@ -22,6 +22,7 @@ arrabbiata-kzg = { path = "crates/commitment/kzg" }
 arrabbiata-pasta = { path = "crates/ec/pasta" }
 arrabbiata-poly = { path = "crates/algebra/poly" }
 arrabbiata-poseidon = { path = "crates/oracle/poseidon" }
+arrabbiata-reduction = { path = "crates/reduction/knowledge" }
 arrabbiata-relation = { path = "crates/arithmetization/relation" }
 arrabbiata-transcript = { path = "crates/oracle/transcript" }
 

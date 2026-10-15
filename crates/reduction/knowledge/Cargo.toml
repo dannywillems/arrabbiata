@@ -1,0 +1,21 @@
+[package]
+name = "arrabbiata-reduction"
+description = "Reductions of knowledge: relations, reductions, their composition and products"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-field = { workspace = true }
+arrabbiata-transcript = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
