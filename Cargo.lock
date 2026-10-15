@@ -132,6 +132,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-kimchi-gadgets"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-field",
+ "arrabbiata-gadget",
+ "arrabbiata-generalized-plonk",
+ "arrabbiata-ipa",
+ "arrabbiata-pasta",
+ "arrabbiata-poseidon",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-kzg"
 version = "0.0.0"
 dependencies = [

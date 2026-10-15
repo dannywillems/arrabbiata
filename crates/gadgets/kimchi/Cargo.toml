@@ -1,0 +1,23 @@
+[package]
+name = "arrabbiata-kimchi-gadgets"
+description = "Kimchi's gadgets (o1-labs/proof-systems) as typed gadgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-field = { workspace = true }
+arrabbiata-gadget = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-generalized-plonk = { workspace = true }
+arrabbiata-ipa = { workspace = true }
+arrabbiata-pasta = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
