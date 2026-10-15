@@ -31,6 +31,9 @@ use crate::{Affine, Curve, Projective, msm};
 /// assert!(laws::abelian_group(g, g + g, Projective::identity()));
 /// ```
 #[must_use]
+// `a + b == b + a` is the commutativity law, not a mistake: clippy reads
+// the two sides as equal expressions because `+` is commutative.
+#[allow(clippy::eq_op)]
 pub fn abelian_group<C>(a: Projective<C>, b: Projective<C>, c: Projective<C>) -> bool
 where
     C: Curve,

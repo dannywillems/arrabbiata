@@ -34,6 +34,9 @@ where
 /// assert!(laws::additive_group(Goldilocks::new(1), Goldilocks::new(2), Goldilocks::new(3)));
 /// ```
 #[must_use]
+// `a + b == b + a` is the commutativity law, not a mistake: clippy reads
+// the two sides as equal expressions because `+` is commutative.
+#[allow(clippy::eq_op)]
 pub fn additive_group<F>(a: F, b: F, c: F) -> bool
 where
     F: Field,

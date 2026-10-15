@@ -15,13 +15,11 @@ arrabbiata-bn254 = { path = "crates/ec/bn254" }
 arrabbiata-commit = { path = "crates/commitment/commit" }
 arrabbiata-curve = { path = "crates/ec/curve" }
 arrabbiata-field = { path = "crates/algebra/field" }
-arrabbiata-folding = { path = "crates/accumulation/folding" }
 arrabbiata-frontend = { path = "crates/arithmetization/frontend" }
 arrabbiata-grumpkin = { path = "crates/ec/grumpkin" }
 arrabbiata-ipa = { path = "crates/commitment/ipa" }
 arrabbiata-kzg = { path = "crates/commitment/kzg" }
 arrabbiata-pasta = { path = "crates/ec/pasta" }
-arrabbiata-plonk = { path = "crates/snark/plonk" }
 arrabbiata-poly = { path = "crates/algebra/poly" }
 arrabbiata-poseidon = { path = "crates/oracle/poseidon" }
 arrabbiata-relation = { path = "crates/arithmetization/relation" }

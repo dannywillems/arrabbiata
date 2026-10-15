@@ -1539,9 +1539,9 @@ where
     let ring = Scalars::new();
     let mut lhs = F::ZERO;
     let mut power = F::ONE;
-    for gadget in 0..Q {
+    for (gadget, selector) in evaluations.selectors.iter().enumerate() {
         for c in G::constraints(gadget) {
-            lhs = lhs + power * evaluations.selectors[gadget] * evaluate(&ring, &c, &view);
+            lhs = lhs + power * *selector * evaluate(&ring, &c, &view);
             power = power * alpha;
         }
     }
