@@ -18,10 +18,14 @@
 //! heterogeneous list of prover messages and verifier challenges whose shape
 //! is known at the type level, and the permutation is a parameter.
 //!
-//! Protocols instantiate the sponge with Poseidon (`arrabbiata-poseidon`).
+//! Protocols are generic over the transcript. Two oracles exist: the duplex
+//! sponge over a field permutation (Poseidon in `arrabbiata-poseidon`), and
+//! [`hash::HashTranscript`], a hash chain over any byte hash, for protocols
+//! (post-quantum ones) that have no reason to use an arithmetic sponge.
 
 #![no_std]
 
+pub mod hash;
 pub mod hlist;
 pub mod typed;
 

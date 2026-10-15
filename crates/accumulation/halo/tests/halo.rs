@@ -1,9 +1,10 @@
 //! The laws of [`Accumulation`], as generic functions run on every scheme
 //! and on more than one oracle:
 //!
-//! - IPA over Pallas, with the Poseidon duplex sponge and with Kimchi's
-//!   sponge;
-//! - KZG over BN254, with the Poseidon duplex sponge.
+//! - IPA over Pallas, with the Poseidon duplex sponge, Kimchi's sponge,
+//!   and the hash transcript over SHA-256;
+//! - KZG over BN254, with the Poseidon duplex sponge and the hash
+//!   transcript.
 //!
 //! The laws:
 //!
@@ -32,8 +33,12 @@ use arrabbiata_poseidon::{
     pallas_sponge, vesta_sponge,
 };
 use arrabbiata_reduction::{Each, Reduction, Relation, Then, laws};
-use arrabbiata_transcript::Transcript;
+use arrabbiata_transcript::{
+    Transcript,
+    hash::{ByteHash, HashTranscript},
+};
 use proptest::prelude::*;
+use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 
 /// The key size.
@@ -74,6 +79,28 @@ fn kimchi_vesta() -> KimchiSponge<Fq> {
 
 fn poseidon_bn254() -> PoseidonSponge<Fr> {
     bn254_scalar_sponge(PROOF_DOMAIN)
+}
+
+/// SHA-256 as a `ByteHash`: the hash oracle, next to the sponges.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Sha;
+
+impl ByteHash for Sha {
+    fn hash(&self, parts: &[&[u8]]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for part in parts {
+            hasher.update(part);
+        }
+        hasher.finalize().into()
+    }
+}
+
+fn hash_vesta() -> HashTranscript<Fq, Sha> {
+    HashTranscript::new(Sha, PROOF_DOMAIN)
+}
+
+fn hash_bn254() -> HashTranscript<Fr, Sha> {
+    HashTranscript::new(Sha, PROOF_DOMAIN)
 }
 
 /// A batch of claims as integers: polynomials and points.
@@ -249,22 +276,26 @@ proptest! {
     fn ipa_openings(raw in arb_raw(), which in any::<usize>()) {
         opening_laws(ipa(), poseidon_vesta, &raw, which)?;
         opening_laws(ipa(), kimchi_vesta, &raw, which)?;
+        opening_laws(ipa(), hash_vesta, &raw, which)?;
     }
 
     #[test]
     fn kzg_openings(raw in arb_raw(), which in any::<usize>()) {
         opening_laws(kzg(), poseidon_bn254, &raw, which)?;
+        opening_laws(kzg(), hash_bn254, &raw, which)?;
     }
 
     #[test]
     fn ipa_accumulation(raws in prop::collection::vec(arb_raw(), 1..4)) {
         accumulation_laws(ipa(), poseidon_vesta, &raws)?;
         accumulation_laws(ipa(), kimchi_vesta, &raws)?;
+        accumulation_laws(ipa(), hash_vesta, &raws)?;
     }
 
     #[test]
     fn kzg_accumulation(raws in prop::collection::vec(arb_raw(), 1..4)) {
         accumulation_laws(kzg(), poseidon_bn254, &raws)?;
+        accumulation_laws(kzg(), hash_bn254, &raws)?;
     }
 
     #[test]
