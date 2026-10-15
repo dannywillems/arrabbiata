@@ -14,12 +14,15 @@
 //!   multiplies by, eight crumbs per row;
 //! - [`generic`]: the Generic gate, two PlonK half-gates per row;
 //! - [`poseidon`]: the Poseidon gate, five rounds per row;
+//! - [`range_check`]: the RangeCheck0 and RangeCheck1 gates, three 88-bit
+//!   values on four rows, with 12-bit lookups;
 //! - [`varbasemul`]: the VarBaseMul gate, five steps of a variable-base
 //!   scalar multiplication on two rows.
 //!
 //! Their figures, which `tests/figures.rs` checks against the ones Kimchi
 //! itself computes (each gate is one selector; degrees are without it, a
-//! cell counting 1):
+//! cell counting 1). RangeCheck0 also looks up columns 3-6 of its row, and
+//! RangeCheck1 columns 3-6 of its row and the next, in the 12-bit table:
 //!
 //! | gate        | constraints | max degree | rows | witness cells read        | coefficients |
 //! | ----------- | ----------- | ---------- | ---- | ------------------------- | ------------ |
@@ -28,15 +31,20 @@
 //! | CompleteAdd | 7           | 3          | 1    | 0-10                      | none         |
 //! | EndoMul     | 12          | 4          | 1    | 0-2, 4-14, next row 4-6   | none         |
 //! | EndoMulScalar | 11        | 4          | 1    | 0-13                      | none         |
+//! | RangeCheck0 | 10          | 4          | 1    | 0-14, next row 0-1        | 0            |
+//! | RangeCheck1 | 21          | 4          | 2    | 0, 2-14, next row 0-2, 7-14 | none       |
 //! | VarBaseMul  | 21          | 6          | 2    | 0-5, 7-14, next row 0-11  | none         |
 
 #![no_std]
+
+extern crate alloc;
 
 pub mod complete_add;
 pub mod endomul;
 pub mod endomul_scalar;
 pub mod generic;
 pub mod poseidon;
+pub mod range_check;
 pub mod varbasemul;
 
 use arrabbiata_gadget::Layout;
@@ -50,9 +58,14 @@ pub const PERMUTS: usize = 7;
 /// The number of coefficient (fixed) columns.
 pub const COEFFICIENTS: usize = 15;
 
-/// Kimchi's table.
+/// The fixed columns holding the lookup tables, after the coefficients:
+/// three, the widest table (Xor16's) having three columns.
+pub const TABLE_COLUMNS: [usize; 3] = [COEFFICIENTS, COEFFICIENTS + 1, COEFFICIENTS + 2];
+
+/// Kimchi's table: its witness and coefficient columns, and the columns of
+/// its lookup tables.
 pub const LAYOUT: Layout = Layout {
     witness: COLUMNS,
-    fixed: COEFFICIENTS,
+    fixed: COEFFICIENTS + TABLE_COLUMNS.len(),
     permuted: PERMUTS,
 };

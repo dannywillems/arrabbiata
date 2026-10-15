@@ -23,6 +23,7 @@ use arrabbiata_kimchi_gadgets::{
     endomul_scalar::EndoMulScalar,
     generic::{GenericRow, GenericSpec},
     poseidon::PoseidonPermutation,
+    range_check::{MultiRangeCheck, range_check_table},
     varbasemul::VarBaseMul,
 };
 use arrabbiata_pasta::{Fp, Pallas};
@@ -42,6 +43,9 @@ struct Kimchi {
     next: Vec<usize>,
     /// The coefficient columns read.
     coefficients: Vec<usize>,
+    /// The cells Kimchi looks up (its lookup patterns), as (column,
+    /// rotation).
+    lookups: Vec<(usize, usize)>,
 }
 
 fn range(n: usize) -> Vec<usize> {
@@ -97,6 +101,7 @@ fn kimchi() -> Vec<Kimchi> {
             current: range(6),
             next: vec![],
             coefficients: range(10),
+            lookups: vec![],
         },
         Kimchi {
             gadget: "kimchi-poseidon",
@@ -106,6 +111,7 @@ fn kimchi() -> Vec<Kimchi> {
             current: range(15),
             next: range(3),
             coefficients: range(15),
+            lookups: vec![],
         },
         Kimchi {
             gadget: "kimchi-complete-add",
@@ -115,6 +121,7 @@ fn kimchi() -> Vec<Kimchi> {
             current: range(11),
             next: vec![],
             coefficients: vec![],
+            lookups: vec![],
         },
         Kimchi {
             gadget: "kimchi-endomul",
@@ -124,6 +131,7 @@ fn kimchi() -> Vec<Kimchi> {
             current: [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].to_vec(),
             next: vec![4, 5, 6],
             coefficients: vec![],
+            lookups: vec![],
         },
         Kimchi {
             gadget: "kimchi-endomul-scalar",
@@ -133,6 +141,29 @@ fn kimchi() -> Vec<Kimchi> {
             current: range(14),
             next: vec![],
             coefficients: vec![],
+            lookups: vec![],
+        },
+        Kimchi {
+            gadget: "kimchi-range-check-0",
+            constraints: 10,
+            source: "kimchi/src/circuits/polynomials/range_check/circuitgates.rs:177",
+            degrees: degrees("RangeCheck0"),
+            current: range(15),
+            next: vec![0, 1],
+            coefficients: vec![0],
+            // The RangeCheck pattern on its row: columns 3-6.
+            lookups: (3..=6).map(|c| (c, 0)).collect(),
+        },
+        Kimchi {
+            gadget: "kimchi-range-check-1",
+            constraints: 21,
+            source: "kimchi/src/circuits/polynomials/range_check/circuitgates.rs:281",
+            degrees: degrees("RangeCheck1"),
+            current: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].to_vec(),
+            next: [0, 1, 2, 7, 8, 9, 10, 11, 12, 13, 14].to_vec(),
+            coefficients: vec![],
+            // The RangeCheck pattern on its row and the next: columns 3-6.
+            lookups: (3..=6).flat_map(|c| [(c, 0), (c, 1)]).collect(),
         },
         Kimchi {
             gadget: "kimchi-varbasemul",
@@ -142,6 +173,7 @@ fn kimchi() -> Vec<Kimchi> {
             current: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14].to_vec(),
             next: range(12),
             coefficients: vec![],
+            lookups: vec![],
         },
     ]
 }
@@ -154,6 +186,7 @@ enum Harness<'a> {
     CompleteAdd,
     EndoMul,
     EndoMulScalar,
+    RangeCheck,
     VarBaseMul,
 }
 
@@ -194,6 +227,14 @@ impl TypedGadget<Fp> for Harness<'_> {
                 let crumbs: [E::Var; 8] = core::array::from_fn(|_| env.constant(Fp::ZERO));
                 env.call(&EndoMulScalar::<8>, crumbs);
             }
+            Self::RangeCheck => {
+                let values: [E::Var; 3] =
+                    core::array::from_fn(|i| env.advice(Cell::new(0, i), [], |[]| Fp::ZERO));
+                let gadget = MultiRangeCheck {
+                    table: range_check_table(),
+                };
+                env.call(&gadget, values);
+            }
             Self::VarBaseMul => {
                 let cells: [E::Var; 4] = core::array::from_fn(&mut cell);
                 let bits: [E::Var; 5] = core::array::from_fn(|_| env.constant(Fp::ZERO));
@@ -207,16 +248,17 @@ impl TypedGadget<Fp> for Harness<'_> {
 #[test]
 fn every_gate_has_kimchis_figures() {
     let poseidon = pallas_base();
-    let harnesses = [
-        Harness::Generic,
-        Harness::Poseidon(&poseidon),
-        Harness::CompleteAdd,
-        Harness::EndoMul,
-        Harness::EndoMulScalar,
-        Harness::VarBaseMul,
-    ];
-    for (harness, expected) in harnesses.iter().zip(kimchi()) {
-        let f = figures(harness, LAYOUT).unwrap();
+    for expected in kimchi() {
+        let harness = match expected.gadget {
+            "kimchi-generic" => Harness::Generic,
+            "kimchi-poseidon" => Harness::Poseidon(&poseidon),
+            "kimchi-complete-add" => Harness::CompleteAdd,
+            "kimchi-endomul" => Harness::EndoMul,
+            "kimchi-endomul-scalar" => Harness::EndoMulScalar,
+            "kimchi-range-check-0" | "kimchi-range-check-1" => Harness::RangeCheck,
+            _ => Harness::VarBaseMul,
+        };
+        let f = figures(&harness, LAYOUT).unwrap();
         let kinds = f.gates_of(expected.gadget);
         let [gate] = kinds[..] else {
             panic!(
@@ -246,6 +288,11 @@ fn every_gate_has_kimchis_figures() {
         let coefficients: Vec<(usize, usize)> =
             expected.coefficients.iter().map(|c| (*c, 0)).collect();
         assert_eq!(gate.fixed_cells, coefficients, "{}", expected.gadget);
+        let mut looked_up = gate.read_cells.clone();
+        looked_up.sort_unstable();
+        let mut lookups = expected.lookups.clone();
+        lookups.sort_unstable();
+        assert_eq!(looked_up, lookups, "{}", expected.gadget);
     }
 }
 
