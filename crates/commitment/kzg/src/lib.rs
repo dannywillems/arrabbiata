@@ -25,7 +25,10 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use arrabbiata_commit::{HomomorphicCommitment, PolynomialCommitment, Univariate};
+use arrabbiata_commit::{
+    BatchOpening, HomomorphicCommitment, LinearCommitment, PolynomialCommitment, Univariate,
+    open_combined, verify_combined,
+};
 use arrabbiata_curve::{Curve, Pairing, Projective, msm};
 use arrabbiata_field::{Field, PrimeField, powers};
 use arrabbiata_transcript::typed::Label;
@@ -187,5 +190,48 @@ where
 
     fn scale(&self, a: &Projective<E::G1>, s: Scalar<E>) -> Projective<E::G1> {
         *a * s
+    }
+}
+
+impl<E> LinearCommitment<Scalar<E>> for Kzg<E>
+where
+    E: Pairing,
+    <E::G1 as Curve>::Base: PrimeField,
+{
+    fn combine(&self, terms: &[(Scalar<E>, &Projective<E::G1>)]) -> Projective<E::G1> {
+        let mut sum = Projective::identity();
+        for (s, c) in terms {
+            sum = sum + **c * *s;
+        }
+        sum
+    }
+}
+
+/// One opening of the combination by powers of `nu`.
+impl<E> BatchOpening<Scalar<E>> for Kzg<E>
+where
+    E: Pairing,
+    <E::G1 as Curve>::Base: PrimeField,
+{
+    type BatchProof = <Self as PolynomialCommitment<Scalar<E>>>::Proof;
+
+    fn open_batch(
+        &self,
+        polynomials: &[&[Scalar<E>]],
+        point: &Scalar<E>,
+        nu: Scalar<E>,
+    ) -> (Vec<Scalar<E>>, Self::BatchProof) {
+        open_combined(self, polynomials, point, nu)
+    }
+
+    fn verify_batch(
+        &self,
+        commitments: &[&Self::Commitment],
+        point: &Scalar<E>,
+        values: &[Scalar<E>],
+        nu: Scalar<E>,
+        proof: &Self::BatchProof,
+    ) -> bool {
+        verify_combined(self, commitments, point, values, nu, proof)
     }
 }

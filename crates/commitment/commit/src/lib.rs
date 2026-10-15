@@ -14,6 +14,11 @@
 //!   (univariate or multilinear), with evaluation proofs. SNARKs compiled
 //!   from polynomial IOPs need this.
 //!
+//! [`BatchOpening`] opens many polynomials at one point, as protocols need.
+//! Every scheme has one ([`Unbatched`], a proof per polynomial); a
+//! [`LinearCommitment`], whose commitments combine linearly, has one with
+//! a single proof ([`open_combined`], [`verify_combined`]).
+//!
 //! The schemes live in sibling crates (`arrabbiata-ipa`, `arrabbiata-kzg`).
 //! Security assumptions (binding, hiding) are properties of a concrete
 //! scheme and are stated by each implementation, not by the traits.
@@ -22,8 +27,13 @@
 
 extern crate alloc;
 
+pub mod batch;
 pub mod pcs;
 
+pub use batch::{
+    BatchOpening, LinearCommitment, Point, Proofs, Unbatched, combine_polynomials, combine_values,
+    open_combined, verify_combined,
+};
 pub use pcs::{Multilinear, PolynomialCommitment, PolynomialFamily, Univariate};
 
 use core::fmt::Debug;
