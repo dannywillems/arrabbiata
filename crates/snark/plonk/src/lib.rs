@@ -111,10 +111,9 @@
 
 extern crate alloc;
 
-pub mod circuit;
-pub mod gate;
 pub mod ipa;
 pub mod kzg;
+pub mod relaxed;
 pub mod vanilla;
 
 use alloc::{collections::BTreeSet, vec, vec::Vec};
@@ -133,8 +132,10 @@ use arrabbiata_transcript::{
     },
 };
 
-pub use crate::{
+pub use arrabbiata_plonkish::{
+    CircuitError, circuit,
     circuit::{Builder, Cell, Circuit, Witness},
+    gate,
     gate::{Gadget, GateSet, Member},
 };
 
@@ -738,13 +739,7 @@ where
         absorb_length(transcript, W);
         absorb_length(transcript, X);
         absorb_length(transcript, Q);
-        for gadget in 0..Q {
-            let constraints = G::constraints(gadget);
-            absorb_length(transcript, constraints.len());
-            for c in &constraints {
-                absorb_expr(c, transcript);
-            }
-        }
+        gate::absorb_gates::<F, G, T, W, X>(transcript);
         for shift in &self.shifts {
             transcript.absorb(*shift);
         }
@@ -754,46 +749,6 @@ where
         absorb_length(transcript, self.public_rows.len());
         for row in &self.public_rows {
             absorb_length(transcript, *row);
-        }
-    }
-}
-
-/// Absorb `e` in prefix form, one tag per node: an injective encoding of
-/// the expression tree.
-fn absorb_expr<F, T, const W: usize, const X: usize>(e: &Expr<F, W, X>, transcript: &mut T)
-where
-    F: Field,
-    T: Transcript<F>,
-{
-    let rotation = |r: Rotation| r.code() as usize;
-    match e {
-        Expr::Constant(c) => {
-            absorb_length(transcript, 0);
-            transcript.absorb(*c);
-        }
-        Expr::Variable(Variable::Witness(col, r)) => {
-            absorb_length(transcript, 1);
-            absorb_length(transcript, col.index());
-            absorb_length(transcript, rotation(*r));
-        }
-        Expr::Variable(Variable::Fixed(col, r)) => {
-            absorb_length(transcript, 2);
-            absorb_length(transcript, col.index());
-            absorb_length(transcript, rotation(*r));
-        }
-        Expr::Neg(a) => {
-            absorb_length(transcript, 3);
-            absorb_expr(a, transcript);
-        }
-        Expr::Add(a, b) => {
-            absorb_length(transcript, 4);
-            absorb_expr(a, transcript);
-            absorb_expr(b, transcript);
-        }
-        Expr::Mul(a, b) => {
-            absorb_length(transcript, 5);
-            absorb_expr(a, transcript);
-            absorb_expr(b, transcript);
         }
     }
 }
@@ -953,6 +908,81 @@ impl fmt::Display for PlonkError {
 }
 
 impl core::error::Error for PlonkError {}
+
+/// A circuit that cannot be built is a [`PlonkError::Shape`] or a
+/// [`PlonkError::Rotation`].
+///
+/// ```
+/// use arrabbiata_plonk::{CircuitError, PlonkError};
+/// assert_eq!(PlonkError::from(CircuitError::Rotation), PlonkError::Rotation);
+/// ```
+impl From<CircuitError> for PlonkError {
+    fn from(e: CircuitError) -> Self {
+        match e {
+            CircuitError::Shape => Self::Shape,
+            CircuitError::Rotation => Self::Rotation,
+        }
+    }
+}
+
+/// The sizes PlonK needs for a circuit: how much larger than the domain
+/// the quotient is, and how many coefficients a commitment must accept.
+///
+/// ```
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
+/// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
+/// // q * q_M a b has degree 4, and so has z (a + ..) (b + ..) (c + ..).
+/// assert_eq!(c.quotient_factor(), 4);
+/// assert_eq!(c.max_coefficients(), 3 * c.num_rows());
+/// ```
+pub trait QuotientSizing {
+    /// The largest total degree of a gated constraint (selector included),
+    /// and of the copy and public-input identities: the quotient has fewer
+    /// than `(quotient_factor() - 1) n` coefficients.
+    ///
+    /// ```
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
+    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
+    /// assert_eq!(c.quotient_factor(), 4);
+    /// ```
+    fn quotient_factor(&self) -> usize;
+
+    /// The number of coefficients a polynomial commitment for this circuit
+    /// must accept: the size of the quotient, or of a column if larger.
+    ///
+    /// ```
+    /// use arrabbiata_pasta::Fq as F;
+    /// use arrabbiata_plonk::{QuotientSizing, circuit::Builder, vanilla::Vanilla};
+    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
+    /// assert_eq!(c.max_coefficients(), 3 * c.num_rows());
+    /// ```
+    fn max_coefficients(&self) -> usize;
+}
+
+impl<F, G, const W: usize, const X: usize, const Q: usize> QuotientSizing for Circuit<F, G, W, X, Q>
+where
+    F: Field,
+    G: GateSet<F, W, X>,
+{
+    fn quotient_factor(&self) -> usize {
+        // The permutation term has degree W + 1, the boundary and
+        // public-input terms 2, and a gated constraint its total degree plus
+        // the selector.
+        let mut factor = (W + 1).max(2);
+        for gadget in 0..G::SELECTORS {
+            for c in G::constraints(gadget) {
+                factor = factor.max(gate::total_degree(&c) + 1);
+            }
+        }
+        factor
+    }
+
+    fn max_coefficients(&self) -> usize {
+        ((self.quotient_factor() - 1) * self.num_rows()).max(self.num_rows())
+    }
+}
 
 fn interpolate<F>(domain: &Domain<F>, values: &[F]) -> Result<UniPoly<F>, PlonkError>
 where
@@ -1207,13 +1237,10 @@ where
     if honest && !pk.circuit.is_satisfied(witness) {
         return Err(PlonkError::Unsatisfied);
     }
-    let domain = &pk.domain;
-    let n = domain.size();
-    let columns = witness.columns();
     let commit = |p: &UniPoly<F>| pcs.commit(p.coefficients());
 
     // Round 1: the witness columns.
-    let wires = interpolate_all(domain, columns)?;
+    let wires = interpolate_all(&pk.domain, witness.columns())?;
     let tape = prover_tape::<F, S, Plonk<F, PC, S, G, W, X, Q>>(transcript)
         .public(&pk.vk)
         .public(&PublicInputs(witness.public_inputs().to_vec()))
@@ -1221,7 +1248,63 @@ where
     let (beta, tape) = tape.challenge();
     let (gamma, tape) = tape.challenge();
 
-    // Round 2: grand product z(w^0) = 1, z(w^(i+1)) = z(w^i) * num_i / den_i.
+    // Round 2: the grand product of the copy constraints.
+    let z = grand_product(pk, witness.columns(), beta, gamma)?;
+    let tape = tape.send(Scheme::new(commit(&z)));
+    let (alpha, tape) = tape.challenge();
+
+    // Round 3: the quotient. The gate term is
+    // sum_j alpha^j q_g(j) C_j, over the J constraints of all gadgets.
+    let constraints: Vec<Vec<Expr<F, W, X>>> = (0..Q).map(|g| G::constraints(g)).collect();
+    let ring = Scalars::new();
+    let gates = |view: &CosetView<'_, F, W, X>, selectors: &[F], _: &[F]| -> (F, F) {
+        let mut acc = F::ZERO;
+        let mut power = F::ONE;
+        for (selector, gadget) in selectors.iter().zip(&constraints) {
+            for c in gadget {
+                acc = acc + power * *selector * evaluate(&ring, c, view);
+                power = power * alpha;
+            }
+        }
+        (acc, power)
+    };
+    let t = quotient(
+        pk,
+        &wires,
+        &z,
+        witness.public_inputs(),
+        &[],
+        (beta, gamma, alpha),
+        honest,
+        gates,
+    )?;
+    let tape = tape.send(Scheme::new(commit(&t)));
+    let (zeta, tape) = tape.challenge();
+
+    // Round 4: evaluations and openings.
+    let opened = open_all(pk, pcs, &wires, &z, &t, zeta);
+    let evaluations = opened.clone().map(|(v, _)| v);
+    let proofs = opened.map(|(_, p)| p);
+    let (_, proof) = tape.send(evaluations).send(Scheme::new(proofs)).finish();
+    Ok(proof)
+}
+
+/// The grand product of the copy-constraint argument:
+/// `z(w^0) = 1`, `z(w^(i+1)) = z(w^i) * num_i / den_i`.
+fn grand_product<F, PC, G, const W: usize, const X: usize, const Q: usize>(
+    pk: &ProverKey<F, PC, G, W, X, Q>,
+    columns: &[Vec<F>; W],
+    beta: F,
+    gamma: F,
+) -> Result<UniPoly<F>, PlonkError>
+where
+    F: TwoAdicField,
+    PC: PolynomialCommitment<F, Family = Univariate>,
+    G: GateSet<F, W, X>,
+{
+    let key = &pk.vk.value;
+    let domain = &pk.domain;
+    let n = domain.size();
     let mut z_values = vec![F::ONE; n];
     let mut i = 0;
     while i + 1 < n {
@@ -1236,11 +1319,37 @@ where
         z_values[i + 1] = z_values[i] * num * den.inverse().ok_or(PlonkError::Unsatisfied)?;
         i += 1;
     }
-    let z = interpolate(domain, &z_values)?;
-    let tape = tape.send(Scheme::new(commit(&z)));
-    let (alpha, tape) = tape.challenge();
+    interpolate(domain, &z_values)
+}
 
-    // Round 3: the quotient, pointwise on the coset g H_E.
+/// The quotient `t`, pointwise on the coset `g H_E`: the gate term given by
+/// `gates`, then `alpha`-weighted the public-input, permutation and
+/// boundary terms, divided by `Z_H`.
+///
+/// `gates` receives the view of the columns at a point, the selectors at
+/// that point, and the values at that point of the polynomials `extra`;
+/// it returns the gate term and the power of `alpha` the next term starts
+/// at. `honest` refuses a numerator that `Z_H` does not divide.
+#[allow(clippy::too_many_arguments)]
+fn quotient<F, PC, G, Gt, const W: usize, const X: usize, const Q: usize>(
+    pk: &ProverKey<F, PC, G, W, X, Q>,
+    wires: &[UniPoly<F>; W],
+    z: &UniPoly<F>,
+    public_inputs: &[F],
+    extra: &[UniPoly<F>],
+    (beta, gamma, alpha): (F, F, F),
+    honest: bool,
+    mut gates: Gt,
+) -> Result<UniPoly<F>, PlonkError>
+where
+    F: TwoAdicField,
+    PC: PolynomialCommitment<F, Family = Univariate>,
+    G: GateSet<F, W, X>,
+    Gt: FnMut(&CosetView<'_, F, W, X>, &[F], &[F]) -> (F, F),
+{
+    let key = &pk.vk.value;
+    let domain = &pk.domain;
+    let n = domain.size();
     let factor = pk.circuit.quotient_factor();
     let ext = Domain::<F>::containing(factor * n).ok_or(PlonkError::DomainTooLarge)?;
     let size = ext.size();
@@ -1254,23 +1363,23 @@ where
         }
         Ok(values)
     };
-    let wire_values: [Vec<F>; W] = into_array(on_coset_all(&wires)?);
+    let wire_values: [Vec<F>; W] = into_array(on_coset_all(wires)?);
     let fixed_values: [Vec<F>; X] = into_array(on_coset_all(&pk.fixed)?);
     let selector_values = on_coset_all(&pk.selectors)?;
     let sigma_values = on_coset_all(&pk.sigmas)?;
-    let z_coset = on_coset(&z)?;
+    let extra_values = on_coset_all(extra)?;
+    let z_coset = on_coset(z)?;
     let mut first = vec![F::ZERO; n];
     first[0] = F::ONE;
     let l1 = on_coset(&interpolate(domain, &first)?)?;
     let mut public_indicator = vec![F::ZERO; n];
     let mut public_values = vec![F::ZERO; n];
-    for (row, value) in key.public_rows.iter().zip(witness.public_inputs()) {
+    for (row, value) in key.public_rows.iter().zip(public_inputs) {
         public_indicator[*row] = F::ONE;
         public_values[*row] = *value;
     }
     let lp = on_coset(&interpolate(domain, &public_indicator)?)?;
     let pi = on_coset(&interpolate(domain, &public_values)?)?;
-    let constraints: Vec<Vec<Expr<F, W, X>>> = (0..Q).map(|g| G::constraints(g)).collect();
 
     // x_i = shift w_E^i, and Z_H(x_i) = x_i^n - 1 has period E / n in i.
     let shift_n = shift.pow(n as u64);
@@ -1282,8 +1391,9 @@ where
         vanishing_inverse.push(zh.inverse().ok_or(PlonkError::CosetShifts)?);
         power = power * root_n;
     }
-    let ring = Scalars::new();
     let mut t_values = vec![F::ZERO; size];
+    let mut selectors_here = vec![F::ZERO; Q];
+    let mut extra_here = vec![F::ZERO; extra.len()];
     let mut x = shift;
     let mut point = 0;
     while point < size {
@@ -1293,14 +1403,13 @@ where
             point,
             step,
         };
-        let mut acc = F::ZERO;
-        let mut power = F::ONE;
-        for (selector, gadget) in selector_values.iter().zip(&constraints) {
-            for c in gadget {
-                acc = acc + power * selector[point] * evaluate(&ring, c, &view);
-                power = power * alpha;
-            }
+        for (s, values) in selectors_here.iter_mut().zip(&selector_values) {
+            *s = values[point];
         }
+        for (e, values) in extra_here.iter_mut().zip(&extra_values) {
+            *e = values[point];
+        }
+        let (mut acc, mut power) = gates(&view, &selectors_here, &extra_here);
         if W > 0 {
             acc = acc + power * (lp[point] * wire_values[0][point] - pi[point]);
         }
@@ -1338,22 +1447,36 @@ where
         }
         power = power * shift_inverse;
     }
-    let t = UniPoly::new(t_coefficients);
-    let tape = tape.send(Scheme::new(commit(&t)));
-    let (zeta, tape) = tape.challenge();
+    Ok(UniPoly::new(t_coefficients))
+}
 
-    // Round 4: evaluations and openings.
+/// Every opening of the protocol at `zeta` (and `zeta w^k`), with its
+/// value.
+fn open_all<F, PC, G, const W: usize, const X: usize, const Q: usize>(
+    pk: &ProverKey<F, PC, G, W, X, Q>,
+    pcs: &PC,
+    wires: &[UniPoly<F>; W],
+    z: &UniPoly<F>,
+    t: &UniPoly<F>,
+    zeta: F,
+) -> Opened<(F, Prf<F, PC>), W, X, Q>
+where
+    F: TwoAdicField,
+    PC: PolynomialCommitment<F, Family = Univariate>,
+    G: GateSet<F, W, X>,
+{
+    let domain = &pk.domain;
     let zeta_w = zeta * domain.generator();
     let (rotated_witness, rotated_fixed) = rotations::<F, G, W, X>();
     let at = |p: &UniPoly<F>, point: &F| pcs.open(p.coefficients(), point);
-    let opened = Opened::<(F, Prf<F, PC>), W, X, Q> {
+    Opened::<(F, Prf<F, PC>), W, X, Q> {
         witness: array::from_fn(|k| at(&wires[k], &zeta)),
         fixed: array::from_fn(|k| at(&pk.fixed[k], &zeta)),
         selectors: array::from_fn(|k| at(&pk.selectors[k], &zeta)),
         sigmas: array::from_fn(|k| at(&pk.sigmas[k], &zeta)),
-        z: at(&z, &zeta),
-        t: at(&t, &zeta),
-        z_next: at(&z, &zeta_w),
+        z: at(z, &zeta),
+        t: at(t, &zeta),
+        z_next: at(z, &zeta_w),
         witness_rotated: rotated_witness
             .iter()
             .map(|(k, r)| at(&wires[*k], &(zeta * root_power(domain, *r))))
@@ -1362,11 +1485,7 @@ where
             .iter()
             .map(|(k, r)| at(&pk.fixed[*k], &(zeta * root_power(domain, *r))))
             .collect(),
-    };
-    let evaluations = opened.clone().map(|(v, _)| v);
-    let proofs = opened.map(|(_, p)| p);
-    let (_, proof) = tape.send(evaluations).send(Scheme::new(proofs)).finish();
-    Ok(proof)
+    }
 }
 
 /// The claimed evaluations, as an assignment of the variables of a
@@ -1490,6 +1609,66 @@ where
         proofs.value,
     );
 
+    check_openings::<F, PC, G, W, X, Q>(
+        key,
+        pcs,
+        &domain,
+        (&wires, &z_commitment, &t_commitment),
+        zeta,
+        &evaluations,
+        &proofs,
+    )?;
+
+    // The gate term at zeta: sum_j alpha^j q_g(j) C_j.
+    let (rotated_witness, rotated_fixed) = rotations::<F, G, W, X>();
+    let view = OpenedView {
+        opened: &evaluations,
+        rotated_witness: &rotated_witness,
+        rotated_fixed: &rotated_fixed,
+    };
+    let ring = Scalars::new();
+    let mut lhs = F::ZERO;
+    let mut power = F::ONE;
+    for (gadget, selector) in evaluations.selectors.iter().enumerate() {
+        for c in G::constraints(gadget) {
+            lhs = lhs + power * *selector * evaluate(&ring, &c, &view);
+            power = power * alpha;
+        }
+    }
+    lhs = lhs
+        + identity_rest(
+            key,
+            &domain,
+            &evaluations,
+            public_inputs,
+            (beta, gamma, alpha),
+            power,
+            zeta,
+        );
+    if lhs == evaluations.t * domain.vanishing_at(zeta) {
+        Ok(())
+    } else {
+        Err(PlonkError::IdentityFailed)
+    }
+}
+
+/// Check that the proof opens every rotated column the gate set reads, and
+/// every opening against its commitment and point.
+#[allow(clippy::type_complexity)]
+fn check_openings<F, PC, G, const W: usize, const X: usize, const Q: usize>(
+    key: &Preprocessed<F, Com<F, PC>, G, W, X, Q>,
+    pcs: &PC,
+    domain: &Domain<F>,
+    (wires, z_commitment, t_commitment): (&[Com<F, PC>; W], &Com<F, PC>, &Com<F, PC>),
+    zeta: F,
+    evaluations: &Opened<F, W, X, Q>,
+    proofs: &Opened<Prf<F, PC>, W, X, Q>,
+) -> Result<(), PlonkError>
+where
+    F: TwoAdicField,
+    PC: PolynomialCommitment<F, Family = Univariate>,
+    G: GateSet<F, W, X>,
+{
     let (rotated_witness, rotated_fixed) = rotations::<F, G, W, X>();
     if evaluations.witness_rotated.len() != rotated_witness.len()
         || evaluations.fixed_rotated.len() != rotated_fixed.len()
@@ -1502,15 +1681,15 @@ where
     // The commitment and the point of every opening, in the same shape as
     // the evaluations and the proofs, so the three are zipped by one
     // traversal.
-    let at = |r: Rotation| zeta * root_power(&domain, r);
+    let at = |r: Rotation| zeta * root_power(domain, r);
     let claims = Opened::<(&Com<F, PC>, F), W, X, Q> {
         witness: array::from_fn(|k| (&wires[k], zeta)),
         fixed: array::from_fn(|k| (&key.fixed[k], zeta)),
         selectors: array::from_fn(|k| (&key.selectors[k], zeta)),
         sigmas: array::from_fn(|k| (&key.sigmas[k], zeta)),
-        z: (&z_commitment, zeta),
-        t: (&t_commitment, zeta),
-        z_next: (&z_commitment, at(Rotation::NEXT)),
+        z: (z_commitment, zeta),
+        t: (t_commitment, zeta),
+        z_next: (z_commitment, at(Rotation::NEXT)),
         witness_rotated: rotated_witness
             .iter()
             .map(|(k, r)| (&wires[*k], at(*r)))
@@ -1529,22 +1708,24 @@ where
             return Err(PlonkError::Opening(i));
         }
     }
+    Ok(())
+}
 
-    // The identity at zeta.
-    let view = OpenedView {
-        opened: &evaluations,
-        rotated_witness: &rotated_witness,
-        rotated_fixed: &rotated_fixed,
-    };
-    let ring = Scalars::new();
+/// The public-input, permutation and boundary terms of the identity at
+/// `zeta`, weighted by `power`, `power alpha` and `power alpha^2`.
+fn identity_rest<F, C, G, const W: usize, const X: usize, const Q: usize>(
+    key: &Preprocessed<F, C, G, W, X, Q>,
+    domain: &Domain<F>,
+    evaluations: &Opened<F, W, X, Q>,
+    public_inputs: &[F],
+    (beta, gamma, alpha): (F, F, F),
+    mut power: F,
+    zeta: F,
+) -> F
+where
+    F: TwoAdicField,
+{
     let mut lhs = F::ZERO;
-    let mut power = F::ONE;
-    for (gadget, selector) in evaluations.selectors.iter().enumerate() {
-        for c in G::constraints(gadget) {
-            lhs = lhs + power * *selector * evaluate(&ring, &c, &view);
-            power = power * alpha;
-        }
-    }
     if W > 0 {
         let mut lp = F::ZERO;
         let mut pi = F::ZERO;
@@ -1565,12 +1746,7 @@ where
     }
     lhs = lhs + power * (left - right);
     power = power * alpha;
-    lhs = lhs + power * domain.first_lagrange_at(zeta) * (evaluations.z - F::ONE);
-    if lhs == evaluations.t * domain.vanishing_at(zeta) {
-        Ok(())
-    } else {
-        Err(PlonkError::IdentityFailed)
-    }
+    lhs + power * domain.first_lagrange_at(zeta) * (evaluations.z - F::ONE)
 }
 
 #[cfg(test)]

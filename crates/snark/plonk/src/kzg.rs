@@ -25,7 +25,7 @@
 use arrabbiata_bn254::{Bn254, Fr};
 use arrabbiata_poseidon::{PoseidonSponge, bn254_scalar_sponge};
 
-use crate::{Circuit, GateSet, Plonk};
+use crate::{Circuit, GateSet, Plonk, QuotientSizing};
 
 /// KZG over BN254.
 pub type Kzg = arrabbiata_kzg::Kzg<Bn254>;
@@ -49,7 +49,7 @@ const DOMAIN: u64 = 0x706c_6f6e_6b5f_6b7a;
 /// use arrabbiata_bn254::Fr;
 /// use arrabbiata_field::Field;
 /// use arrabbiata_frontend::vanilla::build;
-/// use arrabbiata_plonk::kzg;
+/// use arrabbiata_plonk::{QuotientSizing, kzg};
 /// use arrabbiata_plonk::vanilla;
 /// let (c, _, ()) = build::<Fr, _, _>(|_| ());
 /// let circuit = vanilla::circuit(&c).unwrap();
@@ -70,7 +70,7 @@ where
 /// A fresh Poseidon transcript for PlonK over BN254.
 ///
 /// ```
-/// use arrabbiata_plonk::kzg;
+/// use arrabbiata_plonk::{QuotientSizing, kzg};
 /// use arrabbiata_transcript::Transcript;
 /// assert_eq!(kzg::transcript().squeeze(), kzg::transcript().squeeze());
 /// ```

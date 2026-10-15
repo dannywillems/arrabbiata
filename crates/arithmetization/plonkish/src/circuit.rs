@@ -28,7 +28,7 @@
 //! ```
 //! use arrabbiata_field::Field;
 //! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_plonk::{
+//! use arrabbiata_plonkish::{
 //!     circuit::{Builder, Cell},
 //!     gate::Gadget,
 //! };
@@ -65,16 +65,17 @@ use core::{array, fmt, marker::PhantomData};
 
 use arrabbiata_field::Field;
 use arrabbiata_poly::{Assignment, Expr, FixedColumn, Rotation, Scalars, WitnessColumn, evaluate};
+use arrabbiata_transcript::{Absorb, Transcript, absorb_length, typed::Label};
 
 use crate::{
-    PlonkError,
+    CircuitError,
     gate::{self, GateSet, Member, Selector},
 };
 
 /// A witness cell: a column and a row.
 ///
 /// ```
-/// use arrabbiata_plonk::circuit::Cell;
+/// use arrabbiata_plonkish::circuit::Cell;
 /// use arrabbiata_poly::WitnessColumn;
 /// let c = Cell::<3>::new(WitnessColumn::new::<2>(), 5);
 /// assert_eq!(c.index(8), 2 * 8 + 5);
@@ -91,7 +92,7 @@ impl<const W: usize> Cell<W> {
     /// The cell of `column` at `row`.
     ///
     /// ```
-    /// use arrabbiata_plonk::circuit::Cell;
+    /// use arrabbiata_plonkish::circuit::Cell;
     /// use arrabbiata_poly::WitnessColumn;
     /// assert_eq!(Cell::<2>::new(WitnessColumn::new::<1>(), 0).row, 0);
     /// ```
@@ -103,7 +104,7 @@ impl<const W: usize> Cell<W> {
     /// The index of the cell among the `W n` witness cells: `k n + i`.
     ///
     /// ```
-    /// use arrabbiata_plonk::circuit::Cell;
+    /// use arrabbiata_plonkish::circuit::Cell;
     /// use arrabbiata_poly::WitnessColumn;
     /// assert_eq!(Cell::<2>::new(WitnessColumn::new::<1>(), 3).index(4), 7);
     /// ```
@@ -118,7 +119,7 @@ impl<const W: usize> Cell<W> {
 /// ```
 /// use arrabbiata_field::Field;
 /// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::circuit::Witness;
+/// use arrabbiata_plonkish::circuit::Witness;
 /// let w = Witness::new([vec![F::ONE, F::ZERO]], vec![F::ONE]);
 /// assert_eq!(w.public_inputs(), &[F::ONE]);
 /// ```
@@ -136,7 +137,7 @@ impl<F, const W: usize> Witness<F, W> {
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::circuit::Witness;
+    /// use arrabbiata_plonkish::circuit::Witness;
     /// let w = Witness::new([vec![F::ONE; 2], vec![F::ZERO; 2]], vec![]);
     /// assert_eq!(w.columns()[1], vec![F::ZERO; 2]);
     /// ```
@@ -150,7 +151,7 @@ impl<F, const W: usize> Witness<F, W> {
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::circuit::Witness;
+    /// use arrabbiata_plonkish::circuit::Witness;
     /// assert_eq!(Witness::new([vec![F::ONE]], vec![]).columns()[0], vec![F::ONE]);
     /// ```
     #[must_use]
@@ -163,7 +164,7 @@ impl<F, const W: usize> Witness<F, W> {
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::circuit::Witness;
+    /// use arrabbiata_plonkish::circuit::Witness;
     /// assert!(Witness::<F, 1>::new([vec![]], vec![]).public_inputs().is_empty());
     /// ```
     #[must_use]
@@ -178,14 +179,14 @@ impl<F, const W: usize> Witness<F, W> {
 ///
 /// ```compile_fail
 /// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+/// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
 /// // `Vanilla` has one gadget, hence one selector, not two.
 /// let _ = Builder::<F, Vanilla, 3, 5, 2>::new();
 /// ```
 ///
 /// ```
 /// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+/// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
 /// let (circuit, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
 /// assert_eq!(circuit.num_rows(), 2);
 /// ```
@@ -264,7 +265,7 @@ where
     ///
     /// # Errors
     ///
-    /// [`PlonkError::Shape`] if `num_rows` is not a power of two at least
+    /// [`CircuitError::Shape`] if `num_rows` is not a power of two at least
     /// 2, a column or the gadget list does not have `num_rows` entries,
     /// `sigma` is not a permutation of the `W num_rows` cells, or a public
     /// row is out of range, repeated, or given without a witness column to
@@ -273,7 +274,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{PlonkError, circuit::Circuit, gate::Selector, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{CircuitError, circuit::Circuit, gate::Selector, vanilla::Vanilla};
     /// let fixed: [Vec<F>; 5] = std::array::from_fn(|_| vec![F::ZERO; 2]);
     /// let on = Some(Selector::new::<0>());
     /// let identity: Vec<usize> = (0..6).collect();
@@ -281,7 +282,7 @@ where
     /// assert!(ok.is_ok());
     /// // A permutation of 5 cells, not 6.
     /// let bad = Circuit::<F, Vanilla, 3, 5, 1>::new(2, fixed, vec![on, None], (0..5).collect(), vec![]);
-    /// assert_eq!(bad.unwrap_err(), PlonkError::Shape);
+    /// assert_eq!(bad.unwrap_err(), CircuitError::Shape);
     /// ```
     pub fn new(
         num_rows: usize,
@@ -289,31 +290,31 @@ where
         gadgets: Vec<Option<Selector<Q>>>,
         sigma: Vec<usize>,
         public_rows: Vec<usize>,
-    ) -> Result<Self, PlonkError> {
+    ) -> Result<Self, CircuitError> {
         let () = Self::SELECTORS;
         if num_rows < 2 || !num_rows.is_power_of_two() {
-            return Err(PlonkError::Shape);
+            return Err(CircuitError::Shape);
         }
         if fixed.iter().any(|c| c.len() != num_rows) || gadgets.len() != num_rows {
-            return Err(PlonkError::Shape);
+            return Err(CircuitError::Shape);
         }
         if sigma.len() != W * num_rows {
-            return Err(PlonkError::Shape);
+            return Err(CircuitError::Shape);
         }
         let mut seen = vec![false; sigma.len()];
         for target in &sigma {
             if *target >= seen.len() || seen[*target] {
-                return Err(PlonkError::Shape);
+                return Err(CircuitError::Shape);
             }
             seen[*target] = true;
         }
         if W == 0 && !public_rows.is_empty() {
-            return Err(PlonkError::Shape);
+            return Err(CircuitError::Shape);
         }
         let mut used = vec![false; num_rows];
         for row in &public_rows {
             if *row >= num_rows || used[*row] {
-                return Err(PlonkError::Shape);
+                return Err(CircuitError::Shape);
             }
             used[*row] = true;
         }
@@ -331,7 +332,7 @@ where
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
     /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     /// assert!(c.num_rows().is_power_of_two());
     /// ```
@@ -344,7 +345,7 @@ where
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
     /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     /// assert_eq!(c.fixed().len(), 5);
     /// ```
@@ -358,7 +359,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, gate::Selector, vanilla::{Arithmetic, Vanilla}};
+    /// use arrabbiata_plonkish::{circuit::Builder, gate::Selector, vanilla::{Arithmetic, Vanilla}};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// b.row::<Arithmetic, _>([F::ZERO; 3], [F::ZERO; 5]);
     /// let (c, _) = b.build().unwrap();
@@ -376,7 +377,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// b.row::<Arithmetic, _>([F::ZERO; 3], [F::ZERO; 5]);
     /// let (c, _) = b.build().unwrap();
@@ -397,7 +398,7 @@ where
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
     /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
     /// // No copy: the identity.
     /// assert!(c.sigma().iter().enumerate().all(|(i, s)| i == *s));
@@ -413,7 +414,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// let r = b.plain_row([F::ONE, F::ZERO, F::ZERO], [F::ZERO; 5]);
     /// b.public(r);
@@ -426,36 +427,6 @@ where
         &self.public_rows
     }
 
-    /// The largest total degree of a gated constraint (selector included),
-    /// and of the copy and public-input identities: the quotient has fewer
-    /// than `(quotient_factor() - 1) n` coefficients.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
-    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-    /// // q * q_M a b has degree 4, and so has z (a + ..) (b + ..) (c + ..).
-    /// assert_eq!(c.quotient_factor(), 4);
-    /// ```
-    #[must_use]
-    pub fn quotient_factor(&self) -> usize {
-        quotient_factor::<F, G, W, X>()
-    }
-
-    /// The number of coefficients a polynomial commitment for this circuit
-    /// must accept: the size of the quotient, or of a column if larger.
-    ///
-    /// ```
-    /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
-    /// let (c, _) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-    /// assert_eq!(c.max_coefficients(), 3 * c.num_rows());
-    /// ```
-    #[must_use]
-    pub fn max_coefficients(&self) -> usize {
-        ((self.quotient_factor() - 1) * self.num_rows).max(self.num_rows)
-    }
-
     /// Whether `witness` satisfies the circuit: the gates of the active
     /// gadgets vanish, copied cells are equal, and column 0 holds the
     /// public inputs on the public rows.
@@ -463,7 +434,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::{Builder, Witness}, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::{Builder, Witness}, vanilla::Vanilla};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// let r = b.plain_row([F::ONE, F::ZERO, F::ZERO], [F::ZERO; 5]);
     /// b.public(r);
@@ -515,23 +486,6 @@ where
     }
 }
 
-/// The quotient factor of a gate set: see [`Circuit::quotient_factor`].
-pub(crate) fn quotient_factor<F, G, const W: usize, const X: usize>() -> usize
-where
-    F: Field,
-    G: GateSet<F, W, X>,
-{
-    // The permutation term has degree W + 1, the boundary and public-input
-    // terms 2, and a gated constraint its total degree plus the selector.
-    let mut factor = (W + 1).max(2);
-    for gadget in 0..G::SELECTORS {
-        for c in G::constraints(gadget) {
-            factor = factor.max(gate::total_degree(&c) + 1);
-        }
-    }
-    factor
-}
-
 /// The values of one row (and of the rows around it) of a witness and the
 /// fixed columns, as an assignment of the variables of a constraint.
 pub(crate) struct RowView<'a, F, const W: usize, const X: usize> {
@@ -572,7 +526,7 @@ enum Topology {
 /// ```
 /// use arrabbiata_field::Field;
 /// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
+/// use arrabbiata_plonkish::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
 /// // 2 * 3 = 6: q_M a b - c = 0, with q_M = 1 and q_O = -1.
 /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
 /// let (two, three, six) = (F::from_u64(2), F::from_u64(3), F::from_u64(6));
@@ -624,7 +578,7 @@ where
     ///
     /// ```
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
     /// assert_eq!(Builder::<F, Vanilla, 3, 5, 1>::new().num_rows(), 0);
     /// ```
     #[must_use]
@@ -639,13 +593,13 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{PlonkError, circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{CircuitError, circuit::Builder, vanilla::Vanilla};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::cyclic();
     /// for _ in 0..3 {
     ///     b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
     /// }
     /// // 3 rows do not form a cycle of a power-of-two length.
-    /// assert_eq!(b.build().unwrap_err(), PlonkError::Shape);
+    /// assert_eq!(b.build().unwrap_err(), CircuitError::Shape);
     /// ```
     #[must_use]
     pub fn cyclic() -> Self {
@@ -657,7 +611,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
     /// assert_eq!(b.num_rows(), 1);
@@ -674,7 +628,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::{Arithmetic, Vanilla}};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// // a = 1: q_L a + q_C = 0 with q_L = 1, q_C = -1.
     /// let r = b.row::<Arithmetic, _>([F::ONE, F::ZERO, F::ZERO], [F::ONE, F::ZERO, F::ZERO, F::ZERO, -F::ONE]);
@@ -700,7 +654,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// assert_eq!(b.plain_row([F::ONE; 3], [F::ZERO; 5]), 0);
     /// assert_eq!(b.plain_row([F::ONE; 3], [F::ZERO; 5]), 1);
@@ -725,7 +679,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::{Builder, Cell}, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::{Builder, Cell}, vanilla::Vanilla};
     /// use arrabbiata_poly::WitnessColumn;
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// let r = b.plain_row([F::ONE, F::ZERO, F::ZERO], [F::ZERO; 5]);
@@ -743,7 +697,7 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{circuit::Builder, vanilla::Vanilla};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// let r = b.plain_row([F::from_u64(7), F::ZERO, F::ZERO], [F::ZERO; 5]);
     /// b.public(r);
@@ -760,8 +714,8 @@ where
     ///
     /// # Errors
     ///
-    /// [`PlonkError::Rotation`] if, on a path, a gadget reads a row before
-    /// the first or after the last row added; [`PlonkError::Shape`] if a
+    /// [`CircuitError::Rotation`] if, on a path, a gadget reads a row before
+    /// the first or after the last row added; [`CircuitError::Shape`] if a
     /// copy or a public input refers to a row that was not added, a row is
     /// public twice, there is no witness column for a public input, or a
     /// cycle does not have a power of two (at least 2) rows.
@@ -769,12 +723,12 @@ where
     /// ```
     /// use arrabbiata_field::Field;
     /// use arrabbiata_pasta::Fq as F;
-    /// use arrabbiata_plonk::{PlonkError, circuit::Builder, vanilla::Vanilla};
+    /// use arrabbiata_plonkish::{CircuitError, circuit::Builder, vanilla::Vanilla};
     /// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     /// b.public(0);
-    /// assert_eq!(b.build().unwrap_err(), PlonkError::Shape);
+    /// assert_eq!(b.build().unwrap_err(), CircuitError::Shape);
     /// ```
-    pub fn build(self) -> Result<(Circuit<F, G, W, X, Q>, Witness<F, W>), PlonkError> {
+    pub fn build(self) -> Result<(Circuit<F, G, W, X, Q>, Witness<F, W>), CircuitError> {
         let rows = self.gadgets.len();
         let n = match self.topology {
             Topology::Path => {
@@ -783,7 +737,7 @@ where
                         let (lo, hi) = gate::span::<F, G, W, X>(g.index());
                         let (first, last) = (row as i64 + lo as i64, row as i64 + hi as i64);
                         if first < 0 || last >= rows as i64 {
-                            return Err(PlonkError::Rotation);
+                            return Err(CircuitError::Rotation);
                         }
                     }
                 }
@@ -809,14 +763,14 @@ where
         gadgets.resize(n, None);
         for (x, y) in &self.copies {
             if x.row >= rows || y.row >= rows {
-                return Err(PlonkError::Shape);
+                return Err(CircuitError::Shape);
             }
         }
         let sigma = permutation(&self.copies, W, n);
         let mut public = Vec::with_capacity(self.public.len());
         for row in &self.public {
             if *row >= rows || W == 0 {
-                return Err(PlonkError::Shape);
+                return Err(CircuitError::Shape);
             }
             public.push(witness[0][*row]);
         }
@@ -861,4 +815,66 @@ pub(crate) fn permutation<const W: usize>(
         }
     }
     sigma
+}
+
+impl<F, G, const W: usize, const X: usize, const Q: usize> Label for Circuit<F, G, W, X, Q> {
+    const LABEL: u64 = 0x706b_6369;
+}
+
+/// The whole relation: the shape, the constraints of the gate set, the
+/// fixed columns, the gadget of each row, the copy permutation and the
+/// public rows. A transcript that absorbs a circuit is bound to the
+/// relation it proves.
+///
+/// ```
+/// use arrabbiata_field::Field;
+/// use arrabbiata_pasta::Fq as F;
+/// use arrabbiata_plonkish::{Builder, vanilla::{Arithmetic, Vanilla}};
+/// use arrabbiata_poseidon::vesta_sponge;
+/// use arrabbiata_transcript::{Absorb, Transcript};
+/// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
+/// b.row::<Arithmetic, _>([F::ZERO; 3], [F::ZERO; 5]);
+/// let (on, _) = b.build().unwrap();
+/// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
+/// b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
+/// let (off, _) = b.build().unwrap();
+/// let (mut s, mut t) = (vesta_sponge(0), vesta_sponge(0));
+/// on.absorb_into(&mut s);
+/// off.absorb_into(&mut t);
+/// // Only the selector of row 0 differs.
+/// assert_ne!(s.squeeze(), t.squeeze());
+/// ```
+impl<F, G, const W: usize, const X: usize, const Q: usize> Absorb<F> for Circuit<F, G, W, X, Q>
+where
+    F: Field,
+    G: GateSet<F, W, X>,
+{
+    fn absorb_into<T>(&self, transcript: &mut T)
+    where
+        T: Transcript<F>,
+    {
+        absorb_length(transcript, self.num_rows);
+        absorb_length(transcript, W);
+        absorb_length(transcript, X);
+        absorb_length(transcript, Q);
+        gate::absorb_gates::<F, G, T, W, X>(transcript);
+        for column in &self.fixed {
+            for value in column {
+                transcript.absorb(*value);
+            }
+        }
+        for gadget in &self.gadgets {
+            match gadget {
+                None => absorb_length(transcript, 0),
+                Some(g) => absorb_length(transcript, g.index() + 1),
+            }
+        }
+        for target in &self.sigma {
+            absorb_length(transcript, *target);
+        }
+        absorb_length(transcript, self.public_rows.len());
+        for row in &self.public_rows {
+            absorb_length(transcript, *row);
+        }
+    }
 }

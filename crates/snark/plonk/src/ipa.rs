@@ -59,7 +59,7 @@ use arrabbiata_poseidon::{
     PoseidonSponge, bn254_base_sponge, bn254_scalar_sponge, pallas_sponge, vesta_sponge,
 };
 
-use crate::{Circuit, GateSet, Plonk};
+use crate::{Circuit, GateSet, Plonk, QuotientSizing};
 
 /// IPA on Pallas, polynomials over `Fq`.
 pub type PallasIpa = Ipa<Pallas, PoseidonSponge<Fq>>;

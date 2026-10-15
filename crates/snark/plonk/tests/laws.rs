@@ -19,7 +19,7 @@ mod common;
 use arrabbiata_field::Field;
 use arrabbiata_pasta::Fq as F;
 use arrabbiata_plonk::{
-    Builder, Cell, Circuit, Gadget, GateSet, Member, Opened, PlonkError, Witness,
+    Builder, Cell, Circuit, CircuitError, Gadget, GateSet, Member, Opened, QuotientSizing, Witness,
     gate::Selector,
     vanilla::{self, Arithmetic, Vanilla},
 };
@@ -415,7 +415,7 @@ proptest! {
             Ok(_) => prop_assert!(inside),
             Err(e) => {
                 prop_assert!(!inside);
-                prop_assert_eq!(e, PlonkError::Rotation);
+                prop_assert_eq!(e, CircuitError::Rotation);
             }
         }
     }
@@ -513,7 +513,11 @@ fn last_row_semantics() {
             b.plain_row([F::ZERO, F::ZERO], [F::ZERO]);
         }
         b.row::<Step, _>([n(3), n(4)], [F::ONE]);
-        assert_eq!(b.build().unwrap_err(), PlonkError::Rotation, "{rows} rows");
+        assert_eq!(
+            b.build().unwrap_err(),
+            CircuitError::Rotation,
+            "{rows} rows"
+        );
     }
     let mut b = Builder::<F, Gates, 2, 1, 4>::cyclic();
     b.plain_row([n(7), F::ZERO], [F::ZERO]);
@@ -531,7 +535,7 @@ fn circuit_new_rejects_malformed_shapes() {
     let on = Some(Selector::<1>::new::<0>());
     let identity: Vec<usize> = (0..12).collect();
     assert!(C::new(4, fixed(), vec![on; 4], identity.clone(), vec![1]).is_ok());
-    let cases: Vec<(&str, Result<C, PlonkError>)> = vec![
+    let cases: Vec<(&str, Result<C, CircuitError>)> = vec![
         (
             "3 rows",
             C::new(
@@ -594,13 +598,13 @@ fn circuit_new_rejects_malformed_shapes() {
         ),
     ];
     for (name, result) in cases {
-        assert_eq!(result.unwrap_err(), PlonkError::Shape, "{name}");
+        assert_eq!(result.unwrap_err(), CircuitError::Shape, "{name}");
     }
     // The audit's second finding: no witness column to hold a public input.
     let none: [Vec<F>; 0] = [];
     assert_eq!(
         Circuit::<F, (), 0, 0, 0>::new(2, none, vec![None; 2], vec![], vec![0]).unwrap_err(),
-        PlonkError::Shape
+        CircuitError::Shape
     );
 }
 
@@ -643,23 +647,23 @@ fn builder_rejects_dangling_references() {
     let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
     b.copy(Cell::new(col(0), 0), Cell::new(col(1), 1));
-    assert_eq!(b.build().unwrap_err(), PlonkError::Shape);
+    assert_eq!(b.build().unwrap_err(), CircuitError::Shape);
     let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
     let r = b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
     b.public(r);
     b.public(r);
-    assert_eq!(b.build().unwrap_err(), PlonkError::Shape);
+    assert_eq!(b.build().unwrap_err(), CircuitError::Shape);
     let mut b = Builder::<F, (), 0, 0, 0>::new();
     b.plain_row([], []);
     b.public(0);
-    assert_eq!(b.build().unwrap_err(), PlonkError::Shape);
+    assert_eq!(b.build().unwrap_err(), CircuitError::Shape);
     // A cycle of 2^k rows needs no padding; of 0, 1 or 3 rows, it fails.
     for rows in [0usize, 1, 3, 5, 6] {
         let mut b = Builder::<F, Vanilla, 3, 5, 1>::cyclic();
         for _ in 0..rows {
             b.plain_row([F::ZERO; 3], [F::ZERO; 5]);
         }
-        assert_eq!(b.build().unwrap_err(), PlonkError::Shape, "{rows}");
+        assert_eq!(b.build().unwrap_err(), CircuitError::Shape, "{rows}");
     }
 }
 

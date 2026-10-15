@@ -22,7 +22,8 @@ use arrabbiata_bn254::Fr;
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_pasta::Fq;
 use arrabbiata_plonk::{
-    Builder, Cell, Circuit, Gadget, PlonkError, Witness, ipa, kzg, prove, setup, verify,
+    Builder, Cell, Circuit, Gadget, PlonkError, QuotientSizing, Witness, ipa, kzg, prove, setup,
+    verify,
 };
 use arrabbiata_poly::{Expr, FixedColumn, Rotation, WitnessColumn};
 use arrabbiata_poseidon::{Poseidon, bn254_scalar, vesta_base};

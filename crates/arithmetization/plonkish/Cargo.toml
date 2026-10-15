@@ -1,0 +1,23 @@
+[package]
+name = "arrabbiata-plonkish"
+description = "PlonKish circuits: gadgets, one-hot selectors, rotations, copies, and their relaxation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-field = { workspace = true }
+arrabbiata-frontend = { workspace = true }
+arrabbiata-poly = { workspace = true }
+arrabbiata-transcript = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

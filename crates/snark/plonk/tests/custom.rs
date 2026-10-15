@@ -12,8 +12,8 @@ use arrabbiata_bn254::Fr;
 use arrabbiata_field::Field;
 use arrabbiata_pasta::Fq;
 use arrabbiata_plonk::{
-    Builder, Cell, Circuit, Gadget, GateSet, Member, Opened, PlonkError, Witness, ipa, kzg, prove,
-    setup, verify,
+    Builder, Cell, Circuit, Gadget, GateSet, Member, Opened, PlonkError, QuotientSizing, Witness,
+    ipa, kzg, prove, setup, verify,
 };
 use arrabbiata_poly::{Expr, FixedColumn, Rotation, WitnessColumn};
 use proptest::prelude::*;
