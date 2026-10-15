@@ -58,6 +58,10 @@ test-curve: ## Curve laws on CURVE (pallas, vesta, bn254_g{1,2}, grumpkin)
 test-release: ## Run all tests in release mode
 	cargo test --workspace --release
 
+.PHONY: test-slow
+test-slow: ## Run the slow tests (large proofs), in release mode
+	cargo test --workspace --release -- --ignored
+
 .PHONY: doc
 doc: ## Build the API documentation, denying rustdoc warnings
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps

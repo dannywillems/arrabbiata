@@ -38,8 +38,8 @@ pub use crate::{
     lookup::{Argument, Lookup},
     protocol::{
         Commitments, GeneralizedPlonk, GeneralizedTranscript, Keys, Opened, Preprocessed, Proof,
-        ProverKey, PublicInputs, Tagged, VerifierKey, max_coefficients, prove, quotient_factor,
-        rotated, setup, verify,
+        ProverKey, PublicInputs, Tagged, VerifierKey, max_coefficients, opening_groups, prove,
+        quotient_factor, rotated, setup, verify,
     },
 };
 
@@ -56,8 +56,9 @@ pub enum Error {
     CosetShifts,
     /// The witness does not satisfy the circuit.
     Unsatisfied,
-    /// An opening proof does not verify; the index is in the order of
-    /// [`Opened::iter`].
+    /// A batch opening proof does not verify; the index is that of its
+    /// point in [`opening_groups`] (distinct points, in the order they
+    /// first appear in [`Opened::iter`]).
     Opening(usize),
     /// The identity does not hold at `zeta`.
     IdentityFailed,
@@ -71,7 +72,7 @@ impl fmt::Display for Error {
             Self::DomainTooLarge => write!(f, "the field has no domain of the circuit size"),
             Self::CosetShifts => write!(f, "the coset shifts are not in distinct cosets"),
             Self::Unsatisfied => write!(f, "the witness does not satisfy the circuit"),
-            Self::Opening(i) => write!(f, "opening proof {i} does not verify"),
+            Self::Opening(i) => write!(f, "batch opening proof {i} does not verify"),
             Self::IdentityFailed => write!(f, "the identity does not hold at zeta"),
         }
     }

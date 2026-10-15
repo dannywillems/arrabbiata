@@ -244,7 +244,7 @@ proptest! {
         prop_assert!(verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), &wrong, proof).is_err());
     }
 
-    /// Every opening and every evaluation of a proof is checked.
+    /// Every evaluation and every batch opening of a proof is checked.
     #[test]
     fn every_value_is_checked(x in any::<u64>(), s in 1u64..1000) {
         let n = 4;
@@ -262,13 +262,16 @@ proptest! {
             *value = *value + Fq::ONE;
             prop_assert!(verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), &public, bad).is_err(), "evaluation {}", i);
         }
-        // Swapping two opening proofs breaks both.
+        // One batch proof per point: `zeta`, then `zeta w`. Swapping them
+        // breaks the first; dropping one is the wrong shape.
         let mut bad = proof.clone();
-        let proofs = &mut bad.tail.tail.tail.tail.tail.tail.head.value;
-        let first = proofs.witness[0].clone();
-        proofs.witness[0] = proofs.z.clone();
-        proofs.z = first;
-        prop_assert!(matches!(verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), &public, bad), Err(Error::Opening(_))));
+        let proofs = &mut bad.tail.tail.tail.tail.tail.tail.head.value.0;
+        prop_assert_eq!(proofs.len(), 2);
+        proofs.swap(0, 1);
+        prop_assert!(matches!(verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), &public, bad), Err(Error::Opening(0))));
+        let mut bad = proof.clone();
+        bad.tail.tail.tail.tail.tail.tail.head.value.0.pop();
+        prop_assert!(matches!(verify(&vk, &pcs, vesta_sponge(PROOF_DOMAIN), &public, bad), Err(Error::Shape)));
     }
 }
 

@@ -15,10 +15,19 @@
 //!    its variables replaced by the column polynomials (rotated) and the
 //!    public inputs, `q_j` its selector (or 1), `L_B` is 1 on the bound
 //!    rows and `PI` interpolates their public inputs;
-//! 4. the verifier sends `zeta`; the prover opens every column at `zeta`,
-//!    each column a gate reads at a rotation `k` at `zeta w^k`, and `z` at
-//!    `zeta w`;
-//! 5. the verifier checks the openings and the identity at `zeta`.
+//! 4. the verifier sends `zeta`; the prover sends the value of every
+//!    column at `zeta`, of each column a gate reads at a rotation `k` at
+//!    `zeta w^k`, and of `z` at `zeta w`;
+//! 5. the verifier sends `nu`; the prover makes one batch opening proof
+//!    per distinct point ([`opening_groups`], [`BatchOpening`]);
+//! 6. the verifier checks the batch openings and the identity at `zeta`.
+//!
+//! The protocol asks of its scheme only a [`BatchOpening`], which every
+//! scheme has (`Unbatched`, a proof per polynomial). A linear scheme (IPA,
+//! KZG) makes one proof per point, from the combination of the
+//! polynomials by powers of `nu`: `nu` comes after the values, so a wrong
+//! value survives only for the few `nu` that are roots of a nonzero
+//! polynomial (Schwartz-Zippel).
 //!
 //! The quotient is computed pointwise on a coset of a domain large enough
 //! for the largest [column degree](crate::Circuit::column_degree) of a
@@ -31,7 +40,7 @@
 use alloc::{collections::BTreeSet, vec, vec::Vec};
 use core::{fmt, iter, marker::PhantomData};
 
-use arrabbiata_commit::{PolynomialCommitment, Univariate};
+use arrabbiata_commit::{BatchOpening, PolynomialCommitment, PolynomialFamily, Proofs, Univariate};
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_mvpoly::MVPoly;
 use arrabbiata_permutation::{self as permutation, Permutation};
@@ -53,7 +62,7 @@ use crate::{
 type Com<F, PC> = <PC as PolynomialCommitment<F>>::Commitment;
 
 /// The opening proof type of a scheme.
-type Prf<F, PC> = <PC as PolynomialCommitment<F>>::Proof;
+type BatchPrf<F, PC> = <PC as BatchOpening<F>>::BatchProof;
 
 /// A value of type `T` produced with the commitment scheme `PC`: its
 /// label combines the scheme's with `TAG`, so a proof made with one
@@ -380,8 +389,9 @@ pub type LookupColumns<F, PC> = Tagged<PC, Commitments<Com<F, PC>>, 0x6c63>;
 pub type LookupProducts<F, PC> = Tagged<PC, Commitments<Com<F, PC>>, 0x6c70>;
 /// The commitment to the quotient `t`.
 pub type Quotient<F, PC> = Tagged<PC, Com<F, PC>, 0x7474>;
-/// The opening proofs.
-pub type Openings<F, PC> = Tagged<PC, Opened<Prf<F, PC>>, 0x6f70>;
+/// The batch opening proofs, one per distinct point, in the order of
+/// [`opening_groups`].
+pub type Openings<F, PC> = Tagged<PC, Proofs<BatchPrf<F, PC>>, 0x6f70>;
 
 /// The keys produced by [`setup`].
 pub type Keys<F, PC, const N: usize, const D: usize> =
@@ -440,7 +450,10 @@ pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> = Public<
                                         Message<
                                             Quotient<F, PC>,
                                             Challenge<
-                                                Message<Opened<F>, Message<Openings<F, PC>, End>>,
+                                                Message<
+                                                    Opened<F>,
+                                                    Challenge<Message<Openings<F, PC>, End>>,
+                                                >,
                                             >,
                                         >,
                                     >,
@@ -454,6 +467,24 @@ pub type GeneralizedTranscript<F, PC, const N: usize, const D: usize> = Public<
     >,
 >;
 
+/// The openings grouped by point: for each distinct point, in the order
+/// it first appears among `points`, the point and the indices of the
+/// openings at it. One batch proof is made per group.
+#[must_use]
+pub fn opening_groups<F>(points: &[F]) -> Vec<(F, Vec<usize>)>
+where
+    F: Field,
+{
+    let mut groups: Vec<(F, Vec<usize>)> = Vec::new();
+    for (i, point) in points.iter().enumerate() {
+        match groups.iter_mut().find(|(p, _)| p == point) {
+            Some((_, indices)) => indices.push(i),
+            None => groups.push((*point, alloc::vec![i])),
+        }
+    }
+    groups
+}
+
 /// Generalized PlonK over `F`, compiled with the univariate scheme `PC`,
 /// for gates of degree at most `D` in `N` variables.
 #[derive(Debug)]
@@ -465,7 +496,7 @@ type Parameters<F, PC> = fn() -> (F, PC);
 impl<F, PC, const N: usize, const D: usize> Protocol for GeneralizedPlonk<F, PC, N, D>
 where
     F: TwoAdicField,
-    PC: PolynomialCommitment<F, Family = Univariate> + Label,
+    PC: BatchOpening<F, Family = Univariate> + Label,
 {
     type Transcript = GeneralizedTranscript<F, PC, N, D>;
 }
@@ -666,7 +697,7 @@ pub fn prove<F, PC, T, const N: usize, const D: usize>(
 ) -> Result<(Proof<F, PC, N, D>, T), Error>
 where
     F: TwoAdicField + PrimeField,
-    PC: PolynomialCommitment<F, Family = Univariate> + Label,
+    PC: BatchOpening<F, Family = Univariate> + Label,
     T: Transcript<F>,
 {
     let circuit = &pk.circuit;
@@ -934,8 +965,7 @@ where
     // Round 5: evaluations and openings.
     let zeta_next = zeta * domain.generator();
     let rotated_vars = rotated(circuit.variables());
-    let open = |p: &UniPoly<F>, point: &F| pcs.open(p.coefficients(), point);
-    let mut lookup_openings = Vec::new();
+    let mut lookup_claims = Vec::new();
     for ((l, before), after) in circuit
         .lookups()
         .iter()
@@ -943,40 +973,54 @@ where
         .zip(&after_polys)
     {
         for p in before.iter().chain(after) {
-            lookup_openings.push(open(p, &zeta));
-            lookup_openings.push(open(p, &zeta_next));
+            lookup_claims.push((p, zeta));
+            lookup_claims.push((p, zeta_next));
         }
         if l.argument() == Argument::Plookup {
             for k in l.table() {
-                lookup_openings.push(open(&pk.fixed[*k], &zeta_next));
+                lookup_claims.push((&pk.fixed[*k], zeta_next));
             }
         }
     }
-    let opened = Opened {
-        witness: wires.iter().map(|p| open(p, &zeta)).collect(),
-        fixed: pk.fixed.iter().map(|p| open(p, &zeta)).collect(),
-        selectors: pk.selectors.iter().map(|p| open(p, &zeta)).collect(),
-        sigmas: pk.sigmas.iter().map(|p| open(p, &zeta)).collect(),
-        z: open(&z, &zeta),
-        t: open(&t, &zeta),
-        z_next: open(&z, &zeta_next),
+    let claims = Opened {
+        witness: wires.iter().map(|p| (p, zeta)).collect(),
+        fixed: pk.fixed.iter().map(|p| (p, zeta)).collect(),
+        selectors: pk.selectors.iter().map(|p| (p, zeta)).collect(),
+        sigmas: pk.sigmas.iter().map(|p| (p, zeta)).collect(),
+        z: (&z, zeta),
+        t: (&t, zeta),
+        z_next: (&z, zeta_next),
         rotated: rotated_vars
             .iter()
             .map(|v| match v {
                 Variable::Witness { column, rotation } => {
-                    open(&wires[*column], &(zeta * root_power(domain, *rotation)))
+                    (&wires[*column], zeta * root_power(domain, *rotation))
                 }
                 Variable::Fixed { column, rotation } => {
-                    open(&pk.fixed[*column], &(zeta * root_power(domain, *rotation)))
+                    (&pk.fixed[*column], zeta * root_power(domain, *rotation))
                 }
                 Variable::Public(_) => unreachable!("rotated variables read columns"),
             })
             .collect(),
-        lookups: lookup_openings,
+        lookups: lookup_claims,
     };
-    let evaluations = opened.clone().map(|(v, _)| v);
-    let proofs = opened.map(|(_, p)| p);
-    let (transcript, proof) = tape.send(evaluations).send(Tagged::new(proofs)).finish();
+    let evaluations = claims
+        .clone()
+        .map(|(p, point)| <Univariate as PolynomialFamily<F>>::evaluate(p.coefficients(), &point));
+    let tape = tape.send(evaluations);
+    let (nu, tape) = tape.challenge();
+    let claims: Vec<(&UniPoly<F>, F)> = claims.iter().copied().collect();
+    let points: Vec<F> = claims.iter().map(|(_, point)| *point).collect();
+    let mut proofs = Vec::new();
+    for (point, indices) in opening_groups(&points) {
+        let polynomials: Vec<&[F]> = indices
+            .iter()
+            .map(|i| claims[*i].0.coefficients())
+            .collect();
+        let (_, proof) = pcs.open_batch(&polynomials, &point, nu);
+        proofs.push(proof);
+    }
+    let (transcript, proof) = tape.send(Tagged::new(Proofs(proofs))).finish();
     Ok((proof, transcript))
 }
 
@@ -1003,7 +1047,7 @@ pub fn verify<F, PC, T, const N: usize, const D: usize>(
 ) -> Result<(Vec<Com<F, PC>>, T), Error>
 where
     F: TwoAdicField,
-    PC: PolynomialCommitment<F, Family = Univariate> + Label,
+    PC: BatchOpening<F, Family = Univariate> + Label,
     T: Transcript<F>,
 {
     let key = &vk.value;
@@ -1026,6 +1070,7 @@ where
     let (t_commitment, tape) = tape.read();
     let (zeta, tape) = tape.challenge();
     let (evaluations, tape) = tape.read();
+    let (nu, tape) = tape.challenge();
     let (proofs, tape) = tape.read();
     let transcript = tape.finish();
     let (wires, lookup_before, z_commitment, lookup_after, t_commitment, proofs) = (
@@ -1034,7 +1079,7 @@ where
         z_commitment.value,
         lookup_after.value.0,
         t_commitment.value,
-        proofs.value,
+        proofs.value.0,
     );
 
     let w = key.witness_columns;
@@ -1055,7 +1100,6 @@ where
         || lookup_before.len() != before_count
         || lookup_after.len() != after_count
         || !evaluations.has_shape(counts)
-        || !proofs.has_shape(counts)
     {
         return Err(Error::Shape);
     }
@@ -1100,13 +1144,18 @@ where
             .collect(),
         lookups: lookup_claims,
     };
-    for (i, ((commitment, point), (value, opening))) in claims
-        .iter()
-        .zip(evaluations.iter().zip(proofs.iter()))
-        .enumerate()
-    {
-        if !pcs.verify(commitment, point, *value, opening) {
-            return Err(Error::Opening(i));
+    let claims: Vec<(&Com<F, PC>, F)> = claims.iter().copied().collect();
+    let values: Vec<F> = evaluations.iter().copied().collect();
+    let points: Vec<F> = claims.iter().map(|(_, point)| *point).collect();
+    let groups = opening_groups(&points);
+    if proofs.len() != groups.len() {
+        return Err(Error::Shape);
+    }
+    for (k, ((point, indices), opening)) in groups.iter().zip(&proofs).enumerate() {
+        let commitments: Vec<&Com<F, PC>> = indices.iter().map(|i| claims[*i].0).collect();
+        let values: Vec<F> = indices.iter().map(|i| values[*i]).collect();
+        if !pcs.verify_batch(&commitments, point, &values, nu, opening) {
+            return Err(Error::Opening(k));
         }
     }
 

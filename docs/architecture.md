@@ -349,8 +349,22 @@ reference vectors) and elliptic-curve scalar multiplication on Vesta and
 Grumpkin (against the native curves) as gate sets, and prove them with IPA
 and KZG.
 
-It is a toy: no blinding (not zero-knowledge), no linearization, unbatched
-openings, the quotient committed in one piece.
+It is a toy: no blinding (not zero-knowledge), no linearization, the
+quotient committed in one piece.
+
+The openings are batched. After the evaluations the verifier sends `nu`,
+and the prover makes one proof per distinct point (`opening_groups`). The
+protocol asks of its scheme only `BatchOpening`, an argument for `k`
+evaluation claims at one point, and every scheme has one: `Unbatched<PC>`
+proves the claims one by one. A scheme whose commitment is linear
+(`LinearCommitment`: IPA, KZG) reduces the `k` claims to one, the
+combination with powers of `nu`, and opens that. A wrong value survives
+only for the at most `k - 1` values of `nu` that are roots of a nonzero
+polynomial (Schwartz-Zippel). That is the same random linear combination
+as folding. Linearity is therefore a property of the scheme, not of the
+SNARK: a scheme with Merkle commitments, such as FRI, batches by combining
+codewords where the verifier queries them, and fits the same trait with a
+proof of its own.
 
 ### `arrabbiata-permutation`
 
@@ -718,8 +732,11 @@ Generic `w0 = 0` whose three first cells are wired together by
 `env.connect` (Kimchi's `connect_cell_pair`). The tests check Kimchi's
 `init_xor` layout cell for cell, that a wrong nybble is caught by the
 lookup alone and a wider word by the zero row, and prove a XOR with a
-public result (512 rows; the proof takes about 90 seconds, which is again
-the cost of unbatched openings). Each table has fixed columns of its own
+public result (512 rows; about 90 seconds with unbatched openings, about
+9 with batched ones). RangeCheck is proved too, on the 8192 rows its 12-bit
+table needs. The openings are no longer the cost there; the commitments
+and the quotient at that size take about six minutes, so that test runs
+only with `make test-slow`. Each table has fixed columns of its own
 (the range table one, the XOR table three); Kimchi shares them with a table
 id, which is the next step for lookups.
 
@@ -746,7 +763,7 @@ written here are the targets).
   and its decider checks them with PlonK's permutation argument.
 - **Circuit digest.** `arrabbiata-folding` absorbs the whole constraint
   system on every fold; `arrabbiata-plonkish-folding` absorbs a digest.
-- **The decider is a toy PlonK.** No blinding, unbatched openings, and the
+- **The decider is a toy PlonK.** No blinding, and the
   error column is committed in full. Its gates have the fixed columns as
   variables, so their degree grows with the fixed factors of a constraint. The accumulation verifier is
   sublinear, but nothing yet runs it inside a circuit (IVC).
@@ -755,7 +772,8 @@ written here are the targets).
   arithmetic, EC gadgets, Poseidon gadget) does not yet.
 - **Performance.** Tate pairing over the bits of `r` (not optimal ate),
   final exponentiation without Frobenius, schoolbook polynomial products in
-  folding, unbatched PlonK openings.
+  folding, single-threaded commitments and quotient (about six minutes
+  for an 8192-row PlonK proof).
 - **PlonK beyond custom gates.** Lookups.
 - **Extraction.** Charon and Aeneas are not run yet. The first pilot is
   `arrabbiata-poly` (recursion over boxed expressions, generic algebras), to

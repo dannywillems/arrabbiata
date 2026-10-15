@@ -8,21 +8,30 @@
 //! - a value of `2^88` or more is rejected;
 //! - a 12-bit limb pushed out of range while keeping the recombination
 //!   exact is caught by the lookup alone.
-//!
-//! No proof here: Kimchi's 12-bit table makes the circuit 8192 rows, and
-//! generalized PlonK opens each of its polynomials with its own IPA proof,
-//! which at that size takes hours. Batched openings (plan 0001, step 5) are
-//! what makes it practical; proofs with lookups are tested at a small size
-//! in `arrabbiata-gadget`'s `tests/lookups.rs`.
+//! - a proof that a public value is below `2^88`, on the 8192 rows Kimchi's
+//!   12-bit table needs. With batched openings the openings are no longer
+//!   the cost; the commitments and the quotient at that size still take
+//!   about six minutes in release, so the test is ignored by default and
+//!   run by `make test-slow`.
 
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Error, Of, TypedGadget, Unit, witness};
+use arrabbiata_gadget::{Array, Cell, Env, Error, Of, Scalar, TypedGadget, Unit, witness};
+use arrabbiata_generalized_plonk::{max_coefficients, prove, setup, verify};
+use arrabbiata_ipa::Ipa;
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
     range_check::{MultiRangeCheck, range_check_table},
 };
-use arrabbiata_pasta::Fp;
+use arrabbiata_pasta::{Fp, Vesta};
+use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
 use proptest::prelude::*;
+
+/// The domain tag of the sponge deriving the IPA generators.
+const GENERATORS_DOMAIN: u64 = 0;
+/// The domain tag of IPA's own transcript.
+const IPA_DOMAIN: u64 = 1;
+/// The domain tag of the proofs' transcripts.
+const PROOF_DOMAIN: u64 = 2;
 
 /// The column variables: every cell of a row, those of the next, and
 /// coefficient 0.
@@ -188,4 +197,83 @@ fn only_the_lookup_catches_a_large_limb() {
     // Row 3 carries a copy of column 2 of row 0.
     columns[4][3] = columns[2][0];
     assert!(!compiled.circuit.is_satisfied(&columns, &compiled.public));
+}
+
+/// The first value made public (row 4) and copied into the check.
+#[derive(Clone, Debug)]
+struct PublicCheck;
+
+impl TypedGadget<Fp> for PublicCheck {
+    type Input = Array<3>;
+    type Output = Scalar;
+    const NAME: &'static str = "public-check";
+    const ROWS: usize = 5;
+
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        values: Of<Array<3>, E::Var>,
+    ) -> Of<Scalar, E::Var> {
+        let [first, second, third] = values;
+        let public = env.advice(Cell::new(0, 4), [&first], |[v]| v);
+        env.public(&public);
+        let cells = [
+            env.copy(Cell::new(0, 0), &public),
+            env.advice(Cell::new(0, 1), [&second], |[v]| v),
+            env.advice(Cell::new(0, 2), [&third], |[v]| v),
+        ];
+        let gadget = MultiRangeCheck {
+            table: range_check_table(),
+        };
+        env.call(&gadget, cells);
+        public
+    }
+}
+
+fn ipa(size: usize) -> Ipa<Vesta, PoseidonSponge<Fp>> {
+    let mut generators = vesta_sponge(GENERATORS_DOMAIN);
+    let size = size.next_power_of_two();
+    let ipa_transcript = pallas_sponge(IPA_DOMAIN);
+    Ipa::<Vesta, _>::setup(&mut generators, size, ipa_transcript)
+}
+
+#[test]
+#[ignore = "8192 rows: about six minutes in release; run by make test-slow"]
+fn a_range_check_is_proved() {
+    let value = (1u128 << 87) + 12_345;
+    let input = [fp(value), Fp::from_u64(7), Fp::from_u64(1 << 40)];
+    let (compiled, public) =
+        witness::<Fp, _, VARIABLES, DEGREE>(&PublicCheck, LAYOUT, &input).unwrap();
+    assert_eq!(public, fp(value));
+    let pcs = ipa(max_coefficients(&compiled.circuit));
+    let (prover_key, verifier_key) = setup(&compiled.circuit, &pcs).unwrap();
+    let (proof, _) = prove(
+        &prover_key,
+        &pcs,
+        pallas_sponge(PROOF_DOMAIN),
+        &compiled.public,
+        &compiled.columns,
+    )
+    .unwrap();
+    assert_eq!(prover_key.verifier_key().value.num_rows(), 8192);
+    assert!(
+        verify(
+            &verifier_key,
+            &pcs,
+            pallas_sponge(PROOF_DOMAIN),
+            &[public],
+            proof.clone()
+        )
+        .is_ok()
+    );
+    assert!(
+        verify(
+            &verifier_key,
+            &pcs,
+            pallas_sponge(PROOF_DOMAIN),
+            &[public + Fp::ONE],
+            proof
+        )
+        .is_err()
+    );
 }

@@ -368,12 +368,12 @@ fn the_error_opening_is_checked() {
         .unwrap();
     let mut proof = out.proof.clone();
     // The evaluations are the sixth message; the error column is witness
-    // column 3.
+    // column 3, opened at `zeta`, the first point of the batch openings.
     proof.tail.tail.tail.tail.tail.head.witness[3] =
         proof.tail.tail.tail.tail.tail.head.witness[3] + F::ONE;
     let result = decider.verify(vesta_sponge(DECIDER_DOMAIN), &instance, proof);
     assert!(
-        matches!(result, Err(Error::Plonk(PlonkError::Opening(3)))),
+        matches!(result, Err(Error::Plonk(PlonkError::Opening(0)))),
         "{result:?}"
     );
     // Another accumulator's proof does not verify for this one.

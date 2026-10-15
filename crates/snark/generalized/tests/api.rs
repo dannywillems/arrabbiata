@@ -5,7 +5,7 @@ use arrabbiata_field::Field;
 use arrabbiata_frontend::vanilla::build;
 use arrabbiata_generalized_plonk::{
     Argument, Circuit, Commitments, Error, Gate, GeneralizedPlonk, Lookup, Opened, PublicInputs,
-    Tagged, Variable, max_coefficients,
+    Tagged, Variable, max_coefficients, opening_groups,
     plonkish::{columns_read, from_plonkish, polynomial, variable},
     quotient_factor, rotated, setup,
 };
@@ -1107,8 +1107,18 @@ fn protocol_generalized_plonk() {
     type P = <GeneralizedPlonk<F, Ipa<Pallas, PoseidonSponge<F>>, 3, 2> as Protocol>::Transcript;
     // Wires, lookup columns, z, lookup products, t, evaluations, openings.
     assert_eq!(<P as Pattern>::MESSAGES, 7);
-    // theta, beta, gamma, alpha, zeta.
-    assert_eq!(<P as Pattern>::CHALLENGES, 5);
+    // theta, beta, gamma, alpha, zeta, nu.
+    assert_eq!(<P as Pattern>::CHALLENGES, 6);
+}
+
+#[test]
+fn protocol_opening_groups() {
+    // The distinct points, in the order they first appear, with the
+    // indices of the openings at each.
+    let (zeta, zeta_next) = (F::from_u64(7), F::from_u64(11));
+    let points = [zeta, zeta, zeta_next, zeta, zeta_next];
+    let groups = opening_groups(&points);
+    assert_eq!(groups, vec![(zeta, vec![0, 1, 3]), (zeta_next, vec![2, 4])]);
 }
 
 #[test]

@@ -58,7 +58,7 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 use core::fmt;
 
-use arrabbiata_commit::{HomomorphicCommitment, PolynomialCommitment, Univariate};
+use arrabbiata_commit::{BatchOpening, HomomorphicCommitment, Univariate};
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_generalized_plonk::{
     self as generalized, Circuit as GeneralizedCircuit, Gate, Proof, ProverKey, Variable,
@@ -76,13 +76,13 @@ use arrabbiata_reduction::{Output, OutputOf, Reduction, Relation, Then, Top};
 use arrabbiata_transcript::{Transcript, typed::Label};
 
 /// A commitment scheme that commits to vectors homomorphically and to
-/// polynomials with evaluation proofs, with one commitment type: what the
-/// fold and the decider share. The law that the two `commit` agree on the
+/// polynomials with batched evaluation proofs, with one commitment type:
+/// what the fold and the decider share. The law that the two `commit` agree on the
 /// same coefficients is what links an accumulator to its decider; it is a
 /// property of the scheme, tested for IPA and KZG.
 pub trait Shared<F>:
     HomomorphicCommitment<F>
-    + PolynomialCommitment<
+    + BatchOpening<
         F,
         Family = Univariate,
         Commitment = <Self as HomomorphicCommitment<F>>::Commitment,
@@ -96,7 +96,7 @@ impl<F, PC> Shared<F> for PC
 where
     F: TwoAdicField,
     PC: HomomorphicCommitment<F>
-        + PolynomialCommitment<
+        + BatchOpening<
             F,
             Family = Univariate,
             Commitment = <PC as HomomorphicCommitment<F>>::Commitment,
