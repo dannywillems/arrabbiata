@@ -24,6 +24,7 @@ use arrabbiata_kimchi_gadgets::{
     generic::{GenericRow, GenericSpec},
     poseidon::PoseidonPermutation,
     range_check::{MultiRangeCheck, range_check_table},
+    rot::{Rot64, RotMode},
     varbasemul::VarBaseMul,
     xor::{Xor, xor_table},
 };
@@ -178,6 +179,17 @@ fn kimchi() -> Vec<Kimchi> {
             lookups: (3..15).map(|c| (c, 0)).collect(),
         },
         Kimchi {
+            gadget: "kimchi-rot64",
+            constraints: 11,
+            source: "kimchi/src/circuits/polynomials/rot.rs:226",
+            degrees: degrees("Rot64"),
+            current: range(15),
+            next: vec![0],
+            coefficients: vec![0],
+            // The RangeCheck pattern on its row: columns 3-6.
+            lookups: (3..=6).map(|c| (c, 0)).collect(),
+        },
+        Kimchi {
             gadget: "kimchi-varbasemul",
             constraints: 21,
             source: "kimchi/src/circuits/polynomials/varbasemul.rs:417",
@@ -199,6 +211,7 @@ enum Harness<'a> {
     EndoMul,
     EndoMulScalar,
     RangeCheck,
+    Rot,
     VarBaseMul,
     Xor,
 }
@@ -248,6 +261,15 @@ impl TypedGadget<Fp> for Harness<'_> {
                 };
                 env.call(&gadget, values);
             }
+            Self::Rot => {
+                let word = cell(0);
+                let gadget = Rot64 {
+                    table: range_check_table(),
+                    rot: 3,
+                    side: RotMode::Left,
+                };
+                env.call(&gadget, word);
+            }
             Self::Xor => {
                 let words: [E::Var; 2] = core::array::from_fn(&mut cell);
                 env.call(&Xor::<Fp, 16> { table: xor_table() }, words);
@@ -274,6 +296,7 @@ fn every_gate_has_kimchis_figures() {
             "kimchi-endomul-scalar" => Harness::EndoMulScalar,
             "kimchi-range-check-0" | "kimchi-range-check-1" => Harness::RangeCheck,
             "kimchi-xor16" => Harness::Xor,
+            "kimchi-rot64" => Harness::Rot,
             _ => Harness::VarBaseMul,
         };
         let f = figures(&harness, LAYOUT).unwrap();

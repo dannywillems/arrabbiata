@@ -830,6 +830,19 @@ only with `make test-slow`. Each table has fixed columns of its own
 (the range table one, the XOR table three); Kimchi shares them with a table
 id, which is the next step for lookups.
 
+Rot64 rotates a 64-bit word by a known offset as Kimchi does: `word 2^rot
+= excess 2^64 + shifted` and `rotated = shifted + excess`, with `shifted`
+and `excess` range-checked by two RangeCheck0 rows whose two high limbs are
+wired to a Generic zero row, and `excess < 2^rot` proved by decomposing
+`bound = excess - 2^rot + 2^64` on the Rot64 row itself (its 12-bit limbs
+looked up, its crumbs constrained); `2^rot` is coefficient 0, so every
+offset shares one selector, and a right rotation is a left one by `64 -
+r`. The tests check Kimchi's `extend_rot` layout cell for cell, that the
+output is `u64::rotate_left` / `rotate_right` for every offset from 0 to
+64, and that the only other split of `word 2^rot` (moving `2^64` from
+`shifted` to `excess`, with `rotated` and `bound` adjusted to keep the
+equations) is rejected.
+
 Terms are built with Kimchi's simplifications (constants fold, `0 + e`,
 `0 e`, `1 e`), which keep the polynomial and make the syntactic degree
 agree with Kimchi's on the same construction; without them a Horner

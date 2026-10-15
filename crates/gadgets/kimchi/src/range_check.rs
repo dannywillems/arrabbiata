@@ -48,7 +48,7 @@ pub fn range_check_table<F: Field>() -> Rom<F> {
 }
 
 /// The bits `start .. end` of `x`.
-fn bits<F: PrimeField>(x: F, start: usize, end: usize) -> F {
+pub(crate) fn bits<F: PrimeField>(x: F, start: usize, end: usize) -> F {
     let mut value = 0u64;
     for i in (start..end).rev() {
         let bit = (x.limb(i / 64) >> (i % 64)) & 1;
@@ -58,7 +58,7 @@ fn bits<F: PrimeField>(x: F, start: usize, end: usize) -> F {
 }
 
 /// `x (x - 1) (x - 2) (x - 3)`, as Kimchi's `crumb`.
-fn crumb<F, E>(env: &mut E, x: &E::Var) -> E::Var
+pub(crate) fn crumb<F, E>(env: &mut E, x: &E::Var) -> E::Var
 where
     F: Field,
     E: Env<F>,
@@ -70,7 +70,7 @@ where
 /// `sum_k 2^(w_k) cells_k`, accumulated as Kimchi does: from `0`, each cell
 /// times the running power, the power then multiplied by `4` for a crumb or
 /// `4096` for a limb (`widths`, in the order the cells are added).
-fn recombine<F, E>(env: &mut E, cells: &[(E::Var, u64)]) -> E::Var
+pub(crate) fn recombine<F, E>(env: &mut E, cells: &[(E::Var, u64)]) -> E::Var
 where
     F: Field,
     E: Env<F>,

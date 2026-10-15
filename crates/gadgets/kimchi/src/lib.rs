@@ -16,6 +16,8 @@
 //! - [`poseidon`]: the Poseidon gate, five rounds per row;
 //! - [`range_check`]: the RangeCheck0 and RangeCheck1 gates, three 88-bit
 //!   values on four rows, with 12-bit lookups;
+//! - [`rot`]: the Rot64 gate, a 64-bit word rotated by a known offset, with
+//!   12-bit lookups and two RangeCheck0 rows;
 //! - [`varbasemul`]: the VarBaseMul gate, five steps of a variable-base
 //!   scalar multiplication on two rows;
 //! - [`xor`]: the Xor16 gate, 16 bits of a XOR per row, with 4-bit lookups.
@@ -36,6 +38,7 @@
 //! | RangeCheck0 | 10          | 4          | 1    | 0-14, next row 0-1        | 0            |
 //! | RangeCheck1 | 21          | 4          | 2    | 0, 2-14, next row 0-2, 7-14 | none       |
 //! | Xor16       | 3           | 1          | 1    | 0-14, next row 0-2        | none         |
+//! | Rot64       | 11          | 4          | 1    | 0-14, next row 0          | 0            |
 //! | VarBaseMul  | 21          | 6          | 2    | 0-5, 7-14, next row 0-11  | none         |
 
 #![no_std]
@@ -48,6 +51,7 @@ pub mod endomul_scalar;
 pub mod generic;
 pub mod poseidon;
 pub mod range_check;
+pub mod rot;
 pub mod varbasemul;
 pub mod xor;
 
