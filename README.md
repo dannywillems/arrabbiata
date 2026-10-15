@@ -10,7 +10,7 @@ Arrabbiata is generic over the field, the polynomial commitment scheme, the
 sponge, and the aggregation of constraints. It has no dependency outside the
 Rust standard library; property tests use [proptest] as a dev-dependency only.
 
-API documentation, with an example on every public item:
+API documentation (examples are tests, under each crate's `tests/`):
 <https://dannywillems.github.io/arrabbiata/>.
 
 ## status
@@ -101,10 +101,10 @@ non-test code.
 Complete runs (a circuit, a proof, its verification; an accumulation and
 its decision) are tests that are real examples, under each crate's
 `tests/examples.rs`, and the rustdoc of the protocol functions points to
-them; short examples of accessors and small functions stay in the
-rustdoc, where they are compiled and run as doctests. Good entry points:
+them. The rustdoc has no code examples: the behaviour of each public item
+is a test in the crate's `tests/api.rs`. Good entry points:
 
-- folding two instances: the crate documentation of `arrabbiata-folding`;
+- folding two instances: `tests/api.rs` of `arrabbiata-folding`;
 - accumulating PlonKish circuits, and deciding the accumulator with one
   proof: `tests/examples.rs` of `arrabbiata-plonkish-folding` and of
   `arrabbiata-plonk-decider`;
@@ -158,9 +158,8 @@ is complete for every circuit at once; the axiom census shows only `propext`,
 
 ```bash
 make help          # list targets
-make test          # unit, property, doc and compile-fail tests
+make test          # unit, property, API and compile-fail tests
 make lint          # clippy, warnings denied
-make doc-examples  # an example on every public item, or a pointer to a test (nightly)
 make check-format  # nightly rustfmt and taplo
 make mutants       # mutation testing (PACKAGE=, FILE=, SHARD=k/n)
 make mutants-diff  # mutation testing of the changes since BASE (origin/main)
