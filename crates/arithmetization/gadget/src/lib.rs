@@ -35,7 +35,8 @@
 //!   one is the input shape of the next.
 //!
 //! The circuit is [`circuit`] (no witness: what the setup needs), the
-//! witness [`witness`]. Examples, from a squaring map to a Poseidon hash,
+//! witness [`witness`], and its figures (per gate: the constraints, their
+//! degrees, the instances, the cells read) [`figures`]. Examples, from a squaring map to a Poseidon hash,
 //! are in `tests/`.
 
 #![no_std]
@@ -48,7 +49,10 @@ pub mod expr;
 pub mod shape;
 
 pub use crate::{
-    builder::{Builder, Compiled, Error, Layout, Witnessed, circuit, evaluate, witness},
+    builder::{
+        Builder, Compiled, Error, Figures, GateFigures, Layout, Witnessed, circuit, evaluate,
+        figures, witness,
+    },
     env::{Cell, Chain, Env, Repeat, TypedGadget},
     expr::Wire,
     shape::{Array, Of, Scalar, Shape, Unit},

@@ -164,6 +164,8 @@ where
 #[derive(Clone, Debug)]
 struct Kind<F> {
     gadget: &'static str,
+    /// The row of the gadget the gates are on.
+    offset: isize,
     constraints: Vec<Expr<F>>,
     /// The instance that defined the constraints.
     owner: usize,
@@ -468,7 +470,7 @@ where
             self.fail(Error::Unplaced { gadget });
             return;
         }
-        let Some(anchor) = value.expr.min_row() else {
+        let Some(first_read) = value.expr.min_row() else {
             // A constraint on constants only.
             if value.expr != Expr::Constant(F::ZERO) {
                 let row = self.cursor;
@@ -476,10 +478,15 @@ where
             }
             return;
         };
+        // A constraint lives on its gadget's first row, reading the later
+        // rows by rotation, as a Kimchi gate does; one reading a row before
+        // the gadget lives on the first row it reads.
+        let base = self.frames.last().map_or(0, |f| f.base);
+        let anchor = if first_read >= base { base } else { first_read };
         if self.with_witness && value.value != Some(F::ZERO) {
             self.fail(Error::Unsatisfied {
                 gadget,
-                row: anchor,
+                row: first_read,
             });
         }
         let Some(frame) = self.frames.last() else {
@@ -493,6 +500,7 @@ where
             None => {
                 self.kinds.push(Kind {
                     gadget,
+                    offset,
                     constraints: Vec::new(),
                     owner: id,
                     rows: BTreeSet::new(),
@@ -636,4 +644,131 @@ where
         .map(|w| w.value.unwrap_or(F::ZERO))
         .collect();
     Ok(G::Output::unflatten(&values))
+}
+
+/// The figures of one gate kind: the constraints one gadget asserts on one
+/// of its rows, shared by every instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GateFigures {
+    /// The gadget.
+    pub gadget: &'static str,
+    /// The row of the gadget the gates are on.
+    pub offset: isize,
+    /// The number of constraints.
+    pub constraints: usize,
+    /// The degree of each constraint, in order: the total degree in the
+    /// cells (witness and fixed alike), constants of degree 0, the way
+    /// Kimchi's `Expr::degree(1, 0)` counts it. The selector is not
+    /// included (the quotient sees one more).
+    pub degrees: Vec<usize>,
+    /// The largest of [`GateFigures::degrees`].
+    pub max_degree: usize,
+    /// The number of rows the gates are on: the instances.
+    pub instances: usize,
+    /// The witness cells the constraints read, as (column, rotation).
+    pub witness_cells: Vec<(usize, usize)>,
+    /// The fixed cells the constraints read, as (column, rotation).
+    pub fixed_cells: Vec<(usize, usize)>,
+    /// The largest rotation read (0: the row only, 1: the next row too).
+    pub max_rotation: usize,
+}
+
+/// The figures of a circuit, without compiling it to a fixed `N` and `D`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Figures {
+    /// The rows the gadgets take.
+    pub rows: usize,
+    /// The number of rows of the table: the next power of two.
+    pub domain_size: usize,
+    /// Each gate kind, in the order the builder met them; each is one
+    /// selector.
+    pub gates: Vec<GateFigures>,
+    /// The number of column variables the gates read: generalized PlonK's
+    /// smallest `N`.
+    pub variables: usize,
+    /// The largest constraint degree: generalized PlonK's smallest `D`.
+    pub max_degree: usize,
+    /// The number of copy constraints.
+    pub copies: usize,
+    /// The number of public inputs.
+    pub public_inputs: usize,
+}
+
+impl Figures {
+    /// The gate kinds of the gadget named `gadget`.
+    #[must_use]
+    pub fn gates_of(&self, gadget: &str) -> Vec<&GateFigures> {
+        self.gates.iter().filter(|g| g.gadget == gadget).collect()
+    }
+}
+
+/// The figures of `gadget`'s circuit: its gate kinds (constraints, degrees,
+/// instances, cells read), its rows, variables, copies and public inputs.
+///
+/// # Errors
+///
+/// As [`circuit`].
+pub fn figures<F, G>(gadget: &G, layout: Layout) -> Result<Figures, Error>
+where
+    F: Field,
+    G: TypedGadget<F>,
+{
+    let mut builder = Builder::new(layout, false);
+    let input = inputs::<F, G::Input>(None);
+    let _ = builder.call(gadget, input);
+    if let Some(e) = builder.error {
+        return Err(e);
+    }
+    let mut all_atoms = Vec::new();
+    let gates: Vec<GateFigures> = builder
+        .kinds
+        .iter()
+        .map(|kind| {
+            let degrees: Vec<usize> = kind.constraints.iter().map(Expr::degree).collect();
+            let mut atoms = Vec::new();
+            for c in &kind.constraints {
+                c.atoms(&mut atoms);
+            }
+            atoms.sort_unstable();
+            atoms.dedup();
+            all_atoms.extend(atoms.iter().copied());
+            let mut witness_cells = Vec::new();
+            let mut fixed_cells = Vec::new();
+            for a in &atoms {
+                match *a {
+                    Atom::Witness { column, rotation } => witness_cells.push((column, rotation)),
+                    Atom::Fixed { column, rotation } => fixed_cells.push((column, rotation)),
+                }
+            }
+            let max_rotation = witness_cells
+                .iter()
+                .chain(&fixed_cells)
+                .map(|(_, r)| *r)
+                .max()
+                .unwrap_or(0);
+            GateFigures {
+                gadget: kind.gadget,
+                offset: kind.offset,
+                constraints: kind.constraints.len(),
+                max_degree: degrees.iter().copied().max().unwrap_or(0),
+                degrees,
+                instances: kind.rows.len(),
+                witness_cells,
+                fixed_cells,
+                max_rotation,
+            }
+        })
+        .collect();
+    all_atoms.sort_unstable();
+    all_atoms.dedup();
+    let rows = builder.cursor.max(builder.last_row + 1);
+    Ok(Figures {
+        rows,
+        domain_size: rows.max(2).next_power_of_two(),
+        max_degree: gates.iter().map(|g| g.max_degree).max().unwrap_or(0),
+        gates,
+        variables: all_atoms.len(),
+        copies: builder.copies.len(),
+        public_inputs: builder.public.len(),
+    })
 }

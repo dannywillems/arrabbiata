@@ -5,7 +5,7 @@
 //! building constraints and the field elements it reads while computing a
 //! witness. Every shape of size `k` is isomorphic to `V^k`; [`Shape::flatten`]
 //! and [`Shape::unflatten`] are that isomorphism, and products of shapes are
-//! pairs.
+//! tuples (of two, three or four shapes).
 //!
 //! Composition is checked on the shape, not on its instances: a gadget whose
 //! output shape is `Array<3>` composes with one whose input shape is
@@ -101,5 +101,59 @@ where
     fn unflatten<V: Clone>(values: &[V]) -> Self::Of<V> {
         let (a, b) = values.split_at(A::SIZE);
         (A::unflatten(a), B::unflatten(b))
+    }
+}
+
+impl<A, B, C> Shape for (A, B, C)
+where
+    A: Shape,
+    B: Shape,
+    C: Shape,
+{
+    const SIZE: usize = A::SIZE + B::SIZE + C::SIZE;
+    type Of<V: Clone> = (A::Of<V>, B::Of<V>, C::Of<V>);
+
+    fn flatten<V: Clone>((a, b, c): &Self::Of<V>) -> Vec<V> {
+        let mut values = A::flatten(a);
+        values.extend(B::flatten(b));
+        values.extend(C::flatten(c));
+        values
+    }
+
+    fn unflatten<V: Clone>(values: &[V]) -> Self::Of<V> {
+        let (a, rest) = values.split_at(A::SIZE);
+        let (b, c) = rest.split_at(B::SIZE);
+        (A::unflatten(a), B::unflatten(b), C::unflatten(c))
+    }
+}
+
+impl<A, B, C, D> Shape for (A, B, C, D)
+where
+    A: Shape,
+    B: Shape,
+    C: Shape,
+    D: Shape,
+{
+    const SIZE: usize = A::SIZE + B::SIZE + C::SIZE + D::SIZE;
+    type Of<V: Clone> = (A::Of<V>, B::Of<V>, C::Of<V>, D::Of<V>);
+
+    fn flatten<V: Clone>((a, b, c, d): &Self::Of<V>) -> Vec<V> {
+        let mut values = A::flatten(a);
+        values.extend(B::flatten(b));
+        values.extend(C::flatten(c));
+        values.extend(D::flatten(d));
+        values
+    }
+
+    fn unflatten<V: Clone>(values: &[V]) -> Self::Of<V> {
+        let (a, rest) = values.split_at(A::SIZE);
+        let (b, rest) = rest.split_at(B::SIZE);
+        let (c, d) = rest.split_at(C::SIZE);
+        (
+            A::unflatten(a),
+            B::unflatten(b),
+            C::unflatten(c),
+            D::unflatten(d),
+        )
     }
 }

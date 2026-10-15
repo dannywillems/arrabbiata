@@ -82,7 +82,10 @@ where
     /// first column.
     fn public(&mut self, value: &Self::Var);
 
-    /// Constrain `value` to be zero, on the rows of this gadget's instances.
+    /// Constrain `value` to be zero, on the first row of each instance of
+    /// this gadget (the cells of later rows are read by rotation; a
+    /// constraint reading a row before the gadget is on the first row it
+    /// reads).
     fn assert_zero(&mut self, value: Self::Var);
 
     /// Constrain `a` and `b` to be equal.

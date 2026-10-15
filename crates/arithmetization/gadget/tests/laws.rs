@@ -16,7 +16,7 @@
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{
     Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, TypedGadget, circuit, evaluate,
-    witness,
+    figures, witness,
 };
 use arrabbiata_pasta::Fq as F;
 use proptest::prelude::*;
@@ -432,4 +432,54 @@ impl TypedGadget<F> for CopyInPlace {
 fn copying_in_place_is_the_identity() {
     let input = F::from_u64(13);
     assert_eq!(evaluate(&CopyInPlace, LAYOUT, &input).unwrap(), input);
+}
+
+/// Flattening a tuple of shapes and unflattening it is the identity, and
+/// its size is the sum of the sizes.
+#[test]
+fn tuples_of_shapes() {
+    use arrabbiata_gadget::Shape;
+    type Four = (Array<2>, Scalar, Array<3>, (Scalar, Array<1>));
+    let value = ([1u8, 2], 3, [4, 5, 6], (7, [8]));
+    let flat = Four::flatten(&value);
+    assert_eq!(flat, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(Four::SIZE, flat.len());
+    assert_eq!(Four::unflatten(&flat), value);
+    type Three = (Scalar, Array<2>, Scalar);
+    let three = (1u8, [2, 3], 4);
+    assert_eq!(Three::unflatten(&Three::flatten(&three)), three);
+}
+
+/// The figures are the compiled circuit's: one gate kind per selector, the
+/// constraints are its gates, the variables its `N`, and a gate's degree
+/// with its selector is generalized PlonK's column degree.
+#[test]
+fn figures_are_the_circuits() {
+    let gadget = three([F::ONE, F::from_u64(2), F::from_u64(3)]);
+    let f = figures(&gadget, LAYOUT).unwrap();
+    let c = circuit::<F, _, N, D>(&gadget, LAYOUT).unwrap();
+    assert_eq!(f.gates.len(), c.selectors().len());
+    let constraints: usize = f.gates.iter().map(|g| g.constraints).sum();
+    assert_eq!(constraints, c.gates().len());
+    assert_eq!(f.variables, c.variables().len());
+    assert_eq!(f.domain_size, c.num_rows());
+    let column_degrees: Vec<usize> = c.gates().iter().map(|g| c.column_degree(g)).collect();
+    let degrees: Vec<usize> = f
+        .gates
+        .iter()
+        .flat_map(|g| g.degrees.iter().map(|d| d + 1))
+        .collect();
+    assert_eq!(column_degrees, degrees);
+    // The three rounds are one gate kind: x^2 + c - next, of degree 2.
+    let [round] = f.gates_of("square-plus")[..] else {
+        panic!("one kind")
+    };
+    assert_eq!(
+        (round.constraints, round.max_degree, round.instances),
+        (1, 2, 3)
+    );
+    assert_eq!(round.witness_cells, vec![(0, 0), (0, 1)]);
+    assert_eq!(round.fixed_cells, vec![(0, 0)]);
+    assert_eq!(round.max_rotation, 1);
+    assert_eq!((f.rows, f.public_inputs, f.copies), (4, 1, 0));
 }
