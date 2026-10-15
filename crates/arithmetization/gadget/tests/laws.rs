@@ -482,3 +482,44 @@ fn figures_are_the_circuits() {
     assert_eq!(round.max_rotation, 1);
     assert_eq!((f.rows, f.public_inputs, f.copies), (4, 1, 0));
 }
+
+/// Two cells of a row, connected: equal values satisfy, different ones do
+/// not, and the permutation enforces it.
+#[derive(Clone, Copy, Debug)]
+struct Connected;
+
+impl TypedGadget<F> for Connected {
+    type Input = Array<2>;
+    type Output = Unit2;
+    const NAME: &'static str = "connected";
+    const ROWS: usize = 1;
+
+    fn synthesize<E: Env<F>>(&self, env: &mut E, input: Of<Array<2>, E::Var>) -> Of<Unit2, E::Var> {
+        let a = env.advice(Cell::new(0, 0), [&input[0]], |[v]| v);
+        let b = env.advice(Cell::new(1, 0), [&input[1]], |[v]| v);
+        env.connect(&a, &b);
+        [a, b]
+    }
+}
+
+#[test]
+fn connected_cells_are_equal() {
+    let seven = F::from_u64(7);
+    let (compiled, _) = witness::<F, _, N, D>(&Connected, LAYOUT, &[seven, seven]).unwrap();
+    assert!(
+        compiled
+            .circuit
+            .is_satisfied(&compiled.columns, &compiled.public)
+    );
+    let mut columns = compiled.columns.clone();
+    columns[1][0] = F::from_u64(8);
+    assert!(!compiled.circuit.is_satisfied(&columns, &compiled.public));
+    let found = witness::<F, _, N, D>(&Connected, LAYOUT, &[seven, F::from_u64(8)]).unwrap_err();
+    assert_eq!(
+        found,
+        Error::Unsatisfied {
+            gadget: "connected",
+            row: 0
+        }
+    );
+}

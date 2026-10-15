@@ -654,6 +654,25 @@ where
         self.write(target, value.value)
     }
 
+    fn connect(&mut self, a: &Wire<F>, b: &Wire<F>) {
+        let gadget = self.gadget();
+        let (Some(x), Some(y)) = (a.cell(), b.cell()) else {
+            self.fail(Error::NotACell { gadget });
+            return;
+        };
+        for column in [x.0, y.0] {
+            if column >= self.layout.permuted {
+                self.fail(Error::NotPermuted { gadget, column });
+            }
+        }
+        if self.with_witness && a.value.is_some() && b.value.is_some() && a.value != b.value {
+            self.fail(Error::Unsatisfied { gadget, row: x.1 });
+        }
+        if x != y {
+            self.copies.push((x, y));
+        }
+    }
+
     fn place(&mut self, at: Cell, value: &Wire<F>) -> Wire<F> {
         let permuted = self.layout.permuted;
         let target = self.absolute(at);

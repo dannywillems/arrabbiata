@@ -76,6 +76,10 @@ where
     /// itself.
     fn copy(&mut self, at: Cell, value: &Self::Var) -> Self::Var;
 
+    /// Wire two cells, both already written, in permuted columns: a copy
+    /// constraint between them (Kimchi's `connect_cell_pair`).
+    fn connect(&mut self, a: &Self::Var, b: &Self::Var);
+
     /// The witness cell `at` holding `value`: `value` itself when it is that
     /// cell, a copy when it is a cell of a permuted column and `at` is in
     /// one, a definition otherwise. Placing twice is placing once.
