@@ -207,9 +207,18 @@ Both implement `PolynomialCommitment` with `Family = Univariate`, and
 `HomomorphicCommitment`, so both serve PlonK and folding.
 
 - IPA, over any curve: Pedersen vector commitments to the coefficients, and
-  the Bulletproofs inner-product argument as in Halo, with the value bound by
-  `U' = xi U`. No trusted setup; generators come from Poseidon over the base
-  field. The verifier is linear in the degree. Not hiding.
+  the Bulletproofs inner-product argument as in Halo and Kimchi, with the
+  value bound by `U' = xi U`. No trusted setup; generators come from Poseidon
+  over the base field. Not hiding. The rounds fold as Kimchi's (`a_lo +
+  u^-1 a_hi`, `b_lo + u b_hi`, `G_lo + u G_hi`) and the proof carries `sg`,
+  the folded generator. One proof covers several points: the evaluation
+  vector is `sum_j evalscale^j (1, x_j, x_j^2, ...)`, and with the
+  polynomials combined by `polyscale` the value is Kimchi's
+  `combined_inner_product`. The verifier is two halves: `succinct`, `O(k)`,
+  which trusts `sg` and returns the accumulator `(u, sg)`
+  (`RecursionChallenge`), and `decide`, the MSM `sg = <s, G>` (`decide_all`
+  for many, with one MSM). `b_poly`, `b_poly_coefficients` and
+  `combined_inner_product` agree with Kimchi's on Kimchi's own output.
 - KZG, over any pairing: `C = [p(tau)] G`, opening proof `[q(tau)] G` for
   `q = (p - v) / (X - z)`, checked with one pairing product. Binding needs
   nobody to know `tau`; `insecure_setup` exists for tests, and a test shows
@@ -250,7 +259,10 @@ Two separate traits, because protocols need different things:
   `F`-module and `commit` a module morphism. Folding requires it.
 - `PolynomialCommitment`: polynomials of a `PolynomialFamily` (`Univariate`:
   coefficients, point in `F`; `Multilinear`: hypercube evaluations, point in
-  `F^k`) with evaluation proofs. PlonK requires `Family = Univariate`.
+  `F^k`) with evaluation proofs. PlonK requires `Family = Univariate`. A
+  family also names an owned form of its points (`OwnedPoint`: `F`, or
+  `Coordinates` for `F^k`), which claims and accumulators hold, so that
+  accumulation (`arrabbiata-halo`) is written once for every family.
 
 Keeping them apart is deliberate. Lattice commitments (Greyhound, Hachi,
 Akita; ePrint 2026/1983) are multilinear and homomorphic only for
@@ -427,6 +439,64 @@ By Yoneda (thesis, Theorem 8.2), a reduction `R -> R'` is the same as a
 way to turn proofs for `R'` into proofs for `R`, which is why a decider
 needs to know `R'` only. Another accumulation scheme is another choice of
 `R'` and of the three morphisms, in its own crate.
+
+The finite powers `R^*` of a relation are `Batch` (lists of pairs), with
+`Single : R -> R^*` and `Concat : R^* x R^* -> R^*` as unit and
+multiplication (the free monoid), and `Each(A) : R1^* -> R2^*` running a
+reduction on every element. `Each` is a functor (it preserves identities
+and `Then`) and `Concat` a monoid; both are tested.
+
+### `arrabbiata-halo`
+
+Halo's accumulation of polynomial openings (Bowe, Grigg, Hopwood, ePrint
+2019/1021; Bunz, Chiesa, Mishra and Spooner, ePrint 2020/499, who give
+accumulation schemes for `PC_DL`, the IPA, and `PC_AGM`, KZG), for any
+scheme with an `Accumulation`, built only from morphisms of
+`arrabbiata-reduction` and over any oracle (`Transcript<F>`) and any
+family of polynomials.
+
+The trait asks for four things, and nothing else (no linearity, no
+particular family, no particular oracle): a succinct verifier of a batch of
+evaluation claims that outputs an accumulator, a decider for the
+accumulator relation, a fold `R_acc^* -> R_acc` with a succinct verifier,
+and soundness of the three. Three relations (`Evaluations`, `Opened` for
+one polynomial at several points, `Accumulated`), four morphisms, and
+composites that are the same for every scheme:
+
+```text
+Succinct : Evaluations   -> Accumulated     the scheme's opening, succinct check
+Fold     : Accumulated^* -> Accumulated     the scheme's fold
+Decide   : Accumulated   -> Top             the scheme's decider, run once
+Combine  : Evaluations   -> Opened          linear schemes only (polyscale)
+
+Open       = Succinct ; Decide
+Accumulate = Each(Succinct) ; Fold
+DecideAll  = Fold ; Decide
+```
+
+The two schemes meet the trait through different properties, which is the
+checklist for another scheme (a lattice or hash-based one):
+
+| | IPA (`PC_DL`) | KZG (`PC_AGM`) |
+| --- | --- | --- |
+| batch of `k` polynomials | `Combine` (linear commitment) | `Combine` (linear commitment) |
+| `m` points | one IPA, `evalscale` | one proof per point, pairs combined by `r` |
+| accumulator | `(u, sg)`, claims `sg = commit(b_u)` | `(P, W)`, claims `e(P, H) = e(W, [tau] H)` |
+| decider | MSM of the size of the key | one pairing check |
+| fold | `Lift ; Succinct`: `b_u(z)` costs `O(k)`, one more IPA | random combination, no proof: the accepted pairs are a subgroup |
+
+`Combine` needs commitments that combine with arbitrary field scalars;
+lattice commitments combine only with small-norm scalars and hash-based
+ones not at all, so it is a property some schemes have and the trait does
+not require it. The laws are generic functions run on IPA (with the
+Poseidon duplex sponge and with Kimchi's sponge) and on KZG over BN254:
+every morphism and composite is complete, `Accumulate` is `Each(Succinct)`
+then `Fold`, a wrong value is rejected, and a false accumulator, which no
+succinct check sees, makes the fold fail or its output false. Kimchi
+merges previous accumulators into the next proof's opening at `zeta, zeta
+w` instead of a fresh point; that saves `Fold`'s IPA and is the protocol's
+to make sound (the accumulators must be absorbed before `zeta`), so it
+belongs to the Kimchi SNARK, not here.
 
 ### `arrabbiata-plonkish`
 
@@ -795,6 +865,10 @@ written here are the targets).
 | rotations act on rows as `Z` on `Z/n` | yes | no |
 | Poseidon = reference permutation | yes, Zcash vectors (Pasta), the authors' `hadeshash` vectors (BN254, widths 3 and 5), and proof-systems' `kimchi.json` (Kimchi's instance) | no |
 | IPA and KZG completeness, binding, morphism | yes | no |
+| IPA at several points: complete, sound; `succinct` trusts only `sg`, `decide` checks it; `decide_all` = `decide` for each | yes | no |
+| `b_poly`, `b_poly_coefficients`, `combined_inner_product` = Kimchi's | yes, Kimchi's output | no |
+| lists of a relation: `Each` is a functor, `Concat` a monoid | yes | no |
+| Halo, for IPA and KZG and two oracles: every morphism and composite complete; a false accumulator caught by the next fold | yes | no |
 | graded and homogeneous evaluation | yes | no |
 | folding identity | yes, on arbitrary relaxed pairs | yes, `fold_complete` (built in CI) |
 | prover and verifier fold to the same instance | yes | by construction (shared function) |

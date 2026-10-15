@@ -10,6 +10,10 @@ Accumulation schemes: a relaxation `R'` of a relation `R`, an embedding
   `arithmetization/plonkish`, with the cross-terms computed from
   multivariate polynomials and the copy constraints folded linearly; its
   decider is `decider/plonk`.
+- `halo` accumulates polynomial openings as Halo does, for any scheme
+  with an `Accumulation` (IPA and KZG so far): a succinct verifier to an
+  accumulator, a fold of accumulators, and one decider at the end, all of
+  it composition of reductions, over any oracle.
 
 Other accumulation schemes (multi-instance folding, split accumulation,
 ...) will sit beside them, as other morphisms of the same shape.

@@ -119,6 +119,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-halo"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-bn254",
+ "arrabbiata-commit",
+ "arrabbiata-curve",
+ "arrabbiata-field",
+ "arrabbiata-ipa",
+ "arrabbiata-kzg",
+ "arrabbiata-pasta",
+ "arrabbiata-poseidon",
+ "arrabbiata-reduction",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-ipa"
 version = "0.0.0"
 dependencies = [
