@@ -638,6 +638,25 @@ check that every determined cell is caught when changed and that the free
 cells are exactly Kimchi's (`x21_inv` when `x1 = x2`, `inf_z` when
 `y1 = y2`), and prove that four private points sum to a public point.
 
+The VarBaseMul gate is five steps `A -> 2 A + (2 b - 1) T` of a
+variable-base scalar multiplication on two rows, with Kimchi's 21
+constraints (the decomposition `n' = 32 n + bits`, then per bit booleanity,
+the slope, and the output's two coordinates, of degree up to 6). The tests
+reproduce Kimchi's `tests/varbasemul.rs` (255 bits from `2 G` give
+`(1 + 2^255 + 2 x) G` and `n = x`, every cell of the 102 rows equal to
+Kimchi's witness), check that a gate determines all its cells, and prove a
+multiplication with a public base and result.
+
+A constraint lives on its gadget's first row and reads later rows by
+rotation, as a Kimchi gate does; so each leaf gadget is one selector.
+`figures` gives, per gate kind, the constraint count, the degree of each
+constraint (Kimchi's `Expr::degree(1, 0)` convention), the instances and
+the cells read, and per circuit the rows, variables, copies and public
+inputs; a test checks them against the compiled circuit, and
+`tests/figures.rs` of `arrabbiata-kimchi-gadgets` against Kimchi's:
+`CONSTRAINTS` quoted from Kimchi's source, the degrees derived from its
+constraint expressions.
+
 ## deviations and next steps
 
 - **Copy constraints in folding.** `arrabbiata-folding` (the relation of
@@ -704,6 +723,8 @@ cells are exactly Kimchi's (`x21_inv` when `x1 = x2`, `inf_z` when
 | Kimchi Poseidon gate = Kimchi's permutation and layout | yes, `kimchi.json` | no |
 | Kimchi Generic gate = Kimchi's coefficients, on Kimchi's test circuit and witness | yes | no |
 | Kimchi CompleteAdd = Kimchi's rows; its free cells are exactly Kimchi's | yes | no |
+| Kimchi VarBaseMul = Kimchi's 255-bit test, cell for cell; every cell determined | yes | no |
+| gate figures (constraints, degrees, cells read) = Kimchi's | yes, counts quoted from Kimchi, degrees read from its expressions | no |
 | lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
 | permutation: `sigma` depends on the partition only; respected iff constant on classes; the product closes and the identities vanish iff respected | yes | no |
 | permuting a subset of columns: same satisfied witnesses, smaller quotient | yes, on a sum of 4-bit numbers | no |
