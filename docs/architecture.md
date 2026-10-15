@@ -163,6 +163,24 @@ The `Pairing` trait abstracts the pairing (two groups with a common scalar
 field and a product-equals-one check), so KZG is written once for every
 pairing.
 
+GLV (`glv`): every curve here has `j = 0`, so `phi(x, y) = (beta x, y)`, for
+a cube root of unity `beta` of the base field, is an endomorphism, acting on
+the prime-order group as a cube root of unity `lambda` of the scalars. A
+scalar splits as `k = k1 + k2 lambda` against a short basis of the lattice
+`{(a, b) : a + b lambda = 0 mod r}` (Guide to ECC, Algorithm 3.74), with
+halves of at most 128 bits, and `[k] P = [k1] P + [k2] phi(P)` runs both in
+one loop of 128 doublings. The divisions of the rounding are precomputed
+(`round(2^256 b / r)`), and the rest is arithmetic modulo `2^256`, exact
+because the halves are small. Pallas, Vesta, BN254 `G1` and `G2` and
+Grumpkin carry their constants, generated and checked by a script: `beta`
+is the multiplicative generator to the power `(p - 1) / 3` (Kimchi's
+convention), and `lambda` the eigenvalue of `phi` on the generator. Pallas'
+and Vesta's are Kimchi's `endos`, as Kimchi prints them; on BN254, `phi` acts
+on `G2` as `lambda^2` of `G1`'s `lambda`. The laws tested on every curve:
+`beta` and `lambda` are primitive cube roots of unity, `phi` keeps points on
+the curve, is additive, has order 3 and is `[lambda]`; the split recomposes
+the scalar; and GLV multiplication is scalar multiplication.
+
 ### `arrabbiata-poseidon`
 
 Poseidon is a family: its round constants and MDS matrix are the output of
@@ -649,6 +667,32 @@ multiplication with a public base and result.
 
 A constraint lives on its gadget's first row and reads later rows by
 rotation, as a Kimchi gate does; so each leaf gadget is one selector.
+
+The EndoMul gate is four bits per row of an endomorphism-optimized scalar
+multiplication: each pair of bits picks one of `T`, `-T`, `phi(T)`,
+`-phi(T)` with Kimchi's `endo`, the curve's GLV `beta`, and the row applies
+`P -> (P + Q) + P` twice, with Kimchi's 12 constraints of degree up to 4.
+The tests reproduce Kimchi's `tests/endomul.rs` (128 bits from
+`2 (phi(G) + G)` give `[k] G` for `k = ScalarChallenge::to_field(x)` with the
+GLV `lambda`, and `n = x`, every cell equal to Kimchi's `gen_witness`), check
+that a row determines its cells, and prove `Q = [k] T` with `T` and `Q`
+public.
+
+The EndoMulScalar gate computes, in the other field, the scalar EndoMul
+multiplies by: eight two-bit crumbs per row update `(n, a, b)` through the
+cubics `c` and `d` that interpolate Kimchi's tables on `{0, 1, 2, 3}`, with
+`a lambda + b = ScalarChallenge::to_field(x)`; 11 constraints, each crumb
+range-checked by `x (x - 1) (x - 2) (x - 3)`. The tests reproduce Kimchi's
+`tests/endomul_scalar.rs` cell for cell, check that over `Fq` with Pallas'
+`lambda` the scalar is EndoMul's, that a row determines its cells and a
+crumb of 4 is rejected, and prove that a public `(a, b)` comes from a
+private challenge.
+
+Terms are built with Kimchi's simplifications (constants fold, `0 + e`,
+`0 e`, `1 e`), which keep the polynomial and make the syntactic degree
+agree with Kimchi's on the same construction; without them a Horner
+evaluation from `0` counts one degree too many, which the figures test
+caught on EndoMulScalar.
 `figures` gives, per gate kind, the constraint count, the degree of each
 constraint (Kimchi's `Expr::degree(1, 0)` convention), the instances and
 the cells read, and per circuit the rows, variables, copies and public
@@ -726,6 +770,9 @@ written here are the targets).
 | Kimchi Generic gate = Kimchi's coefficients, on Kimchi's test circuit and witness | yes | no |
 | Kimchi CompleteAdd = Kimchi's rows; its free cells are exactly Kimchi's | yes | no |
 | Kimchi VarBaseMul = Kimchi's 255-bit test, cell for cell; every cell determined | yes | no |
+| Kimchi EndoMul = Kimchi's 128-bit test, cell for cell; every cell determined | yes | no |
+| Kimchi EndoMulScalar = Kimchi's test, cell for cell; its scalar is EndoMul's | yes | no |
+| GLV: `phi = [lambda]`, the split recomposes `k`, GLV multiplication = scalar multiplication | yes, on every curve | no |
 | gate figures (constraints, degrees, cells read) = Kimchi's | yes, against Kimchi's own output | no |
 | lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
 | permutation: `sigma` depends on the partition only; respected iff constant on classes; the product closes and the identities vanish iff respected | yes | no |

@@ -72,7 +72,7 @@ the right group.
 | `crates/algebra` | `arrabbiata-field` | the `Field` traits; Montgomery prime fields; quadratic extensions; Goldilocks | yes |
 | | `arrabbiata-mvpoly` | multivariate polynomials in normal form (sparse, and dense through the primes), cross-terms of folding, Hasse derivatives | no |
 | | `arrabbiata-poly` | typed columns, constraint expressions, graded evaluation and homogenization, univariate polynomials, NTT domains | yes |
-| `crates/ec` | `arrabbiata-curve` | the `Curve` and `Pairing` traits, complete formulas, MSM, the group laws | not yet |
+| `crates/ec` | `arrabbiata-curve` | the `Curve` and `Pairing` traits, complete formulas, MSM, GLV, the group laws | not yet |
 | | `arrabbiata-pasta` | Pallas, Vesta and their fields | not yet |
 | | `arrabbiata-bn254` | BN254 fields, `G1`, `G2`, `Fq12`, the pairing | not yet |
 | | `arrabbiata-grumpkin` | Grumpkin, the curve forming a cycle with BN254 | not yet |
@@ -92,7 +92,7 @@ the right group.
 | `crates/decider` | `arrabbiata-plonk-decider` | the decider `R' -> R_top` of `plonkish-folding`: the relaxation as a generalized PlonK circuit | no |
 | `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
 | | `arrabbiata-generalized-plonk` | generalized PlonK: any numbers of columns, selectors and public inputs, gates any multivariate polynomials of degree at most `D`; plookup and LogUp lookups | no |
-| `crates/gadgets` | `arrabbiata-kimchi-gadgets` | Kimchi's gates on its 15 columns, as typed gadgets: Generic, Poseidon, CompleteAdd, VarBaseMul, with their figures | no |
+| `crates/gadgets` | `arrabbiata-kimchi-gadgets` | Kimchi's gates on its 15 columns, as typed gadgets: Generic, Poseidon, CompleteAdd, VarBaseMul, EndoMul, EndoMulScalar, with their figures | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
