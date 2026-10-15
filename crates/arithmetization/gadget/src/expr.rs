@@ -89,6 +89,24 @@ where
         }
     }
 
+    /// The value at the cells `witness` and `fixed` give; `None` if one of
+    /// them is unknown or the expression reads an unplaced input.
+    pub(crate) fn evaluate(
+        &self,
+        witness: &dyn Fn(usize, usize) -> Option<F>,
+        fixed: &dyn Fn(usize, usize) -> Option<F>,
+    ) -> Option<F> {
+        match self {
+            Self::Constant(c) => Some(*c),
+            Self::Input(_) => None,
+            Self::Witness { column, row } => witness(*column, *row),
+            Self::Fixed { column, row } => fixed(*column, *row),
+            Self::Add(a, b) => Some(a.evaluate(witness, fixed)? + b.evaluate(witness, fixed)?),
+            Self::Mul(a, b) => Some(a.evaluate(witness, fixed)? * b.evaluate(witness, fixed)?),
+            Self::Neg(a) => Some(-a.evaluate(witness, fixed)?),
+        }
+    }
+
     /// Whether the expression reads an input that was never placed.
     pub(crate) fn reads_input(&self) -> bool {
         match self {

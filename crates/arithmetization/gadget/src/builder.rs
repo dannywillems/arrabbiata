@@ -9,7 +9,7 @@ use alloc::{
 use core::fmt;
 
 use arrabbiata_field::Field;
-use arrabbiata_generalized_plonk::{self as generalized, Circuit, Gate};
+use arrabbiata_generalized_plonk::{self as generalized, Argument, Circuit, Gate, Lookup};
 use arrabbiata_permutation::Permutation;
 
 use crate::{
@@ -99,6 +99,19 @@ pub enum Error {
         /// Its degree.
         degree: usize,
     },
+    /// A value read from a table is not one of its rows.
+    NotInTable {
+        /// The gadget.
+        gadget: &'static str,
+        /// The absolute row of the read.
+        row: usize,
+    },
+    /// A table read with another content, or with a query of the wrong
+    /// width.
+    Table {
+        /// The table.
+        name: &'static str,
+    },
     /// Generalized PlonK rejected the circuit.
     Circuit(generalized::Error),
 }
@@ -139,6 +152,13 @@ impl fmt::Display for Error {
             Self::Degree { gadget, degree } => {
                 write!(f, "{gadget}: a constraint has degree {degree}")
             }
+            Self::NotInTable { gadget, row } => {
+                write!(f, "{gadget}: a value read on row {row} is not in its table")
+            }
+            Self::Table { name } => write!(
+                f,
+                "table {name}: another content, or a query of the wrong width"
+            ),
             Self::Circuit(e) => write!(f, "generalized PlonK: {e}"),
         }
     }
@@ -166,11 +186,73 @@ struct Kind<F> {
     gadget: &'static str,
     /// The row of the gadget the gates are on.
     offset: isize,
-    constraints: Vec<Expr<F>>,
+    /// The constraints and the table reads, in the order asserted.
+    entries: Vec<Entry<F>>,
     /// The instance that defined the constraints.
     owner: usize,
     /// The rows the gates are on.
     rows: BTreeSet<usize>,
+}
+
+/// What a gadget asserts on a row: a constraint, or a read of a table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Entry<F> {
+    Constraint(Expr<F>),
+    Read(&'static str, Vec<Expr<F>>),
+}
+
+/// A read-only table: its rows, stored in fixed columns, one column per
+/// entry of a row. A read asserts that a tuple of variables is one of the
+/// rows (plookup, as Kimchi's lookups are).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rom<F> {
+    name: &'static str,
+    columns: Vec<usize>,
+    rows: Vec<Vec<F>>,
+}
+
+impl<F> Rom<F>
+where
+    F: Field,
+{
+    /// The table `name` of `rows`, stored in the fixed `columns` (a row has
+    /// one entry per column). The columns hold the table on every row of the
+    /// circuit, repeating the first row below the last.
+    #[must_use]
+    pub const fn new(name: &'static str, columns: Vec<usize>, rows: Vec<Vec<F>>) -> Self {
+        Self {
+            name,
+            columns,
+            rows,
+        }
+    }
+
+    /// The name.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// The fixed columns.
+    #[must_use]
+    pub fn columns(&self) -> &[usize] {
+        &self.columns
+    }
+
+    /// The rows.
+    #[must_use]
+    pub fn rows(&self) -> &[Vec<F>] {
+        &self.rows
+    }
+}
+
+/// A check postponed until the witness is complete: a constraint or a read
+/// over a cell written after it.
+#[derive(Clone, Debug)]
+struct Deferred<F> {
+    gadget: &'static str,
+    row: usize,
+    entry: Entry<F>,
 }
 
 /// A gadget being synthesized.
@@ -201,6 +283,8 @@ pub struct Builder<F> {
     public: Vec<(usize, Option<F>)>,
     kinds: Vec<Kind<F>>,
     kind_index: BTreeMap<(&'static str, isize), usize>,
+    tables: BTreeMap<&'static str, Rom<F>>,
+    deferred: Vec<Deferred<F>>,
     last_row: usize,
     error: Option<Error>,
 }
@@ -223,6 +307,8 @@ where
             public: Vec::new(),
             kinds: Vec::new(),
             kind_index: BTreeMap::new(),
+            tables: BTreeMap::new(),
+            deferred: Vec::new(),
             last_row: 0,
             error: None,
         }
@@ -267,27 +353,134 @@ where
     fn close(&mut self, frame: &Frame) {
         for (kind, count) in &frame.seen {
             let k = &self.kinds[*kind];
-            if k.owner != frame.id && *count != k.constraints.len() {
+            if k.owner != frame.id && *count != k.entries.len() {
                 let gadget = k.gadget;
                 self.fail(Error::Inconsistent { gadget });
             }
         }
     }
 
-    fn finish<const N: usize, const D: usize>(self) -> Result<Compiled<F, N, D>, Error> {
+    /// The anchor of an entry first reading row `first_read`: the gadget's
+    /// first row, unless the entry reads a row before it.
+    fn anchor(&self, first_read: Option<usize>) -> usize {
+        let base = self.frames.last().map_or(0, |f| f.base);
+        match first_read {
+            Some(row) if row < base => row,
+            _ => base,
+        }
+    }
+
+    /// Record `entry` (relative to `anchor`) in the current gadget's kind for
+    /// the row `anchor`, checking it against the kind's first instance.
+    fn record(&mut self, anchor: usize, entry: Entry<F>) {
+        let gadget = self.gadget();
+        let Some(frame) = self.frames.last() else {
+            return;
+        };
+        let offset = anchor.cast_signed() - frame.base.cast_signed();
+        let id = frame.id;
+        let kind = match self.kind_index.get(&(gadget, offset)) {
+            Some(k) => *k,
+            None => {
+                self.kinds.push(Kind {
+                    gadget,
+                    offset,
+                    entries: Vec::new(),
+                    owner: id,
+                    rows: BTreeSet::new(),
+                });
+                let k = self.kinds.len() - 1;
+                self.kind_index.insert((gadget, offset), k);
+                k
+            }
+        };
+        let frame = self.frames.last_mut().unwrap_or_else(|| unreachable!());
+        let count = *frame.seen.get(&kind).unwrap_or(&0);
+        frame.seen.insert(kind, count + 1);
+        let k = &mut self.kinds[kind];
+        k.rows.insert(anchor);
+        if k.owner == id {
+            k.entries.push(entry);
+        } else if k.entries.get(count) != Some(&entry) {
+            self.fail(Error::Inconsistent { gadget });
+        }
+    }
+
+    /// The value of an expression in the finished witness.
+    fn value_of(&self, expr: &Expr<F>) -> Option<F> {
+        let witness =
+            |c: usize, r: usize| Some(self.witness.get(&(c, r)).copied().unwrap_or(F::ZERO));
+        let fixed = |c: usize, r: usize| Some(self.fixed.get(&(c, r)).copied().unwrap_or(F::ZERO));
+        expr.evaluate(&witness, &fixed)
+    }
+
+    /// Whether `values` is a row of the table `name`.
+    fn in_table(&self, name: &str, values: &[F]) -> bool {
+        self.tables
+            .get(name)
+            .is_some_and(|t| t.rows.iter().any(|row| row.as_slice() == values))
+    }
+
+    /// The postponed checks, on the finished witness.
+    fn check_deferred(&mut self) {
+        let deferred = core::mem::take(&mut self.deferred);
+        for d in &deferred {
+            let holds = match &d.entry {
+                Entry::Constraint(e) => self.value_of(e) == Some(F::ZERO),
+                Entry::Read(name, query) => {
+                    let values: Option<Vec<F>> = query.iter().map(|e| self.value_of(e)).collect();
+                    values.is_some_and(|v| self.in_table(name, &v))
+                }
+            };
+            if !holds {
+                let (gadget, row) = (d.gadget, d.row);
+                match d.entry {
+                    Entry::Constraint(_) => self.fail(Error::Unsatisfied { gadget, row }),
+                    Entry::Read(..) => self.fail(Error::NotInTable { gadget, row }),
+                }
+            }
+        }
+    }
+
+    fn finish<const N: usize, const D: usize>(mut self) -> Result<Compiled<F, N, D>, Error> {
+        if self.with_witness {
+            self.check_deferred();
+        }
         if let Some(e) = self.error {
             return Err(e);
         }
-        let n = self
-            .cursor
-            .max(self.last_row + 1)
-            .max(2)
-            .next_power_of_two();
-        // The column variables, in one numbering for every gate.
+        let n = domain_size(self.cursor, self.last_row, &self.tables);
+        // The tables, in their fixed columns, on every row.
+        for table in self.tables.values() {
+            for (j, column) in table.columns.iter().enumerate() {
+                if *column >= self.layout.fixed {
+                    return Err(Error::Column {
+                        gadget: table.name,
+                        column: *column,
+                    });
+                }
+                for row in 0..n {
+                    let entry = table.rows.get(row).unwrap_or(&table.rows[0])[j];
+                    if let Some(old) = self.fixed.insert((*column, row), entry)
+                        && old != entry
+                    {
+                        return Err(Error::Overwrite {
+                            gadget: table.name,
+                            column: *column,
+                            row,
+                        });
+                    }
+                }
+            }
+        }
+        // The column variables, in one numbering for every gate and read.
         let mut atoms = Vec::new();
         for kind in &self.kinds {
-            for c in &kind.constraints {
-                c.atoms(&mut atoms);
+            for entry in &kind.entries {
+                match entry {
+                    Entry::Constraint(c) => c.atoms(&mut atoms),
+                    Entry::Read(_, query) => query.iter().for_each(|e| e.atoms(&mut atoms)),
+                }
             }
         }
         atoms.sort_unstable();
@@ -300,6 +493,7 @@ where
         let index: BTreeMap<Atom, usize> = atoms.iter().enumerate().map(|(i, a)| (*a, i)).collect();
         let variables = atoms.iter().map(|a| a.variable()).collect();
         let mut gates = Vec::new();
+        let mut lookups = Vec::new();
         let mut selectors = Vec::new();
         for (k, kind) in self.kinds.iter().enumerate() {
             let mut selector = vec![F::ZERO; n];
@@ -307,13 +501,25 @@ where
                 selector[*row] = F::ONE;
             }
             selectors.push(selector);
-            for c in &kind.constraints {
-                let degree = c.degree();
-                let gadget = kind.gadget;
-                let polynomial = c
-                    .to_sparse::<N, D>(&index)
-                    .ok_or(Error::Degree { gadget, degree })?;
-                gates.push(Gate::new(Some(k), polynomial));
+            let gadget = kind.gadget;
+            let sparse = |e: &Expr<F>| {
+                let degree = e.degree();
+                e.to_sparse::<N, D>(&index)
+                    .ok_or(Error::Degree { gadget, degree })
+            };
+            for entry in &kind.entries {
+                match entry {
+                    Entry::Constraint(c) => gates.push(Gate::new(Some(k), sparse(c)?)),
+                    Entry::Read(name, query) => {
+                        let inputs = query.iter().map(sparse).collect::<Result<Vec<_>, _>>()?;
+                        let table = self
+                            .tables
+                            .get(name)
+                            .map(|t| t.columns.clone())
+                            .unwrap_or_default();
+                        lookups.push(Lookup::new(Argument::Plookup, Some(k), inputs, table));
+                    }
+                }
             }
         }
         let columns: Vec<Vec<F>> = (0..self.layout.witness)
@@ -367,6 +573,11 @@ where
         let circuit = circuit
             .with_permutation((0..permuted).collect(), sigma.sigma().to_vec())
             .map_err(Error::Circuit)?;
+        let circuit = if lookups.is_empty() {
+            circuit
+        } else {
+            circuit.with_lookups(lookups).map_err(Error::Circuit)?
+        };
         Ok(Compiled {
             circuit,
             columns,
@@ -481,45 +692,79 @@ where
         // A constraint lives on its gadget's first row, reading the later
         // rows by rotation, as a Kimchi gate does; one reading a row before
         // the gadget lives on the first row it reads.
-        let base = self.frames.last().map_or(0, |f| f.base);
-        let anchor = if first_read >= base { base } else { first_read };
-        if self.with_witness && value.value != Some(F::ZERO) {
-            self.fail(Error::Unsatisfied {
-                gadget,
-                row: first_read,
-            });
-        }
-        let Some(frame) = self.frames.last() else {
-            return;
-        };
-        let offset = anchor.cast_signed() - frame.base.cast_signed();
-        let id = frame.id;
-        let relative = value.expr.relative_to(anchor);
-        let kind = match self.kind_index.get(&(gadget, offset)) {
-            Some(k) => *k,
-            None => {
-                self.kinds.push(Kind {
+        let anchor = self.anchor(Some(first_read));
+        if self.with_witness {
+            match value.value {
+                Some(v) if v != F::ZERO => self.fail(Error::Unsatisfied {
                     gadget,
-                    offset,
-                    constraints: Vec::new(),
-                    owner: id,
-                    rows: BTreeSet::new(),
-                });
-                let k = self.kinds.len() - 1;
-                self.kind_index.insert((gadget, offset), k);
-                k
+                    row: first_read,
+                }),
+                // A cell this constraint reads is written later.
+                None => self.deferred.push(Deferred {
+                    gadget,
+                    row: first_read,
+                    entry: Entry::Constraint(value.expr.clone()),
+                }),
+                Some(_) => {}
             }
-        };
-        let frame = self.frames.last_mut().unwrap_or_else(|| unreachable!());
-        let count = *frame.seen.get(&kind).unwrap_or(&0);
-        frame.seen.insert(kind, count + 1);
-        let k = &mut self.kinds[kind];
-        k.rows.insert(anchor);
-        if k.owner == id {
-            k.constraints.push(relative);
-        } else if k.constraints.get(count) != Some(&relative) {
-            self.fail(Error::Inconsistent { gadget });
         }
+        let relative = value.expr.relative_to(anchor);
+        self.record(anchor, Entry::Constraint(relative));
+    }
+
+    fn read(&mut self, table: &Rom<F>, query: &[Wire<F>]) {
+        let gadget = self.gadget();
+        if query.iter().any(|w| w.expr.reads_input()) {
+            self.fail(Error::Unplaced { gadget });
+            return;
+        }
+        match self.tables.get(table.name) {
+            Some(known) if known != table => {
+                let name = table.name;
+                self.fail(Error::Table { name });
+                return;
+            }
+            Some(_) => {}
+            None => {
+                self.tables.insert(table.name, table.clone());
+            }
+        }
+        if query.len() != table.columns.len() {
+            let name = table.name;
+            self.fail(Error::Table { name });
+            return;
+        }
+        let first_read = query.iter().filter_map(|w| w.expr.min_row()).min();
+        let anchor = self.anchor(first_read);
+        let row = first_read.unwrap_or(anchor);
+        let exprs: Vec<Expr<F>> = query.iter().map(|w| w.expr.clone()).collect();
+        if self.with_witness {
+            let values: Option<Vec<F>> = query.iter().map(|w| w.value).collect();
+            match values {
+                Some(v) if !self.in_table(table.name, &v) => {
+                    self.fail(Error::NotInTable { gadget, row })
+                }
+                None => self.deferred.push(Deferred {
+                    gadget,
+                    row,
+                    entry: Entry::Read(table.name, exprs.clone()),
+                }),
+                Some(_) => {}
+            }
+        }
+        let relative = exprs.iter().map(|e| e.relative_to(anchor)).collect();
+        self.record(anchor, Entry::Read(table.name, relative));
+    }
+
+    fn cell(&mut self, at: Cell) -> Wire<F> {
+        let (column, row) = self.absolute(at);
+        if column >= self.layout.witness {
+            let gadget = self.gadget();
+            self.fail(Error::Column { gadget, column });
+        }
+        self.last_row = self.last_row.max(row);
+        let value = self.witness.get(&(column, row)).copied();
+        Wire::new(Expr::Witness { column, row }, value)
     }
 
     fn call<G>(&mut self, gadget: &G, input: Of<G::Input, Wire<F>>) -> Of<G::Output, Wire<F>>
@@ -671,6 +916,10 @@ pub struct GateFigures {
     pub fixed_cells: Vec<(usize, usize)>,
     /// The largest rotation read (0: the row only, 1: the next row too).
     pub max_rotation: usize,
+    /// The table of each read, in order: one lookup each.
+    pub reads: Vec<&'static str>,
+    /// The witness cells the reads look up, as (column, rotation).
+    pub read_cells: Vec<(usize, usize)>,
 }
 
 /// The figures of a circuit, without compiling it to a fixed `N` and `D`.
@@ -692,6 +941,8 @@ pub struct Figures {
     pub copies: usize,
     /// The number of public inputs.
     pub public_inputs: usize,
+    /// The tables read: name, rows, columns.
+    pub tables: Vec<(&'static str, usize, usize)>,
 }
 
 impl Figures {
@@ -724,11 +975,41 @@ where
         .kinds
         .iter()
         .map(|kind| {
-            let degrees: Vec<usize> = kind.constraints.iter().map(Expr::degree).collect();
+            let constraints: Vec<&Expr<F>> = kind
+                .entries
+                .iter()
+                .filter_map(|e| match e {
+                    Entry::Constraint(c) => Some(c),
+                    Entry::Read(..) => None,
+                })
+                .collect();
+            let reads: Vec<(&'static str, &Vec<Expr<F>>)> = kind
+                .entries
+                .iter()
+                .filter_map(|e| match e {
+                    Entry::Read(name, query) => Some((*name, query)),
+                    Entry::Constraint(_) => None,
+                })
+                .collect();
+            let degrees: Vec<usize> = constraints.iter().map(|c| c.degree()).collect();
             let mut atoms = Vec::new();
-            for c in &kind.constraints {
+            for c in &constraints {
                 c.atoms(&mut atoms);
             }
+            let mut read_atoms = Vec::new();
+            for (_, query) in &reads {
+                query.iter().for_each(|e| e.atoms(&mut read_atoms));
+            }
+            read_atoms.sort_unstable();
+            read_atoms.dedup();
+            all_atoms.extend(read_atoms.iter().copied());
+            let read_cells = read_atoms
+                .iter()
+                .filter_map(|a| match *a {
+                    Atom::Witness { column, rotation } => Some((column, rotation)),
+                    Atom::Fixed { .. } => None,
+                })
+                .collect();
             atoms.sort_unstable();
             atoms.dedup();
             all_atoms.extend(atoms.iter().copied());
@@ -749,7 +1030,9 @@ where
             GateFigures {
                 gadget: kind.gadget,
                 offset: kind.offset,
-                constraints: kind.constraints.len(),
+                constraints: constraints.len(),
+                reads: reads.iter().map(|(name, _)| *name).collect(),
+                read_cells,
                 max_degree: degrees.iter().copied().max().unwrap_or(0),
                 degrees,
                 instances: kind.rows.len(),
@@ -764,11 +1047,32 @@ where
     let rows = builder.cursor.max(builder.last_row + 1);
     Ok(Figures {
         rows,
-        domain_size: rows.max(2).next_power_of_two(),
+        domain_size: domain_size(builder.cursor, builder.last_row, &builder.tables),
+        tables: builder
+            .tables
+            .values()
+            .map(|t| (t.name, t.rows.len(), t.columns.len()))
+            .collect(),
         max_degree: gates.iter().map(|g| g.max_degree).max().unwrap_or(0),
         gates,
         variables: all_atoms.len(),
         copies: builder.copies.len(),
         public_inputs: builder.public.len(),
     })
+}
+
+/// The rows of the table: the gadgets' rows, and for plookup a free last
+/// row and a row per table entry, rounded up to a power of two.
+fn domain_size<F>(
+    cursor: usize,
+    last_row: usize,
+    tables: &BTreeMap<&'static str, Rom<F>>,
+) -> usize {
+    let reserve = usize::from(!tables.is_empty());
+    let table_rows = tables.values().map(|t| t.rows.len() + 1).max().unwrap_or(0);
+    cursor
+        .max(last_row + 1 + reserve)
+        .max(table_rows)
+        .max(2)
+        .next_power_of_two()
 }

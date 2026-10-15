@@ -50,7 +50,7 @@ pub mod shape;
 
 pub use crate::{
     builder::{
-        Builder, Compiled, Error, Figures, GateFigures, Layout, Witnessed, circuit, evaluate,
+        Builder, Compiled, Error, Figures, GateFigures, Layout, Rom, Witnessed, circuit, evaluate,
         figures, witness,
     },
     env::{Cell, Chain, Env, Repeat, TypedGadget},

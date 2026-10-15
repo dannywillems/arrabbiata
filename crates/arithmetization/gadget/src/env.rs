@@ -7,7 +7,10 @@
 //! environment is a model of it: the builder reads it as constraints and,
 //! with values, as a witness, from the same code.
 
-use crate::shape::{Of, Shape};
+use crate::{
+    builder::Rom,
+    shape::{Of, Shape},
+};
 use arrabbiata_field::Field;
 use core::ops::{Add, Mul, Neg, Sub};
 
@@ -81,6 +84,14 @@ where
     /// Make the cell `value` is a public input. It must be a cell of the
     /// first column.
     fn public(&mut self, value: &Self::Var);
+
+    /// A witness cell this gadget reads but does not write (another gadget
+    /// does, possibly later): a constraint or a read over it is checked once
+    /// the witness is complete.
+    fn cell(&mut self, at: Cell) -> Self::Var;
+
+    /// Assert that `query` is a row of `table` (a lookup).
+    fn read(&mut self, table: &Rom<F>, query: &[Self::Var]);
 
     /// Constrain `value` to be zero, on the first row of each instance of
     /// this gadget (the cells of later rows are read by rotation; a
