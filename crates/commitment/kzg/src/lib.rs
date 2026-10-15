@@ -99,6 +99,17 @@ where
         self.powers.len()
     }
 
+    /// Whether `e(P, H) = e(W, [tau] H)`: the pairing check every KZG
+    /// verification ends with, on the pair `(P, W)`. For an opening of `C`
+    /// at `z` to `v` with proof `pi`, `P = C - [v] G + [z] pi` and `W = pi`.
+    /// The pairs it accepts are the kernel of a group homomorphism `G1^2
+    /// -> GT`, so a subgroup: this is what makes KZG accumulators fold by
+    /// random linear combinations.
+    #[must_use]
+    pub fn decide_pair(&self, p: &Projective<E::G1>, w: &Projective<E::G1>) -> bool {
+        E::pairing_product_is_one(&[(*p, self.h), (-*w, self.tau_h)])
+    }
+
     fn commit_coefficients(&self, coefficients: &[Scalar<E>]) -> Projective<E::G1> {
         assert!(
             coefficients.len() <= self.size(),
@@ -165,8 +176,8 @@ where
         proof: &Projective<E::G1>,
     ) -> bool {
         let g = Projective::<E::G1>::generator();
-        let lhs = *commitment - g * value + *proof * *point;
-        E::pairing_product_is_one(&[(lhs, self.h), (-*proof, self.tau_h)])
+        let p = *commitment - g * value + *proof * *point;
+        self.decide_pair(&p, proof)
     }
 }
 
