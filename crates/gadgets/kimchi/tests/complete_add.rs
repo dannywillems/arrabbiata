@@ -193,6 +193,27 @@ proptest! {
     }
 }
 
+/// A CompleteAdd whose result is not the point at infinity.
+#[derive(Clone, Copy, Debug)]
+struct FiniteAdd;
+
+impl TypedGadget<Fp> for FiniteAdd {
+    type Input = Array<4>;
+    type Output = Array<2>;
+    const NAME: &'static str = "finite-add";
+    const ROWS: usize = 1;
+
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        input: Of<Array<4>, E::Var>,
+    ) -> Of<Array<2>, E::Var> {
+        let [x3, y3, inf] = env.call(&CompleteAdd, input);
+        env.assert_zero(inf);
+        [x3, y3]
+    }
+}
+
 /// The sum of four private points, made public.
 #[derive(Clone, Copy, Debug)]
 struct SumOfFour;
@@ -213,10 +234,8 @@ impl TypedGadget<Fp> for SumOfFour {
         for row in 0..3 {
             let px = env.advice(Cell::new(column::X2, row), [&points[2 * row + 2]], |[v]| v);
             let py = env.advice(Cell::new(column::Y2, row), [&points[2 * row + 3]], |[v]| v);
-            let [x3, y3, inf] = env.call(&CompleteAdd, [x, y, px, py]);
             // No partial sum is the point at infinity.
-            env.assert_zero(inf);
-            (x, y) = (x3, y3);
+            [x, y] = env.call(&FiniteAdd, [x, y, px, py]);
         }
         let public_x = env.copy(Cell::new(0, 3), &x);
         let public_y = env.copy(Cell::new(0, 4), &y);
