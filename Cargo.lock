@@ -73,6 +73,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-generalized-plonk"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-bn254",
+ "arrabbiata-commit",
+ "arrabbiata-field",
+ "arrabbiata-frontend",
+ "arrabbiata-ipa",
+ "arrabbiata-kzg",
+ "arrabbiata-mvpoly",
+ "arrabbiata-pasta",
+ "arrabbiata-plonk",
+ "arrabbiata-plonkish",
+ "arrabbiata-poly",
+ "arrabbiata-poseidon",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-grumpkin"
 version = "0.0.0"
 dependencies = [
@@ -155,8 +175,10 @@ dependencies = [
  "arrabbiata-commit",
  "arrabbiata-field",
  "arrabbiata-frontend",
+ "arrabbiata-generalized-plonk",
  "arrabbiata-ipa",
  "arrabbiata-kzg",
+ "arrabbiata-mvpoly",
  "arrabbiata-pasta",
  "arrabbiata-plonk",
  "arrabbiata-plonkish",

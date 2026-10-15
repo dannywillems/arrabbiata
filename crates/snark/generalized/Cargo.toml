@@ -1,0 +1,30 @@
+[package]
+name = "arrabbiata-generalized-plonk"
+description = "Generalized PlonK: any number of columns, selectors and public inputs, gates any multivariate polynomials of bounded degree"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-commit = { workspace = true }
+arrabbiata-field = { workspace = true }
+arrabbiata-mvpoly = { workspace = true }
+arrabbiata-plonkish = { workspace = true }
+arrabbiata-poly = { workspace = true }
+arrabbiata-transcript = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-bn254 = { workspace = true }
+arrabbiata-frontend = { workspace = true }
+arrabbiata-ipa = { workspace = true }
+arrabbiata-kzg = { workspace = true }
+arrabbiata-pasta = { workspace = true }
+arrabbiata-plonk = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
