@@ -46,8 +46,10 @@ use arrabbiata_curve::{Curve, Projective, absorb_point, msm, points_from_transcr
 use arrabbiata_field::{Field, PrimeField, Sqrt, inner_product};
 use arrabbiata_transcript::{Absorb, Transcript, absorb_length, absorb_slice, typed::Label};
 
+pub mod accumulation;
 pub mod challenge;
 
+pub use accumulation::{Accumulators, Lift};
 pub use challenge::{
     RecursionChallenge, b_poly, b_poly_coefficients, combined_inner_product, evaluation_vector,
 };

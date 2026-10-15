@@ -21,11 +21,11 @@ use alloc::vec::Vec;
 use arrabbiata_commit::PolynomialCommitment;
 use arrabbiata_curve::{Curve, Pairing, Projective, absorb_point};
 use arrabbiata_field::{Field, PrimeField};
-use arrabbiata_kzg::Kzg;
+use arrabbiata_halo::{Accumulation, ClaimsOf, Combine, PointClaimOf};
 use arrabbiata_reduction::Reduction;
 use arrabbiata_transcript::{Absorb, Transcript, absorb_slice, hlist::HNil, typed::Label};
 
-use crate::{Accumulation, ClaimsOf, Combine, PointClaimOf};
+use crate::Kzg;
 
 /// The scalar field of the pairing groups.
 type Scalar<E> = <<E as Pairing>::G1 as Curve>::Scalar;

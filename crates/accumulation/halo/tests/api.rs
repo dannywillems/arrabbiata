@@ -5,12 +5,11 @@ use arrabbiata_commit::PolynomialCommitment;
 use arrabbiata_curve::Projective;
 use arrabbiata_field::Field;
 use arrabbiata_halo::{
-    Accumulated, Accumulation, Claims, ClaimsOf, Combine, Decide, Error, Evaluations, Fold, Lift,
-    Opened, PairingAccumulator, PointClaim, Succinct, accumulate, decide_all, ipa::Accumulators,
-    open,
+    Accumulated, Accumulation, Claims, ClaimsOf, Combine, Decide, Error, Evaluations, Fold, Opened,
+    PointClaim, Succinct, accumulate, decide_all, open,
 };
-use arrabbiata_ipa::Ipa;
-use arrabbiata_kzg::Kzg;
+use arrabbiata_ipa::{Accumulators, Ipa, Lift};
+use arrabbiata_kzg::{Kzg, PairingAccumulator};
 use arrabbiata_pasta::{Fq, Pallas};
 use arrabbiata_poseidon::{PoseidonSponge, bn254_scalar_sponge, pallas_sponge, vesta_sponge};
 use arrabbiata_reduction::{Reduction, Relation};

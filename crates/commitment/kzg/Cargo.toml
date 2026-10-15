@@ -12,6 +12,8 @@ authors.workspace = true
 arrabbiata-commit = { workspace = true }
 arrabbiata-curve = { workspace = true }
 arrabbiata-field = { workspace = true }
+arrabbiata-halo = { workspace = true }
+arrabbiata-reduction = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 
 [dev-dependencies]

@@ -10,8 +10,9 @@
 //! name this an accumulation scheme for the commitment, and give one for
 //! `PC_DL` (the IPA: the accumulator is `(u, sg)`, the decider an MSM of
 //! the size of the key) and one for `PC_AGM` (KZG: the accumulator is two
-//! `G1` points, the decider one pairing check). Both are here
-//! ([`ipa`], [`kzg`]), behind one trait.
+//! `G1` points, the decider one pairing check). Both implement the trait in
+//! their own crates (`arrabbiata-ipa`, `arrabbiata-kzg`): this crate is the
+//! abstraction only, and depends on no scheme.
 //!
 //! # What a scheme needs
 //!
@@ -42,7 +43,7 @@
 //!   outside except for at most `m - 1` challenges.
 //! - **A succinctly evaluable accumulator** (IPA): `R_acc = {(u, sg) : sg
 //!   = commit(b_u)}` is not closed under combinations, but `b_u(z)` costs
-//!   `O(k)`, so an accumulator [`Lift`]s to an evaluation claim at a fresh
+//!   `O(k)`, so an accumulator lifts to an evaluation claim at a fresh
 //!   point, and the fold is `Lift ; Succinct`, one more opening.
 //!
 //! # The category
@@ -78,9 +79,6 @@
 
 extern crate alloc;
 
-pub mod ipa;
-pub mod kzg;
-
 use alloc::vec::Vec;
 use core::{borrow::Borrow, fmt, fmt::Debug, marker::PhantomData};
 
@@ -93,8 +91,6 @@ use arrabbiata_transcript::{
     Absorb, Transcript, absorb_slice,
     typed::{Challenge, End, Label, ProofOf, Protocol, Public, prover_tape, verifier_tape},
 };
-
-pub use crate::{ipa::Lift, kzg::PairingAccumulator};
 
 /// Why a pair is not in a relation, or a proof was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

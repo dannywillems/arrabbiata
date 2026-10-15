@@ -23,6 +23,8 @@
 
 extern crate alloc;
 
+pub mod accumulation;
+
 use alloc::vec::Vec;
 
 use arrabbiata_commit::{
@@ -32,6 +34,8 @@ use arrabbiata_commit::{
 use arrabbiata_curve::{Curve, Pairing, Projective, msm};
 use arrabbiata_field::{Field, PrimeField, powers};
 use arrabbiata_transcript::typed::Label;
+
+pub use crate::accumulation::PairingAccumulator;
 
 /// The scalar field of the pairing groups.
 type Scalar<E> = <<E as Pairing>::G1 as Curve>::Scalar;

@@ -12,7 +12,9 @@ use alloc::{vec, vec::Vec};
 
 use arrabbiata_curve::{Curve, Projective};
 use arrabbiata_field::PrimeField;
-use arrabbiata_ipa::{Ipa, IpaProof, RecursionChallenge, Statement};
+use arrabbiata_halo::{
+    Accumulated, Accumulation, Claims, ClaimsOf, Combine, Error, Evaluations, Succinct,
+};
 use arrabbiata_reduction::{Batch, Output, OutputOf, Reduction, Then};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_slice,
@@ -20,7 +22,7 @@ use arrabbiata_transcript::{
     typed::{Challenge, End, Label, ProofOf, Protocol, Public, prover_tape, verifier_tape},
 };
 
-use crate::{Accumulated, Accumulation, Claims, ClaimsOf, Combine, Error, Evaluations, Succinct};
+use crate::{Ipa, IpaProof, RecursionChallenge, Statement};
 
 /// The scalar field of the IPA over `C`.
 type Scalar<C> = <C as Curve>::Scalar;
@@ -53,7 +55,7 @@ where
 
 /// Absorb the combined claim and draw `evalscale`, which combines its
 /// points: what the IPA's prover and verifier both do first.
-fn evalscale<F, C, P, T>(transcript: &mut T, claim: &crate::PointClaim<F, C, P>) -> F
+fn evalscale<F, C, P, T>(transcript: &mut T, claim: &arrabbiata_halo::PointClaim<F, C, P>) -> F
 where
     F: arrabbiata_field::Field,
     C: Absorb<F>,
