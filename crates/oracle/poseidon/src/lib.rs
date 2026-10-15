@@ -12,7 +12,8 @@
 //! (`P128Pow5T3`: width 3, 8 full and 56 partial rounds, `x^5`) over the two
 //! Pasta fields, checked against the Zcash test vectors. [`bn254_scalar`],
 //! [`bn254_base`] and [`goldilocks`] cover the other fields of the
-//! workspace.
+//! workspace. [`kimchi`] is Kimchi's instance, with its own constants, round
+//! order and sponge.
 //!
 //! ```
 //! use arrabbiata_field::Field;
@@ -31,6 +32,7 @@
 extern crate alloc;
 
 pub mod grain;
+pub mod kimchi;
 
 use alloc::vec::Vec;
 
