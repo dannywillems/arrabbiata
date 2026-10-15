@@ -2,6 +2,7 @@
 //! the rustdoc examples).
 
 use arrabbiata_commit::PolynomialCommitment;
+use arrabbiata_curve::Projective;
 use arrabbiata_field::Field;
 use arrabbiata_ipa::{Ipa, IpaProof};
 use arrabbiata_pasta::{Fq, Pallas};
@@ -41,16 +42,24 @@ fn ipa_proof_rounds() {
 
 #[test]
 fn ipa_proof_from_parts() {
-    let proof = IpaProof::<Pallas>::from_parts(vec![], Fq::ONE);
+    let sg = Projective::<Pallas>::generator();
+    let proof = IpaProof::<Pallas>::from_parts(vec![], Fq::ONE, sg);
     assert!(proof.rounds().is_empty());
 }
 
 #[test]
 fn ipa_proof_scalar() {
-    assert_eq!(
-        IpaProof::<Pallas>::from_parts(vec![], Fq::ONE).scalar(),
-        Fq::ONE
-    );
+    let sg = Projective::<Pallas>::generator();
+    let proof = IpaProof::<Pallas>::from_parts(vec![], Fq::ONE, sg);
+    assert_eq!(proof.scalar(), Fq::ONE);
+}
+
+#[test]
+fn ipa_proof_sg() {
+    // The folded generator of a size-1 key is the generator itself.
+    let ipa = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 1, vesta_sponge(1));
+    let (_, proof) = ipa.open(&[Fq::ONE], &Fq::ZERO);
+    assert_eq!(proof.sg(), PolynomialCommitment::commit(&ipa, &[Fq::ONE]));
 }
 
 #[test]

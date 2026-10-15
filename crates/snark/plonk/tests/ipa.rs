@@ -67,7 +67,7 @@ proptest! {
         let openings = &mut proof.tail.tail.tail.tail.head.value;
         let opening = openings.iter_mut().nth(index).unwrap();
         let original = opening.clone();
-        *opening = IpaProof::from_parts(original.rounds().to_vec(), original.scalar() + Fq::ONE);
+        *opening = IpaProof::from_parts(original.rounds().to_vec(), original.scalar() + Fq::ONE, original.sg());
         prop_assert_eq!(
             verify(&vk, &pcs, ipa::pallas_transcript(), witness.public_inputs(), proof),
             Err(PlonkError::Opening(index))
