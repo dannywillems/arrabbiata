@@ -627,6 +627,17 @@ rebuild Kimchi's own test circuit (`create_circuit`, `fill_in_witness`)
 cell for cell, check that the operations solve their half-gates, and prove
 a root of `x^3 + x + 5 = 35`.
 
+The CompleteAdd gate adds two affine points of `y^2 = x^3 + b` on one row
+(`x1, y1, x2, y2, x3, y3, inf, same_x, s, inf_z, x21_inv` in columns 0-10)
+with Kimchi's seven constraints of degree at most 3: `same_x` and the
+inverse of `x2 - x1`, the slope of the tangent or of the chord, the sum,
+and `inf = same_x and y1 != y2`. The witness is computed as Kimchi's test
+(`tests/ec.rs`) writes it, including the doubling of `P` in the sum cells of
+`P + (-P)`. The tests reproduce Kimchi's three kinds of rows cell for cell,
+check that every determined cell is caught when changed and that the free
+cells are exactly Kimchi's (`x21_inv` when `x1 = x2`, `inf_z` when
+`y1 = y2`), and prove that four private points sum to a public point.
+
 ## deviations and next steps
 
 - **Copy constraints in folding.** `arrabbiata-folding` (the relation of
@@ -692,6 +703,7 @@ a root of `x^3 + x + 5 = 35`.
 | gadgets: the witness satisfies the circuit, the circuit does not depend on the witness, `evaluate` is functorial in `Chain` | yes | no |
 | Kimchi Poseidon gate = Kimchi's permutation and layout | yes, `kimchi.json` | no |
 | Kimchi Generic gate = Kimchi's coefficients, on Kimchi's test circuit and witness | yes | no |
+| Kimchi CompleteAdd = Kimchi's rows; its free cells are exactly Kimchi's | yes | no |
 | lookups (plookup, LogUp): complete; reject a query outside the table, a wrong vector tuple, changed openings, moved commitments | yes, IPA and KZG | no |
 | permutation: `sigma` depends on the partition only; respected iff constant on classes; the product closes and the identities vanish iff respected | yes | no |
 | permuting a subset of columns: same satisfied witnesses, smaller quotient | yes, on a sum of 4-bit numbers | no |
