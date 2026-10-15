@@ -92,7 +92,7 @@ the right group.
 | `crates/decider` | `arrabbiata-plonk-decider` | the decider `R' -> R_top` of `plonkish-folding`: the relaxation as a generalized PlonK circuit | no |
 | `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
 | | `arrabbiata-generalized-plonk` | generalized PlonK: any numbers of columns, selectors and public inputs, gates any multivariate polynomials of degree at most `D`; plookup and LogUp lookups | no |
-| `crates/gadgets` | `arrabbiata-kimchi-gadgets` | Kimchi's gates on its 15 columns, as typed gadgets: Generic, Poseidon, CompleteAdd, VarBaseMul, EndoMul, EndoMulScalar, RangeCheck0/1, with their figures | no |
+| `crates/gadgets` | `arrabbiata-kimchi-gadgets` | Kimchi's gates on its 15 columns, as typed gadgets: Generic, Poseidon, CompleteAdd, VarBaseMul, EndoMul, EndoMulScalar, RangeCheck0/1, Xor16, with their figures | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in

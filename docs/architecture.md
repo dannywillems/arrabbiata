@@ -709,6 +709,20 @@ They do not prove: the table makes the circuit 8192 rows, and with one IPA
 opening per polynomial that takes hours; batched openings are the next
 step that matters for Kimchi.
 
+The Xor16 gate XORs 16 bits per row: the three words in columns 0-2, their
+nybbles in 3-14, the words shifted by 16 on the next row, three
+recombination constraints of degree 1, and four lookups of
+`(in1_k, in2_k, out_k)` in the 4-bit XOR table (Kimchi's order, `(0, 0, 0)`
+last). `Xor<BITS>` chains the rows and closes with Kimchi's zero row, a
+Generic `w0 = 0` whose three first cells are wired together by
+`env.connect` (Kimchi's `connect_cell_pair`). The tests check Kimchi's
+`init_xor` layout cell for cell, that a wrong nybble is caught by the
+lookup alone and a wider word by the zero row, and prove a XOR with a
+public result (512 rows; the proof takes about 90 seconds, which is again
+the cost of unbatched openings). Each table has fixed columns of its own
+(the range table one, the XOR table three); Kimchi shares them with a table
+id, which is the next step for lookups.
+
 Terms are built with Kimchi's simplifications (constants fold, `0 + e`,
 `0 e`, `1 e`), which keep the polynomial and make the syntactic degree
 agree with Kimchi's on the same construction; without them a Horner
@@ -794,6 +808,7 @@ written here are the targets).
 | Kimchi EndoMul = Kimchi's 128-bit test, cell for cell; every cell determined | yes | no |
 | Kimchi EndoMulScalar = Kimchi's test, cell for cell; its scalar is EndoMul's | yes | no |
 | Kimchi RangeCheck0/1 = Kimchi's layout and lookups; only the lookup catches a large limb | yes | no |
+| Kimchi Xor16 = Kimchi's layout; only the lookup catches a wrong nybble | yes | no |
 | gadget reads: in-table values pass, out-of-table rejected on their row, proofs with lookups | yes | no |
 | GLV: `phi = [lambda]`, the split recomposes `k`, GLV multiplication = scalar multiplication | yes, on every curve | no |
 | gate figures (constraints, degrees, cells read) = Kimchi's | yes, against Kimchi's own output | no |
