@@ -4,7 +4,8 @@
 use arrabbiata_pasta::Fq as F;
 use arrabbiata_poseidon::vesta_sponge;
 use arrabbiata_reduction::{
-    Argument, Either, Identity, Output, Parallel, Product, Reduction, Relation, Then, Top, Unit,
+    Argument, Batch, Concat, Each, Either, Identity, Indexed, Output, Parallel, Product, Reduction,
+    Relation, Single, Then, Top, Unit,
     laws::{Failure, complete, same_instance},
 };
 
@@ -161,4 +162,48 @@ fn parallel_same_instance() {
     let b = Then(Identity(Top), Identity(Top));
     let (pa, pb) = ((), ((), ()));
     assert!(same_instance::<F, _, _, _>(&a, &b, || vesta_sponge(0), &(), pa, pb).unwrap());
+}
+
+#[test]
+fn indexed() {
+    // A list error names the failing index, or the length mismatch.
+    assert_eq!(format!("{}", Indexed::At(2, "bad")), "at 2: bad");
+    assert_eq!(
+        format!("{}", Indexed::<&str>::Length),
+        "lengths do not match"
+    );
+}
+
+#[test]
+fn batch() {
+    // `Top^*`: any list of units is in it, if the lengths agree.
+    assert!(Batch(Top).check(&vec![(), ()], &vec![(), ()]).is_ok());
+    assert_eq!(Batch(Top).check(&vec![()], &vec![]), Err(Indexed::Length));
+}
+
+#[test]
+fn each() {
+    // The identity on each element of a list of three.
+    let each = Each(Identity(Top));
+    let (instances, _) =
+        Reduction::<F>::verify(&each, vesta_sponge(0), &vec![(); 3], vec![(); 3]).unwrap();
+    assert_eq!(instances.len(), 3);
+    assert_eq!(
+        Reduction::<F>::verify(&each, vesta_sponge(0), &vec![(); 3], vec![(); 2]),
+        Err(Indexed::Length)
+    );
+}
+
+#[test]
+fn single() {
+    let (list, _) = Reduction::<F>::verify(&Single(Top), vesta_sponge(0), &(), ()).unwrap();
+    assert_eq!(list, vec![()]);
+}
+
+#[test]
+fn concat() {
+    let (list, _) =
+        Reduction::<F>::verify(&Concat(Top), vesta_sponge(0), &(vec![()], vec![(), ()]), ())
+            .unwrap();
+    assert_eq!(list.len(), 3);
 }

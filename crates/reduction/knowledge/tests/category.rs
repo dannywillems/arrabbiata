@@ -7,13 +7,17 @@
 //!   instance of `A`;
 //! - associativity: `Then(Then(A, B), C)` and `Then(A, Then(B, C))` verify
 //!   to the same instance;
-//! - a pair outside the source is reported as such, on the right side.
+//! - a pair outside the source is reported as such, on the right side;
+//! - lists: [`Each`] is a functor (it preserves identities and
+//!   composition), [`Concat`] is associative with the empty list as unit,
+//!   [`Single`] is a list of one, and a list outside `R^*` names its index.
 
 use arrabbiata_field::Field;
 use arrabbiata_pasta::Fq as F;
 use arrabbiata_poseidon::vesta_sponge;
 use arrabbiata_reduction::{
-    Either, Identity, Output, OutputOf, Parallel, Product, Reduction, Relation, Then, laws,
+    Batch, Concat, Each, Either, Identity, Indexed, Output, OutputOf, Parallel, Product, Reduction,
+    Relation, Single, Then, laws,
 };
 use arrabbiata_transcript::Transcript;
 use proptest::prelude::*;
@@ -203,5 +207,81 @@ proptest! {
         prop_assert_eq!(source.check(&(y1.clone(), y2.clone()), &(x1.clone(), x2.clone())), Err(Either::Right(())));
         let out = laws::complete::<F, _, _>(&Fold(a), || vesta_sponge(0), &(y1, y2), &(x1, x2));
         prop_assert!(matches!(out, Err(laws::Failure::Source(Either::Right(())))));
+    }
+}
+
+/// Witnesses and their instances, for a list.
+fn arb_list() -> impl Strategy<Value = (Linear, Vec<Vec<F>>)> {
+    (1usize..4, 1usize..5, 0usize..4).prop_flat_map(|(rows, cols, len)| {
+        (
+            prop::collection::vec(prop::collection::vec(arb_f(), cols), rows).prop_map(Linear),
+            prop::collection::vec(prop::collection::vec(arb_f(), cols), len),
+        )
+    })
+}
+
+proptest! {
+    #[test]
+    fn each_is_complete((a, xs) in arb_list()) {
+        let ys: Vec<Vec<F>> = xs.iter().map(|x| apply(&a, x)).collect();
+        // R^* -> (R x R)^* -> R^*: duplicate then fold each element.
+        let each = Then(Each(Duplicate(a.clone())), Each(Fold(a)));
+        prop_assert!(laws::complete::<F, _, _>(&each, || vesta_sponge(3), &ys, &xs).is_ok());
+    }
+
+    #[test]
+    fn each_is_a_functor((a, xs) in arb_list()) {
+        let ys: Vec<Vec<F>> = xs.iter().map(|x| apply(&a, x)).collect();
+        let (d, f) = (Duplicate(a.clone()), Fold(a.clone()));
+        // Each(Then(D, F)) = Then(Each(D), Each(F)).
+        let whole = Each(Then(d.clone(), f.clone()));
+        let parts = Then(Each(d), Each(f));
+        let whole_proof = vec![((), ()); ys.len()];
+        let parts_proof = (vec![(); ys.len()], vec![(); ys.len()]);
+        prop_assert!(laws::same_instance::<F, _, _, _>(&whole, &parts, || vesta_sponge(4), &ys, whole_proof, parts_proof).unwrap());
+        // Each(Identity) = Identity.
+        let each_identity = Each(Identity(a.clone()));
+        let identity = Identity(Batch(a));
+        prop_assert!(laws::same_instance::<F, _, _, _>(&each_identity, &identity, || vesta_sponge(4), &ys, vec![(); ys.len()], ()).unwrap());
+    }
+
+    #[test]
+    fn concat_is_a_monoid((a, xs) in arb_list(), cut in any::<usize>()) {
+        let ys: Vec<Vec<F>> = xs.iter().map(|x| apply(&a, x)).collect();
+        let cut = if ys.is_empty() { 0 } else { cut % (ys.len() + 1) };
+        let (left, right) = (ys[..cut].to_vec(), ys[cut..].to_vec());
+        let concat = Concat(a.clone());
+        let (joined, _) = concat.verify(vesta_sponge(5), &(left.clone(), right.clone()), ()).unwrap();
+        prop_assert_eq!(&joined, &ys);
+        // The empty list is a unit on both sides.
+        let (unit_left, _) = concat.verify(vesta_sponge(5), &(vec![], ys.clone()), ()).unwrap();
+        let (unit_right, _) = concat.verify(vesta_sponge(5), &(ys.clone(), vec![]), ()).unwrap();
+        prop_assert_eq!(&unit_left, &ys);
+        prop_assert_eq!(&unit_right, &ys);
+        // Associativity: (l ++ m) ++ r = l ++ (m ++ r), with m a singleton.
+        let witness_left = xs[..cut].to_vec();
+        let witness_right = xs[cut..].to_vec();
+        let out = laws::complete::<F, _, _>(&concat, || vesta_sponge(5), &(left.clone(), right.clone()), &(witness_left, witness_right));
+        prop_assert!(out.is_ok());
+        if let Some(first) = ys.first() {
+            let (single, _) = Single(a.clone()).verify(vesta_sponge(5), first, ()).unwrap();
+            prop_assert_eq!(&single, &vec![first.clone()]);
+            let rest = ys[1..].to_vec();
+            let (lm, _) = concat.verify(vesta_sponge(5), &(single.clone(), rest[..0].to_vec()), ()).unwrap();
+            let (lm_r, _) = concat.verify(vesta_sponge(5), &(lm, rest.clone()), ()).unwrap();
+            let (m_r, _) = concat.verify(vesta_sponge(5), &(rest[..0].to_vec(), rest), ()).unwrap();
+            let (l_mr, _) = concat.verify(vesta_sponge(5), &(single, m_r), ()).unwrap();
+            prop_assert_eq!(lm_r, l_mr);
+        }
+    }
+
+    #[test]
+    fn a_list_outside_the_power_names_its_index((a, xs) in arb_list(), which in any::<usize>()) {
+        prop_assume!(!xs.is_empty());
+        let mut ys: Vec<Vec<F>> = xs.iter().map(|x| apply(&a, x)).collect();
+        let which = which % ys.len();
+        ys[which][0] = ys[which][0] + F::ONE;
+        prop_assert_eq!(Batch(a.clone()).check(&ys, &xs), Err(Indexed::At(which, ())));
+        prop_assert_eq!(Batch(a).check(&ys, &xs[1..].to_vec()), Err(Indexed::Length));
     }
 }

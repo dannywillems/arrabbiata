@@ -30,6 +30,8 @@
 //! | composition (Theorem 1) | [`Then`] |
 //! | monoidal product (Theorem 2) | [`Product`] of relations, [`Parallel`] of reductions |
 //! | unit | [`Unit`] |
+//! | finite powers `R^*` (lists) | [`Batch`], with [`Single`], [`Concat`] |
+//! | `A^* : R1^* -> R2^*` | [`Each`] |
 //!
 //! Two special shapes are the ones accumulation is built from:
 //!
@@ -50,6 +52,9 @@
 
 #![no_std]
 
+extern crate alloc;
+
+use alloc::{vec, vec::Vec};
 use core::{convert::Infallible, fmt};
 
 use arrabbiata_field::Field;
@@ -520,6 +525,267 @@ where
             .verify(transcript, &instance.1, proof.1)
             .map_err(Either::Right)?;
         Ok(((left, right), transcript))
+    }
+}
+
+/// Why a list failed: lengths that do not match, or the element at an
+/// index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Indexed<E> {
+    /// Two lists that must have the same length do not.
+    Length,
+    /// The element at this index failed.
+    At(usize, E),
+}
+
+impl<E> fmt::Display for Indexed<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Length => write!(f, "lengths do not match"),
+            Self::At(i, e) => write!(f, "at {i}: {e}"),
+        }
+    }
+}
+
+impl<E> core::error::Error for Indexed<E> where E: fmt::Debug + fmt::Display {}
+
+/// The finite powers of a relation, all at once: `R^*`, lists of pairs of
+/// `R` (the free monoid on `R` under the monoidal product, up to the
+/// associativity and unit isomorphisms). A list is in it when each pair is
+/// in `R`.
+///
+/// It is what an accumulation scheme consumes: any number of accumulators,
+/// not a fixed `R x R`. [`Single`] and [`Concat`] are its unit and
+/// multiplication, and [`Each`] its action on reductions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Batch<R>(pub R);
+
+impl<R> Relation for Batch<R>
+where
+    R: Relation,
+{
+    type Instance = Vec<R::Instance>;
+    type Witness = Vec<R::Witness>;
+    type Error = Indexed<R::Error>;
+
+    fn check(&self, instance: &Self::Instance, witness: &Self::Witness) -> Result<(), Self::Error> {
+        if instance.len() != witness.len() {
+            return Err(Indexed::Length);
+        }
+        let mut i = 0;
+        while i < instance.len() {
+            self.0
+                .check(&instance[i], &witness[i])
+                .map_err(|e| Indexed::At(i, e))?;
+            i += 1;
+        }
+        Ok(())
+    }
+}
+
+/// `A^* : R1^* -> R2^*`, the reduction `A` run on each element of a list,
+/// in order, on one transcript. The proof is the list of proofs.
+///
+/// `Each` is a functor: `Each(Identity) = Identity` and `Each(Then(A, B))
+/// = Then(Each(A), Each(B))`, both up to the shape of the proofs, which the
+/// laws compare by the instances the verifiers output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Each<A>(pub A);
+
+impl<F, A> Reduction<F> for Each<A>
+where
+    F: Field,
+    A: Reduction<F>,
+{
+    type Source = Batch<A::Source>;
+    type Target = Batch<A::Target>;
+    type Proof = Vec<A::Proof>;
+    type Error = Indexed<A::Error>;
+
+    fn source(&self) -> Self::Source {
+        Batch(self.0.source())
+    }
+
+    fn target(&self) -> Self::Target {
+        Batch(self.0.target())
+    }
+
+    fn prove<T>(
+        &self,
+        mut transcript: T,
+        instance: &Vec<<A::Source as Relation>::Instance>,
+        witness: &Vec<<A::Source as Relation>::Witness>,
+    ) -> Result<OutputOf<F, Self, T>, Self::Error>
+    where
+        T: Transcript<F>,
+    {
+        if instance.len() != witness.len() {
+            return Err(Indexed::Length);
+        }
+        let mut instances = Vec::with_capacity(instance.len());
+        let mut witnesses = Vec::with_capacity(instance.len());
+        let mut proofs = Vec::with_capacity(instance.len());
+        let mut i = 0;
+        while i < instance.len() {
+            let out = self
+                .0
+                .prove(transcript, &instance[i], &witness[i])
+                .map_err(|e| Indexed::At(i, e))?;
+            instances.push(out.instance);
+            witnesses.push(out.witness);
+            proofs.push(out.proof);
+            transcript = out.transcript;
+            i += 1;
+        }
+        Ok(Output {
+            instance: instances,
+            witness: witnesses,
+            proof: proofs,
+            transcript,
+        })
+    }
+
+    fn verify<T>(
+        &self,
+        mut transcript: T,
+        instance: &Vec<<A::Source as Relation>::Instance>,
+        proof: Vec<A::Proof>,
+    ) -> Result<(Vec<<A::Target as Relation>::Instance>, T), Self::Error>
+    where
+        T: Transcript<F>,
+    {
+        if instance.len() != proof.len() {
+            return Err(Indexed::Length);
+        }
+        let mut instances = Vec::with_capacity(instance.len());
+        for (i, (u, p)) in instance.iter().zip(proof).enumerate() {
+            let (v, t) = self
+                .0
+                .verify(transcript, u, p)
+                .map_err(|e| Indexed::At(i, e))?;
+            instances.push(v);
+            transcript = t;
+        }
+        Ok((instances, transcript))
+    }
+}
+
+/// `R -> R^*`, a pair as a list of one: the unit of [`Batch`]. No messages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Single<R>(pub R);
+
+impl<F, R> Reduction<F> for Single<R>
+where
+    F: Field,
+    R: Relation + Clone,
+    R::Instance: Clone,
+    R::Witness: Clone,
+{
+    type Source = R;
+    type Target = Batch<R>;
+    type Proof = ();
+    type Error = Infallible;
+
+    fn source(&self) -> R {
+        self.0.clone()
+    }
+
+    fn target(&self) -> Batch<R> {
+        Batch(self.0.clone())
+    }
+
+    fn prove<T>(
+        &self,
+        transcript: T,
+        instance: &R::Instance,
+        witness: &R::Witness,
+    ) -> Result<OutputOf<F, Self, T>, Infallible>
+    where
+        T: Transcript<F>,
+    {
+        Ok(Output {
+            instance: vec![instance.clone()],
+            witness: vec![witness.clone()],
+            proof: (),
+            transcript,
+        })
+    }
+
+    fn verify<T>(
+        &self,
+        transcript: T,
+        instance: &R::Instance,
+        (): (),
+    ) -> Result<(Vec<R::Instance>, T), Infallible>
+    where
+        T: Transcript<F>,
+    {
+        Ok((vec![instance.clone()], transcript))
+    }
+}
+
+/// `R^* x R^* -> R^*`, two lists as one, the first first: the
+/// multiplication of [`Batch`]. It is associative, with the empty list as
+/// unit, which is what makes `Batch` the free monoid. No messages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Concat<R>(pub R);
+
+impl<F, R> Reduction<F> for Concat<R>
+where
+    F: Field,
+    R: Relation + Clone,
+    R::Instance: Clone,
+    R::Witness: Clone,
+{
+    type Source = Product<Batch<R>, Batch<R>>;
+    type Target = Batch<R>;
+    type Proof = ();
+    type Error = Infallible;
+
+    fn source(&self) -> Self::Source {
+        Product(Batch(self.0.clone()), Batch(self.0.clone()))
+    }
+
+    fn target(&self) -> Batch<R> {
+        Batch(self.0.clone())
+    }
+
+    fn prove<T>(
+        &self,
+        transcript: T,
+        instance: &(Vec<R::Instance>, Vec<R::Instance>),
+        witness: &(Vec<R::Witness>, Vec<R::Witness>),
+    ) -> Result<OutputOf<F, Self, T>, Infallible>
+    where
+        T: Transcript<F>,
+    {
+        let mut instances = instance.0.clone();
+        instances.extend_from_slice(&instance.1);
+        let mut witnesses = witness.0.clone();
+        witnesses.extend_from_slice(&witness.1);
+        Ok(Output {
+            instance: instances,
+            witness: witnesses,
+            proof: (),
+            transcript,
+        })
+    }
+
+    fn verify<T>(
+        &self,
+        transcript: T,
+        instance: &(Vec<R::Instance>, Vec<R::Instance>),
+        (): (),
+    ) -> Result<(Vec<R::Instance>, T), Infallible>
+    where
+        T: Transcript<F>,
+    {
+        let mut instances = instance.0.clone();
+        instances.extend_from_slice(&instance.1);
+        Ok((instances, transcript))
     }
 }
 
