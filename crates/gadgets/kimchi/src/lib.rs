@@ -8,6 +8,10 @@
 //!
 //! - [`complete_add`]: the CompleteAdd gate, the complete sum of two affine
 //!   points;
+//! - [`endomul`]: the EndoMul gate, four bits per row of an
+//!   endomorphism-optimized scalar multiplication;
+//! - [`endomul_scalar`]: the EndoMulScalar gate, the scalar EndoMul
+//!   multiplies by, eight crumbs per row;
 //! - [`generic`]: the Generic gate, two PlonK half-gates per row;
 //! - [`poseidon`]: the Poseidon gate, five rounds per row;
 //! - [`varbasemul`]: the VarBaseMul gate, five steps of a variable-base
@@ -22,11 +26,15 @@
 //! | Generic     | 2           | 3          | 1    | 0-5                       | 0-9          |
 //! | Poseidon    | 15          | 7          | 1    | 0-14, next row 0-2        | 0-14         |
 //! | CompleteAdd | 7           | 3          | 1    | 0-10                      | none         |
+//! | EndoMul     | 12          | 4          | 1    | 0-2, 4-14, next row 4-6   | none         |
+//! | EndoMulScalar | 11        | 4          | 1    | 0-13                      | none         |
 //! | VarBaseMul  | 21          | 6          | 2    | 0-5, 7-14, next row 0-11  | none         |
 
 #![no_std]
 
 pub mod complete_add;
+pub mod endomul;
+pub mod endomul_scalar;
 pub mod generic;
 pub mod poseidon;
 pub mod varbasemul;

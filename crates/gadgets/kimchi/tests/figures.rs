@@ -13,16 +13,19 @@
 //! - the cells the constraints read: the `witness_curr` and `witness_next`
 //!   columns, and the coefficient columns, that `constraint_checks` reads.
 
+use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{Cell, Env, Of, TypedGadget, Unit, figures};
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
     complete_add::CompleteAdd,
+    endomul::EndoMul,
+    endomul_scalar::EndoMulScalar,
     generic::{GenericRow, GenericSpec},
     poseidon::PoseidonPermutation,
     varbasemul::VarBaseMul,
 };
-use arrabbiata_pasta::Fp;
+use arrabbiata_pasta::{Fp, Pallas};
 use arrabbiata_poseidon::kimchi::{KimchiPoseidon, pallas_base};
 
 /// A gate's figures in Kimchi.
@@ -114,6 +117,24 @@ fn kimchi() -> Vec<Kimchi> {
             coefficients: vec![],
         },
         Kimchi {
+            gadget: "kimchi-endomul",
+            constraints: 12,
+            source: "kimchi/src/circuits/polynomials/endosclmul.rs:473",
+            degrees: degrees("EndoMul"),
+            current: [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].to_vec(),
+            next: vec![4, 5, 6],
+            coefficients: vec![],
+        },
+        Kimchi {
+            gadget: "kimchi-endomul-scalar",
+            constraints: 11,
+            source: "kimchi/src/circuits/polynomials/endomul_scalar.rs:172",
+            degrees: degrees("EndoMulScalar"),
+            current: range(14),
+            next: vec![],
+            coefficients: vec![],
+        },
+        Kimchi {
             gadget: "kimchi-varbasemul",
             constraints: 21,
             source: "kimchi/src/circuits/polynomials/varbasemul.rs:417",
@@ -131,6 +152,8 @@ enum Harness<'a> {
     Generic,
     Poseidon(&'a KimchiPoseidon<Fp>),
     CompleteAdd,
+    EndoMul,
+    EndoMulScalar,
     VarBaseMul,
 }
 
@@ -156,6 +179,21 @@ impl TypedGadget<Fp> for Harness<'_> {
                 let cells: [E::Var; 4] = core::array::from_fn(&mut cell);
                 env.call(&CompleteAdd, cells);
             }
+            Self::EndoMul => {
+                let t: [E::Var; 2] = core::array::from_fn(&mut cell);
+                let p: [E::Var; 2] = core::array::from_fn(|i| cell(4 + i));
+                let bits: [E::Var; 4] = core::array::from_fn(|_| env.constant(Fp::ZERO));
+                env.call(
+                    &EndoMul::<Fp, 4> {
+                        endo: Pallas::beta(),
+                    },
+                    (t, p, bits),
+                );
+            }
+            Self::EndoMulScalar => {
+                let crumbs: [E::Var; 8] = core::array::from_fn(|_| env.constant(Fp::ZERO));
+                env.call(&EndoMulScalar::<8>, crumbs);
+            }
             Self::VarBaseMul => {
                 let cells: [E::Var; 4] = core::array::from_fn(&mut cell);
                 let bits: [E::Var; 5] = core::array::from_fn(|_| env.constant(Fp::ZERO));
@@ -173,6 +211,8 @@ fn every_gate_has_kimchis_figures() {
         Harness::Generic,
         Harness::Poseidon(&poseidon),
         Harness::CompleteAdd,
+        Harness::EndoMul,
+        Harness::EndoMulScalar,
         Harness::VarBaseMul,
     ];
     for (harness, expected) in harnesses.iter().zip(kimchi()) {
