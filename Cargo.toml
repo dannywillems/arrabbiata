@@ -16,6 +16,7 @@ arrabbiata-commit = { path = "crates/commitment/commit" }
 arrabbiata-curve = { path = "crates/ec/curve" }
 arrabbiata-field = { path = "crates/algebra/field" }
 arrabbiata-frontend = { path = "crates/arithmetization/frontend" }
+arrabbiata-gadget = { path = "crates/arithmetization/gadget" }
 arrabbiata-grumpkin = { path = "crates/ec/grumpkin" }
 arrabbiata-generalized-plonk = { path = "crates/snark/generalized" }
 arrabbiata-ipa = { path = "crates/commitment/ipa" }

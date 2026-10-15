@@ -1,0 +1,25 @@
+[package]
+name = "arrabbiata-gadget"
+description = "Typed gadgets: one synthesize, interpreted as constraints and as a witness, compiled to generalized PlonK"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-field = { workspace = true }
+arrabbiata-generalized-plonk = { workspace = true }
+arrabbiata-mvpoly = { workspace = true }
+arrabbiata-permutation = { workspace = true }
+arrabbiata-poly = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-ipa = { workspace = true }
+arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

@@ -73,6 +73,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-gadget"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-field",
+ "arrabbiata-generalized-plonk",
+ "arrabbiata-ipa",
+ "arrabbiata-mvpoly",
+ "arrabbiata-pasta",
+ "arrabbiata-permutation",
+ "arrabbiata-poly",
+ "arrabbiata-poseidon",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-generalized-plonk"
 version = "0.0.0"
 dependencies = [
