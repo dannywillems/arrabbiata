@@ -1,0 +1,20 @@
+[package]
+name = "arrabbiata-permutation"
+description = "The permutation argument: copy constraints between cells of chosen columns, by a grand product over cosets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-field = { workspace = true }
+arrabbiata-poly = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-pasta = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

@@ -50,54 +50,8 @@
 //! `(phi(w X) - phi)(gamma - f)(gamma - t) = (gamma - t) - m (gamma - f)` on
 //! every row, and `L_0 phi = 0`. All `n` rows are queries.
 //!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_generalized_plonk::{Argument, Circuit, Lookup, Variable, prove, setup, verify};
-//! use arrabbiata_ipa::Ipa;
-//! use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
-//! use arrabbiata_pasta::{Fq as F, Pallas};
-//! use arrabbiata_poly::Rotation;
-//! use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-//! // Sponge domain tags: each transcript gets its own, and prover and
-//! // verifier start from the same one.
-//! let proof_domain = 2;
-//!
-//! // Witness column 0 takes its values in the fixed column 0 = {0, 1, 2, 3}.
-//! let table = vec![(0..4).map(F::from_u64).collect::<Vec<_>>()];
-//! let on = vec![F::ONE, F::ONE, F::ONE, F::ZERO];
-//! let w = Sparse::<F, 1, 1>::variable(Var::new::<0>()).unwrap();
-//! let variables = vec![Variable::Witness { column: 0, rotation: Rotation::CURR }];
-//! for argument in [Argument::Plookup, Argument::LogUp] {
-//!     let num_rows = 4;
-//!     let witness_columns = 1;
-//!     let fixed = table.clone();
-//!     let selectors = vec![on.clone()];
-//!     let variables = variables.clone();
-//!     let gates = vec![];
-//!     let sigma = (0..4).collect();
-//!     let public_inputs = 0;
-//!     let bindings = vec![];
-//!     let selector = Some(0);
-//!     let inputs = vec![w.clone()];
-//!     let table_columns = vec![0];
-//!     let lookup = Lookup::new(argument, selector, inputs, table_columns);
-//!     let circuit = Circuit::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings)
-//!         .unwrap()
-//!         .with_lookups(vec![lookup])
-//!         .unwrap();
-//!     let good = [3u64, 3, 1, 9].map(F::from_u64).to_vec();
-//!     let bad = [3u64, 4, 1, 9].map(F::from_u64).to_vec();
-//!     assert!(circuit.is_satisfied(&[good.clone()], &[]));
-//!     assert!(!circuit.is_satisfied(&[bad], &[]));
-//!     let mut generators = pallas_sponge(0);
-//!     let size = 16;
-//!     let ipa_transcript = vesta_sponge(1);
-//!     let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-//!     let (pk, vk) = setup(&circuit, &pcs).unwrap();
-//!     let (proof, _) = prove(&pk, &pcs, vesta_sponge(proof_domain), &[], &[good]).unwrap();
-//!     verify(&vk, &pcs, vesta_sponge(proof_domain), &[], proof).unwrap();
-//! }
-//! ```
+//! Both arguments run on range checks, a XOR table, polynomial queries and
+//! repeated rows in `tests/lookups.rs`.
 
 use alloc::{collections::BTreeMap, vec, vec::Vec};
 

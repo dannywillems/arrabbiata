@@ -64,6 +64,7 @@ use alloc::{vec, vec::Vec};
 use core::{array, fmt, marker::PhantomData};
 
 use arrabbiata_field::Field;
+use arrabbiata_permutation::Permutation;
 use arrabbiata_poly::{Assignment, Expr, FixedColumn, Rotation, Scalars, WitnessColumn, evaluate};
 use arrabbiata_transcript::{Absorb, Transcript, absorb_length, typed::Label};
 
@@ -766,7 +767,15 @@ where
                 return Err(CircuitError::Shape);
             }
         }
-        let sigma = permutation(&self.copies, W, n);
+        let copies: Vec<(usize, usize)> = self
+            .copies
+            .iter()
+            .map(|(x, y)| (x.index(n), y.index(n)))
+            .collect();
+        let sigma = Permutation::from_copies(W, n, &copies)
+            .map_err(|_| CircuitError::Shape)?
+            .sigma()
+            .to_vec();
         let mut public = Vec::with_capacity(self.public.len());
         for row in &self.public {
             if *row >= rows || W == 0 {
@@ -777,44 +786,6 @@ where
         let circuit = Circuit::new(n, fixed, gadgets, sigma, self.public)?;
         Ok((circuit, Witness::new(witness, public)))
     }
-}
-
-/// The permutation whose cycles are the classes of cells equated by
-/// `copies`, each cycle in increasing order of cell index: a function of
-/// the partition the copies generate, not of the copies themselves.
-pub(crate) fn permutation<const W: usize>(
-    copies: &[(Cell<W>, Cell<W>)],
-    columns: usize,
-    num_rows: usize,
-) -> Vec<usize> {
-    let size = columns * num_rows;
-    let mut parent: Vec<usize> = (0..size).collect();
-    fn find(parent: &mut [usize], mut x: usize) -> usize {
-        while parent[x] != x {
-            parent[x] = parent[parent[x]];
-            x = parent[x];
-        }
-        x
-    }
-    for (x, y) in copies {
-        let rx = find(&mut parent, x.index(num_rows));
-        let ry = find(&mut parent, y.index(num_rows));
-        if rx != ry {
-            parent[rx] = ry;
-        }
-    }
-    let mut members: Vec<Vec<usize>> = vec![Vec::new(); size];
-    for cell in 0..size {
-        let root = find(&mut parent, cell);
-        members[root].push(cell);
-    }
-    let mut sigma: Vec<usize> = (0..size).collect();
-    for class in &members {
-        for (i, cell) in class.iter().enumerate() {
-            sigma[*cell] = class[(i + 1) % class.len()];
-        }
-    }
-    sigma
 }
 
 impl<F, G, const W: usize, const X: usize, const Q: usize> Label for Circuit<F, G, W, X, Q> {

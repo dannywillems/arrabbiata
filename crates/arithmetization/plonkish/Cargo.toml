@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 arrabbiata-field = { workspace = true }
 arrabbiata-frontend = { workspace = true }
+arrabbiata-permutation = { workspace = true }
 arrabbiata-poly = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 

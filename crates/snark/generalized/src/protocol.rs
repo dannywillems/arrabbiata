@@ -34,6 +34,7 @@ use core::{fmt, iter, marker::PhantomData};
 use arrabbiata_commit::{PolynomialCommitment, Univariate};
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_mvpoly::MVPoly;
+use arrabbiata_permutation::{self as permutation, Permutation};
 use arrabbiata_poly::{Domain, Rotation, UniPoly};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_length, absorb_slice,
@@ -272,12 +273,12 @@ impl<T> Opened<T> {
 
     /// Whether there is one value per witness, fixed, selector,
     /// permutation, rotated polynomial and lookup opening, for the counts
-    /// `(witness, fixed, selectors, rotated, lookups)`.
-    fn has_shape(&self, (w, x, q, r, l): (usize, usize, usize, usize, usize)) -> bool {
+    /// `(witness, permuted, fixed, selectors, rotated, lookups)`.
+    fn has_shape(&self, (w, k, x, q, r, l): (usize, usize, usize, usize, usize, usize)) -> bool {
         self.witness.len() == w
             && self.fixed.len() == x
             && self.selectors.len() == q
-            && self.sigmas.len() == w
+            && self.sigmas.len() == k
             && self.rotated.len() == r
             && self.lookups.len() == l
     }
@@ -384,6 +385,7 @@ where
 {
     log_size: u32,
     witness_columns: usize,
+    permuted: Vec<usize>,
     public_inputs: usize,
     variables: Vec<Variable>,
     gates: Vec<Gate<F, N, D>>,
@@ -478,6 +480,7 @@ where
             &self.gates,
             &self.bindings,
             &self.lookups,
+            &self.permuted,
         );
         for s in &self.shifts {
             transcript.absorb(*s);
@@ -684,24 +687,6 @@ where
     domain.interpolate(values).ok_or(Error::DomainTooLarge)
 }
 
-/// The shifts `g^k`, `k < W`, of the cosets `g^k H` labelling the witness
-/// columns. `g^i H` and `g^j H` are disjoint iff `g^((i - j) n) != 1`.
-fn coset_shifts<F>(w: usize, n: usize) -> Result<Vec<F>, Error>
-where
-    F: TwoAdicField,
-{
-    let g = F::MULTIPLICATIVE_GENERATOR;
-    let gn = g.pow(n as u64);
-    let mut power = F::ONE;
-    for _ in 1..w {
-        power = power * gn;
-        if power == F::ONE {
-            return Err(Error::CosetShifts);
-        }
-    }
-    Ok((0..w).map(|k| g.pow(k as u64)).collect())
-}
-
 /// The factor by which the quotient domain exceeds the circuit's: the
 /// largest degree of a term of the identity divided by `n`.
 ///
@@ -726,7 +711,7 @@ pub fn quotient_factor<F, const N: usize, const D: usize>(circuit: &Circuit<F, N
 where
     F: Field,
 {
-    let mut factor = (circuit.witness_columns() + 1).max(2);
+    let mut factor = permutation::degree(circuit.permuted().len()).max(2);
     for gate in circuit.gates() {
         factor = factor.max(circuit.column_degree(gate));
     }
@@ -805,28 +790,21 @@ where
     let n = circuit.num_rows();
     let w = circuit.witness_columns();
     let domain = Domain::<F>::containing(n).ok_or(Error::DomainTooLarge)?;
-    let shifts = coset_shifts::<F>(w, n)?;
+    let k = circuit.permuted().len();
+    let shifts = permutation::shifts::<F>(k, n).map_err(|_| Error::CosetShifts)?;
     let interpolate_all = |columns: &[Vec<F>]| -> Result<Vec<UniPoly<F>>, Error> {
         columns.iter().map(|c| interpolate(&domain, c)).collect()
     };
     let fixed = interpolate_all(circuit.fixed())?;
     let selectors = interpolate_all(circuit.selectors())?;
-    let sigma = circuit.sigma();
-    let sigma_values: Vec<Vec<F>> = (0..w)
-        .map(|k| {
-            (0..n)
-                .map(|i| {
-                    let target = sigma[k * n + i];
-                    shifts[target / n] * domain.element(target % n)
-                })
-                .collect()
-        })
-        .collect();
+    let copies = Permutation::new(k, n, circuit.sigma().to_vec()).map_err(|_| Error::Shape)?;
+    let sigma_values = permutation::labels(&copies, &shifts, &domain);
     let sigmas = interpolate_all(&sigma_values)?;
     let commit = |p: &UniPoly<F>| pcs.commit(p.coefficients());
     let vk = VerifierKey::new(Preprocessed {
         log_size: domain.log_size(),
         witness_columns: w,
+        permuted: circuit.permuted().to_vec(),
         public_inputs: circuit.public_inputs(),
         variables: circuit.variables().to_vec(),
         gates: circuit.gates().to_vec(),
@@ -938,36 +916,10 @@ struct LookupWitness<F> {
 /// [`Error::Shape`] for columns of the wrong shape,
 /// [`Error::Unsatisfied`] if they do not satisfy the circuit.
 ///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_generalized_plonk::{Circuit, Error, prove, setup};
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// // Sponge domain tags: each transcript gets its own, and prover and
-/// // verifier start from the same one.
-/// let proof_domain = 2;
-/// // Column 0 at row 1 is public input 0.
-/// let num_rows = 2;
-/// let witness_columns = 1;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = vec![0, 1];
-/// let public_inputs = 1;
-/// let bindings = vec![(0, 1)];
-/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// let mut generators = pallas_sponge(0);
-/// let size = 4;
-/// let ipa_transcript = vesta_sponge(1);
-/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-/// let (pk, _) = setup(&c, &pcs).unwrap();
-/// let columns = [vec![F::ZERO, F::from_u64(7)]];
-/// assert!(prove(&pk, &pcs, vesta_sponge(proof_domain), &[F::from_u64(7)], &columns).is_ok());
-/// assert_eq!(prove(&pk, &pcs, vesta_sponge(proof_domain), &[F::from_u64(8)], &columns).unwrap_err(), Error::Unsatisfied);
-/// ```
+/// A complete run, from a circuit to a verified proof, is in
+/// `tests/examples.rs`.
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
+#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub fn prove<F, PC, T, const N: usize, const D: usize>(
     pk: &ProverKey<F, PC, N, D>,
     pcs: &PC,
@@ -1057,18 +1009,22 @@ where
 
     // Round 3: the grand product of the copy permutation, then the lookup
     // columns drawn after beta, gamma.
-    let mut z_values = vec![F::ONE; n];
-    for i in 0..n - 1 {
-        let x = domain.element(i);
-        let mut num = F::ONE;
-        let mut den = F::ONE;
-        for ((column, shift), sigma) in columns.iter().zip(&key.shifts).zip(&pk.sigma_values) {
-            num = num * (column[i] + beta * *shift * x + gamma);
-            den = den * (column[i] + beta * sigma[i] + gamma);
-        }
-        // den is zero only with probability about W n / |F| over gamma.
-        z_values[i + 1] = z_values[i] * num * den.inverse().ok_or(Error::Unsatisfied)?;
-    }
+    let permuted_columns: Vec<&[F]> = circuit
+        .permuted()
+        .iter()
+        .map(|c| columns[*c].as_slice())
+        .collect();
+    // A denominator is zero only with probability about k n / |F| over
+    // gamma.
+    let z_values = permutation::grand_product(
+        &permuted_columns,
+        &key.shifts,
+        &pk.sigma_values,
+        domain,
+        beta,
+        gamma,
+    )
+    .map_err(|_| Error::Unsatisfied)?;
     let z = interpolate(domain, &z_values)?;
     let tape = tape.send(Tagged::new(commit(&z)));
     for (l, data) in circuit.lookups().iter().zip(&mut lookups) {
@@ -1175,16 +1131,24 @@ where
         }
         power = power * alpha;
         let next = (point + step) % size;
-        let mut left = z_coset[point];
-        let mut right = z_coset[next];
-        for k in 0..w {
-            let wv = wire_values[k][point];
-            left = left * (wv + beta * key.shifts[k] * x + gamma);
-            right = right * (wv + beta * sigma_values[k][point] + gamma);
-        }
-        acc = acc + power * (left - right);
+        let witness_here: Vec<F> = circuit
+            .permuted()
+            .iter()
+            .map(|c| wire_values[*c][point])
+            .collect();
+        let sigmas_here: Vec<F> = sigma_values.iter().map(|s| s[point]).collect();
+        let at = permutation::At {
+            x,
+            witness: &witness_here,
+            sigmas: &sigmas_here,
+            z: z_coset[point],
+            z_next: z_coset[next],
+            l0: l1[point],
+        };
+        let [step_term, boundary] = permutation::terms(&at, &key.shifts, beta, gamma);
+        acc = acc + power * step_term;
         power = power * alpha;
-        acc = acc + power * l1[point] * (z_coset[point] - F::ONE);
+        acc = acc + power * boundary;
         for (l, values) in circuit.lookups().iter().zip(&lookup_values) {
             power = power * alpha;
             let selector = match l.selector() {
@@ -1290,37 +1254,10 @@ where
 /// [`Error::Opening`] if an opening fails, [`Error::IdentityFailed`] if the
 /// identity does not hold at `zeta`.
 ///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_generalized_plonk::{Circuit, prove, setup, verify};
-/// use arrabbiata_ipa::Ipa;
-/// use arrabbiata_pasta::{Fq as F, Pallas};
-/// use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
-/// // Sponge domain tags: each transcript gets its own, and prover and
-/// // verifier start from the same one.
-/// let proof_domain = 2;
-/// let num_rows = 2;
-/// let witness_columns = 1;
-/// let fixed = vec![];
-/// let selectors = vec![];
-/// let variables = vec![];
-/// let gates = vec![];
-/// let sigma = vec![0, 1];
-/// let public_inputs = 1;
-/// let bindings = vec![(0, 1)];
-/// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
-/// let mut generators = pallas_sponge(0);
-/// let size = 4;
-/// let ipa_transcript = vesta_sponge(1);
-/// let pcs = Ipa::<Pallas, _>::setup(&mut generators, size, ipa_transcript);
-/// let (pk, vk) = setup(&c, &pcs).unwrap();
-/// let seven = F::from_u64(7);
-/// let columns = [vec![F::ZERO, seven]];
-/// let (proof, _) = prove(&pk, &pcs, vesta_sponge(proof_domain), &[seven], &columns).unwrap();
-/// assert!(verify(&vk, &pcs, vesta_sponge(proof_domain), &[seven], proof.clone()).is_ok());
-/// assert!(verify(&vk, &pcs, vesta_sponge(proof_domain), &[F::from_u64(8)], proof).is_err());
-/// ```
+/// A complete run, from a circuit to a verified proof, is in
+/// `tests/examples.rs`.
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
+#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub fn verify<F, PC, T, const N: usize, const D: usize>(
     vk: &VerifierKey<F, PC, N, D>,
     pcs: &PC,
@@ -1372,6 +1309,7 @@ where
     });
     let counts = (
         w,
+        key.permuted.len(),
         key.fixed.len(),
         key.selectors.len(),
         rotated_vars.len(),
@@ -1462,17 +1400,24 @@ where
         lhs = lhs + power * (lb * evaluations.witness[0] - pi);
     }
     power = power * alpha;
-    let mut left = evaluations.z;
-    let mut right = evaluations.z_next;
-    for k in 0..w {
-        let wv = evaluations.witness[k];
-        left = left * (wv + beta * key.shifts[k] * zeta + gamma);
-        right = right * (wv + beta * evaluations.sigmas[k] + gamma);
-    }
-    lhs = lhs + power * (left - right);
-    power = power * alpha;
     let l0 = domain.first_lagrange_at(zeta);
-    lhs = lhs + power * l0 * (evaluations.z - F::ONE);
+    let permuted_here: Vec<F> = key
+        .permuted
+        .iter()
+        .map(|c| evaluations.witness[*c])
+        .collect();
+    let at = permutation::At {
+        x: zeta,
+        witness: &permuted_here,
+        sigmas: &evaluations.sigmas,
+        z: evaluations.z,
+        z_next: evaluations.z_next,
+        l0,
+    };
+    let [step, copy_boundary] = permutation::terms(&at, &key.shifts, beta, gamma);
+    lhs = lhs + power * step;
+    power = power * alpha;
+    lhs = lhs + power * copy_boundary;
     let boundary = (
         l0,
         domain.lagrange_at(n - 1, zeta),

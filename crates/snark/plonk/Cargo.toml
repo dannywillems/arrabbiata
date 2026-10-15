@@ -17,6 +17,7 @@ arrabbiata-frontend = { workspace = true }
 arrabbiata-ipa = { workspace = true }
 arrabbiata-kzg = { workspace = true }
 arrabbiata-pasta = { workspace = true }
+arrabbiata-permutation = { workspace = true }
 arrabbiata-plonkish = { workspace = true }
 arrabbiata-poly = { workspace = true }
 arrabbiata-poseidon = { workspace = true }

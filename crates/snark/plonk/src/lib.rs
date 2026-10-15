@@ -120,6 +120,7 @@ use core::{array, fmt, iter, marker::PhantomData};
 
 use arrabbiata_commit::{PolynomialCommitment, Univariate};
 use arrabbiata_field::{Field, TwoAdicField};
+use arrabbiata_permutation::{self as permutation, Permutation};
 use arrabbiata_poly::{
     Assignment, Domain, Expr, FixedColumn, Rotation, Scalars, UniPoly, Variable, WitnessColumn,
     evaluate,
@@ -1024,16 +1025,8 @@ fn coset_shifts<F, const W: usize>(n: usize) -> Result<[F; W], PlonkError>
 where
     F: TwoAdicField,
 {
-    let g = F::MULTIPLICATIVE_GENERATOR;
-    let gn = g.pow(n as u64);
-    let mut power = F::ONE;
-    for _ in 1..W {
-        power = power * gn;
-        if power == F::ONE {
-            return Err(PlonkError::CosetShifts);
-        }
-    }
-    Ok(array::from_fn(|k| g.pow(k as u64)))
+    let shifts = permutation::shifts::<F>(W, n).map_err(|_| PlonkError::CosetShifts)?;
+    Ok(into_array(shifts))
 }
 
 /// Preprocess a circuit: interpolate and commit to the fixed, selector and
@@ -1073,15 +1066,8 @@ where
     let selectors = interpolate_all(&domain, &circuit.selector_columns())?;
     // sigma_k(i) is the identity label of the cell sigma maps (k, i) to:
     // shift_(column) * w^(row).
-    let sigma = circuit.sigma();
-    let sigma_values: [Vec<F>; W] = array::from_fn(|k| {
-        (0..n)
-            .map(|i| {
-                let target = sigma[k * n + i];
-                shifts[target / n] * domain.element(target % n)
-            })
-            .collect()
-    });
+    let copies = Permutation::new(W, n, circuit.sigma().to_vec()).map_err(|_| PlonkError::Shape)?;
+    let sigma_values: [Vec<F>; W] = into_array(permutation::labels(&copies, &shifts, &domain));
     let sigmas = interpolate_all(&domain, &sigma_values)?;
 
     let commit = |p: &UniPoly<F>| pcs.commit(p.coefficients());
@@ -1302,21 +1288,11 @@ where
 {
     let key = &pk.vk.value;
     let domain = &pk.domain;
-    let n = domain.size();
-    let mut z_values = vec![F::ONE; n];
-    let mut i = 0;
-    while i + 1 < n {
-        let x = domain.element(i);
-        let mut num = F::ONE;
-        let mut den = F::ONE;
-        for ((column, shift), sigma) in columns.iter().zip(&key.shifts).zip(&pk.sigma_values) {
-            num = num * (column[i] + beta * *shift * x + gamma);
-            den = den * (column[i] + beta * sigma[i] + gamma);
-        }
-        // den is zero only with probability about W n / |F| over gamma.
-        z_values[i + 1] = z_values[i] * num * den.inverse().ok_or(PlonkError::Unsatisfied)?;
-        i += 1;
-    }
+    // A denominator is zero only with probability about W n / |F| over
+    // gamma.
+    let z_values =
+        permutation::grand_product(columns, &key.shifts, &pk.sigma_values, domain, beta, gamma)
+            .map_err(|_| PlonkError::Unsatisfied)?;
     interpolate(domain, &z_values)
 }
 
@@ -1407,16 +1383,20 @@ where
         }
         power = power * alpha;
         let next = (point + step) % size;
-        let mut left = z_coset[point];
-        let mut right = z_coset[next];
-        for k in 0..W {
-            let w = wire_values[k][point];
-            left = left * (w + beta * key.shifts[k] * x + gamma);
-            right = right * (w + beta * sigma_values[k][point] + gamma);
-        }
-        acc = acc + power * (left - right);
+        let witness_here: [F; W] = array::from_fn(|k| wire_values[k][point]);
+        let sigmas_here: Vec<F> = sigma_values.iter().map(|s| s[point]).collect();
+        let at = permutation::At {
+            x,
+            witness: &witness_here,
+            sigmas: &sigmas_here,
+            z: z_coset[point],
+            z_next: z_coset[next],
+            l0: l1[point],
+        };
+        let [step_term, boundary] = permutation::terms(&at, &key.shifts, beta, gamma);
+        acc = acc + power * step_term;
         power = power * alpha;
-        acc = acc + power * l1[point] * (z_coset[point] - F::ONE);
+        acc = acc + power * boundary;
         t_values[point] = acc * vanishing_inverse[point % step];
         x = x * ext.generator();
         point += 1;
@@ -1729,16 +1709,18 @@ where
         lhs = lhs + power * (lp * evaluations.witness[0] - pi);
     }
     power = power * alpha;
-    let mut left = evaluations.z;
-    let mut right = evaluations.z_next;
-    for k in 0..W {
-        let w = evaluations.witness[k];
-        left = left * (w + beta * key.shifts[k] * zeta + gamma);
-        right = right * (w + beta * evaluations.sigmas[k] + gamma);
-    }
-    lhs = lhs + power * (left - right);
+    let at = permutation::At {
+        x: zeta,
+        witness: &evaluations.witness,
+        sigmas: &evaluations.sigmas,
+        z: evaluations.z,
+        z_next: evaluations.z_next,
+        l0: domain.first_lagrange_at(zeta),
+    };
+    let [step, boundary] = permutation::terms(&at, &key.shifts, beta, gamma);
+    lhs = lhs + power * step;
     power = power * alpha;
-    lhs + power * domain.first_lagrange_at(zeta) * (evaluations.z - F::ONE)
+    lhs + power * boundary
 }
 
 #[cfg(test)]

@@ -273,11 +273,13 @@ fn kzg_accumulators_are_decided() {
         (vanilla::circuit(&c).unwrap(), vanilla::witness(&w))
     };
     let (circuit, _) = step(0);
-    // The relaxation has one more witness column than the circuit, so its
-    // quotient may be larger than PlonK's: size the key for it.
+    // Size the key for the relaxation. It has one more witness column than
+    // the circuit, but that column (the error) is not permuted, so for
+    // vanilla its quotient is PlonK's.
     let relaxed = relaxation::<Fr, Vanilla, 3, 5, 1, 11, 4>(&circuit, 2).unwrap();
     let size = max_coefficients(&relaxed);
-    assert!(size > circuit.max_coefficients());
+    assert_eq!(relaxed.permuted(), &[0, 1, 2]);
+    assert_eq!(size, circuit.max_coefficients());
     // The KZG trapdoor: known, so the key is for tests only.
     let tau = Fr::from_u64(123_456_789);
     let srs = arrabbiata_kzg::Kzg::<arrabbiata_bn254::Bn254>::insecure_setup(size, tau);

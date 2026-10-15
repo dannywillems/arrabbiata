@@ -47,10 +47,11 @@
 //! assert!(!circuit.is_satisfied(&columns, &[F::from_u64(10)]));
 //! ```
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use arrabbiata_field::Field;
 use arrabbiata_mvpoly::{MVPoly, Sparse};
+use arrabbiata_permutation::Permutation;
 use arrabbiata_poly::Rotation;
 use arrabbiata_transcript::{Absorb, Transcript, absorb_length, typed::Label};
 
@@ -222,6 +223,7 @@ where
     public_inputs: usize,
     bindings: Vec<(usize, usize)>,
     lookups: Vec<Lookup<F, N, D>>,
+    permuted: Vec<usize>,
 }
 
 impl<F, const N: usize, const D: usize> Circuit<F, N, D>
@@ -307,17 +309,7 @@ where
                 return Err(Error::Shape);
             }
         }
-        let cells = witness_columns * n;
-        let mut seen = vec![false; cells];
-        if sigma.len() != cells {
-            return Err(Error::Shape);
-        }
-        for target in &sigma {
-            if *target >= cells || seen[*target] {
-                return Err(Error::Shape);
-            }
-            seen[*target] = true;
-        }
+        Permutation::new(witness_columns, n, sigma.clone()).map_err(|_| Error::Shape)?;
         let bindings_ok = bindings.iter().enumerate().all(|(k, (j, i))| {
             *j < public_inputs
                 && *i < n
@@ -338,7 +330,83 @@ where
             public_inputs,
             bindings,
             lookups: Vec::new(),
+            permuted: (0..witness_columns).collect(),
         })
+    }
+
+    /// The circuit with copy constraints on the witness columns `columns`
+    /// only, `sigma` permuting their cells (cell `(c, i)` of the `c`-th
+    /// listed column has index `c n + i`). A circuit from [`Circuit::new`]
+    /// permutes every witness column; restricting the permutation to the
+    /// columns that carry copies shrinks the argument to their number
+    /// (Kimchi permutes 7 of its 15 columns).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Shape`] if a column repeats or does not exist, or `sigma`
+    /// is not a permutation of the cells of `columns`.
+    ///
+    /// See `tests/permutation.rs` for circuits copying between some of
+    /// their columns only.
+    ///
+    /// ```
+    /// use arrabbiata_generalized_plonk::{Circuit, Error};
+    /// use arrabbiata_pasta::Fq as F;
+    /// let num_rows = 2;
+    /// let witness_columns = 3;
+    /// let sigma = (0..6).collect();
+    /// let fixed = vec![];
+    /// let selectors = vec![];
+    /// let variables = vec![];
+    /// let gates = vec![];
+    /// let public_inputs = 0;
+    /// let bindings = vec![];
+    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+    /// let repeated = vec![2, 2];
+    /// assert_eq!(c.clone().with_permutation(repeated, vec![0, 1, 2, 3]).unwrap_err(), Error::Shape);
+    /// let only_column_2 = vec![2];
+    /// let swap_its_rows = vec![1, 0];
+    /// assert_eq!(c.with_permutation(only_column_2, swap_its_rows).unwrap().permuted(), &[2]);
+    /// ```
+    pub fn with_permutation(
+        mut self,
+        columns: Vec<usize>,
+        sigma: Vec<usize>,
+    ) -> Result<Self, Error> {
+        let distinct = columns
+            .iter()
+            .enumerate()
+            .all(|(i, c)| *c < self.witness_columns && !columns[..i].contains(c));
+        if !distinct {
+            return Err(Error::Shape);
+        }
+        Permutation::new(columns.len(), self.num_rows, sigma.clone()).map_err(|_| Error::Shape)?;
+        self.permuted = columns;
+        self.sigma = sigma;
+        Ok(self)
+    }
+
+    /// The witness columns the copy permutation acts on, in the order of
+    /// its cells.
+    ///
+    /// ```
+    /// use arrabbiata_generalized_plonk::Circuit;
+    /// use arrabbiata_pasta::Fq as F;
+    /// let num_rows = 2;
+    /// let witness_columns = 2;
+    /// let sigma = (0..4).collect();
+    /// let fixed = vec![];
+    /// let selectors = vec![];
+    /// let variables = vec![];
+    /// let gates = vec![];
+    /// let public_inputs = 0;
+    /// let bindings = vec![];
+    /// let c = Circuit::<F, 1, 1>::new(num_rows, witness_columns, fixed, selectors, variables, gates, sigma, public_inputs, bindings).unwrap();
+    /// assert_eq!(c.permuted(), &[0, 1]);
+    /// ```
+    #[must_use]
+    pub fn permuted(&self) -> &[usize] {
+        &self.permuted
     }
 
     /// The circuit with the given lookups attached.
@@ -802,12 +870,15 @@ where
                 return false;
             }
         }
-        for (cell, target) in self.sigma.iter().enumerate() {
-            if columns[cell / n][cell % n] != columns[target / n][target % n] {
-                return false;
-            }
+        let permuted: Vec<&[F]> = self
+            .permuted
+            .iter()
+            .map(|c| columns[*c].as_slice())
+            .collect();
+        match Permutation::new(self.permuted.len(), n, self.sigma.clone()) {
+            Ok(p) => p.is_respected_by(&permuted),
+            Err(_) => false,
         }
-        true
     }
 }
 
@@ -866,6 +937,7 @@ pub(crate) fn absorb_parts<F, T, const N: usize, const D: usize>(
     gates: &[Gate<F, N, D>],
     bindings: &[(usize, usize)],
     lookups: &[Lookup<F, N, D>],
+    permuted: &[usize],
 ) where
     F: Field,
     T: Transcript<F>,
@@ -899,6 +971,10 @@ pub(crate) fn absorb_parts<F, T, const N: usize, const D: usize>(
     for (j, i) in bindings {
         absorb_length(transcript, *j);
         absorb_length(transcript, *i);
+    }
+    absorb_length(transcript, permuted.len());
+    for c in permuted {
+        absorb_length(transcript, *c);
     }
     absorb_length(transcript, lookups.len());
     for lookup in lookups {
@@ -992,6 +1068,7 @@ where
             &self.gates,
             &self.bindings,
             &self.lookups,
+            &self.permuted,
         );
         for column in self.fixed.iter().chain(&self.selectors) {
             for v in column {

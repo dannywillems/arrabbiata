@@ -84,6 +84,7 @@ dependencies = [
  "arrabbiata-kzg",
  "arrabbiata-mvpoly",
  "arrabbiata-pasta",
+ "arrabbiata-permutation",
  "arrabbiata-plonk",
  "arrabbiata-plonkish",
  "arrabbiata-poly",
@@ -148,6 +149,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-permutation"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-field",
+ "arrabbiata-pasta",
+ "arrabbiata-poly",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-plonk"
 version = "0.0.0"
 dependencies = [
@@ -160,6 +171,7 @@ dependencies = [
  "arrabbiata-ipa",
  "arrabbiata-kzg",
  "arrabbiata-pasta",
+ "arrabbiata-permutation",
  "arrabbiata-plonkish",
  "arrabbiata-poly",
  "arrabbiata-poseidon",
@@ -197,6 +209,7 @@ dependencies = [
  "arrabbiata-field",
  "arrabbiata-frontend",
  "arrabbiata-pasta",
+ "arrabbiata-permutation",
  "arrabbiata-poly",
  "arrabbiata-poseidon",
  "arrabbiata-transcript",

@@ -22,7 +22,8 @@
 //! - for each gadget `g`, the gate `sum_k c_k f^D_(g,k)(u, w) - E`, turned
 //!   on by `q_g`, where `f^D` homogenizes the constraint `f` with `u`; and
 //!   the gate `E`, turned on by `idle`;
-//! - the copy permutation of `C`, the identity on the error column.
+//! - the copy permutation of `C`, on the columns of `C` only: the error
+//!   column carries no copy, so it is not permuted.
 //!
 //! Since the selectors of `C` are one-hot, the selectors of the relaxation
 //! form a partition of unity, and a witness `(w, E)` satisfies it for the
@@ -47,51 +48,8 @@
 //! Composed with the embedding `R -> R'` of the accumulation scheme, the
 //! decider is an argument for the circuit relation itself ([`snark`]).
 //!
-//! ```
-//! use arrabbiata_field::Field;
-//! use arrabbiata_frontend::vanilla::build;
-//! use arrabbiata_pasta::Fq as F;
-//! use arrabbiata_plonk::ipa;
-//! use arrabbiata_plonk_decider::Decider;
-//! use arrabbiata_plonkish::vanilla::{self, Vanilla};
-//! use arrabbiata_plonkish_folding::{Embed, Params, accumulate};
-//! use arrabbiata_poseidon::vesta_sponge;
-//! use arrabbiata_reduction::Reduction;
-//! // Sponge domain tags: each transcript gets its own, and prover and
-//! // verifier start from the same one.
-//! let digest_domain = 2;
-//! let accumulation_domain = 3;
-//! let decider_domain = 4;
-//!
-//! let step = |v: u64| {
-//!     let (c, w, ()) = build::<F, _, _>(|b| {
-//!         let x = b.witness(F::from_u64(v));
-//!         let y = b.mul(&x, &x);
-//!         let out = b.public_input(F::from_u64(v * v));
-//!         b.assert_equal(&y, &out);
-//!     });
-//!     (vanilla::circuit(&c).unwrap(), vanilla::witness(&w))
-//! };
-//! let (circuit, w0) = step(3);
-//! let pcs = ipa::pallas(&circuit);
-//! let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
-//!
-//! // Accumulate three steps.
-//! let fresh = Embed(&params).prove(vesta_sponge(accumulation_domain), &w0.public_inputs().to_vec(), &w0).unwrap();
-//! let (mut instance, mut witness) = (fresh.instance, fresh.witness);
-//! for v in [4, 5] {
-//!     let (_, w) = step(v);
-//!     let out = accumulate(&params).prove(vesta_sponge(accumulation_domain), &(w.public_inputs().to_vec(), instance), &(w, witness)).unwrap();
-//!     (instance, witness) = (out.instance, out.witness);
-//! }
-//!
-//! // Decide the accumulator with one generalized PlonK proof. Vanilla reads
-//! // 8 columns; with E, u and c that is 11 variables, and q_M c u^0 a b has
-//! // degree 4.
-//! let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
-//! let out = decider.prove(vesta_sponge(decider_domain), &instance, &witness).unwrap();
-//! decider.verify(vesta_sponge(decider_domain), &instance, out.proof).unwrap();
-//! ```
+//! Complete runs: `tests/examples.rs` (incremental verification, a SNARK by
+//! composition).
 
 #![no_std]
 
@@ -354,8 +312,9 @@ where
         }
     }
     selectors.push(idle);
-    let mut sigma = circuit.sigma().to_vec();
-    sigma.extend(W * n..(W + 1) * n);
+    // Built with no copies, then given the circuit's copies on its own
+    // columns: the error column carries none, so it is not permuted.
+    let sigma = (0..(W + 1) * n).collect();
     let num_rows = n;
     // The columns of the circuit, then the error.
     let witness_columns = W + 1;
@@ -374,6 +333,11 @@ where
         public_inputs,
         bindings,
     )
+    .and_then(|relaxed| {
+        let permuted = (0..W).collect();
+        let copies = circuit.sigma().to_vec();
+        relaxed.with_permutation(permuted, copies)
+    })
     .map_err(Error::Plonk)
 }
 
@@ -393,36 +357,9 @@ where
 /// As a reduction it goes from the relaxed relation of `params` to
 /// [`Top`].
 ///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::ipa;
-/// use arrabbiata_plonk_decider::{Decider, Error};
-/// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
-/// use arrabbiata_plonkish_folding::{Embed, Params, RelaxedInstance};
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_reduction::Reduction;
-/// // Sponge domain tags: each transcript gets its own, and prover and
-/// // verifier start from the same one.
-/// let digest_domain = 2;
-/// let accumulation_domain = 3;
-/// let decider_domain = 4;
-/// let (circuit, w) = Builder::<F, Vanilla, 3, 5, 1>::new().build().unwrap();
-/// let pcs = ipa::pallas(&circuit);
-/// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
-/// // Ten variables are too few for vanilla's relaxation.
-/// assert_eq!(Decider::<_, _, _, 3, 5, 1, 3, 2, 10, 4>::new(&params).err(), Some(Error::Size));
-/// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
-/// let fresh = Embed(&params).prove(vesta_sponge(accumulation_domain), &vec![], &w).unwrap();
-/// let out = decider.prove(vesta_sponge(decider_domain), &fresh.instance, &fresh.witness).unwrap();
-/// // The proof is bound to the instance: here, to its slack.
-/// let other = RelaxedInstance::new(
-///     F::from_u64(2), fresh.instance.coefficients().to_vec(), vec![],
-///     *fresh.instance.columns(), *fresh.instance.error(),
-/// );
-/// assert!(decider.verify(vesta_sponge(decider_domain), &other, out.proof.clone()).is_err());
-/// assert!(decider.verify(vesta_sponge(decider_domain), &fresh.instance, out.proof).is_ok());
-/// ```
+/// Complete runs: `tests/examples.rs` (incremental verification, a SNARK by
+/// composition).
+#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub struct Decider<
     'a,
     F,
@@ -671,33 +608,9 @@ pub type Snark<
 /// knowledge for the circuit relation, obtained from the category by
 /// composition, with no protocol of its own.
 ///
-/// ```
-/// use arrabbiata_field::Field;
-/// use arrabbiata_pasta::Fq as F;
-/// use arrabbiata_plonk::ipa;
-/// use arrabbiata_plonk_decider::{Decider, snark};
-/// use arrabbiata_plonkish::{Builder, vanilla::Vanilla};
-/// use arrabbiata_plonkish_folding::Params;
-/// use arrabbiata_poseidon::vesta_sponge;
-/// use arrabbiata_reduction::{Argument, Reduction};
-/// // Sponge domain tags: each transcript gets its own, and prover and
-/// // verifier start from the same one.
-/// let digest_domain = 2;
-/// let snark_domain = 5;
-/// let mut b = Builder::<F, Vanilla, 3, 5, 1>::new();
-/// let r = b.plain_row([F::from_u64(7), F::ZERO, F::ZERO], [F::ZERO; 5]);
-/// b.public(r);
-/// let (circuit, w) = b.build().unwrap();
-/// let pcs = ipa::pallas(&circuit);
-/// let params = Params::<F, _, Vanilla, 3, 5, 1, 3, 2>::new(circuit, pcs, vesta_sponge(digest_domain)).unwrap();
-/// let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
-/// let s = snark(&decider);
-/// fn argument<A: Argument<F>>(_: &A) {}
-/// argument(&s);
-/// let out = s.prove(vesta_sponge(snark_domain), &vec![F::from_u64(7)], &w).unwrap();
-/// assert!(s.verify(vesta_sponge(snark_domain), &vec![F::from_u64(7)], out.proof.clone()).is_ok());
-/// assert!(s.verify(vesta_sponge(snark_domain), &vec![F::from_u64(8)], out.proof).is_err());
-/// ```
+/// Complete runs: `tests/examples.rs` (incremental verification, a SNARK by
+/// composition).
+#[cfg_attr(doc, allow(unknown_lints, rustdoc::missing_doc_code_examples))]
 pub const fn snark<
     'a,
     'd,
