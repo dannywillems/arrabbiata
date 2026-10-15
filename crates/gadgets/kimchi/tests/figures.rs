@@ -3,13 +3,13 @@
 //! For every gate, the gadget's gate kind (one selector) has Kimchi's
 //! figures:
 //!
-//! - the number of constraints, Kimchi's `CONSTRAINTS` constant of the
-//!   gate's `Argument` (quoted with its file and line in the local checkout
-//!   of o1-labs/proof-systems, read 2026-10-15);
-//! - the degree of each constraint, in Kimchi's order, as Kimchi's
-//!   `Expr::degree(1, 0)` counts it (a cell has degree 1, a constant 0):
-//!   derived by reading each gate's `constraint_checks`, to be confirmed by
-//!   running Kimchi;
+//! - the number of constraints and the degree of each, in Kimchi's order,
+//!   as Kimchi computes them: [`KIMCHI`] is the output of running each
+//!   gate's `Argument::constraints` and `Expr::degree(1, 0)` (a cell has
+//!   degree 1, a constant 0) on o1-labs/proof-systems at `9227444890`
+//!   (master, 2026-09-24), with its locked dependencies; the gate's
+//!   `CONSTRAINTS` constant agrees with the number returned, and is quoted
+//!   with its file and line;
 //! - the cells the constraints read: the `witness_curr` and `witness_next`
 //!   columns, and the coefficient columns, that `constraint_checks` reads.
 
@@ -45,16 +45,52 @@ fn range(n: usize) -> Vec<usize> {
     (0..n).collect()
 }
 
+/// Kimchi's figures for every gate with constraints of its own, as printed
+/// by running Kimchi: the gate, the number of constraints, their degrees.
+/// The gates not yet written here are the targets of the ones to come.
+const KIMCHI: [(&str, usize, &[usize]); 12] = [
+    ("Generic", 2, &[3, 3]),
+    ("Poseidon", 15, &[7; 15]),
+    ("CompleteAdd", 7, &[2, 2, 3, 2, 2, 2, 2]),
+    (
+        "VarBaseMul",
+        21,
+        &[
+            1, 2, 2, 6, 4, 2, 2, 6, 4, 2, 2, 6, 4, 2, 2, 6, 4, 2, 2, 6, 4,
+        ],
+    ),
+    ("EndoMul", 12, &[2, 2, 2, 2, 3, 4, 4, 3, 4, 4, 1, 3]),
+    ("EndoMulScalar", 11, &[1, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4]),
+    ("RangeCheck0", 10, &[4, 4, 4, 4, 4, 4, 4, 4, 1, 2]),
+    (
+        "RangeCheck1",
+        21,
+        &[
+            4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 1,
+        ],
+    ),
+    ("ForeignFieldAdd", 4, &[2, 3, 2, 2]),
+    ("ForeignFieldMul", 11, &[4, 4, 2, 2, 2, 4, 4, 4, 2, 2, 1]),
+    ("Xor16", 3, &[1, 1, 1]),
+    ("Rot64", 11, &[4, 4, 4, 4, 4, 4, 4, 4, 2, 1, 1]),
+];
+
+/// Kimchi's degrees for `gate`.
+fn degrees(gate: &str) -> Vec<usize> {
+    KIMCHI
+        .iter()
+        .find(|(name, _, _)| *name == gate)
+        .map(|(_, _, d)| d.to_vec())
+        .unwrap_or_default()
+}
+
 fn kimchi() -> Vec<Kimchi> {
-    let varbasemul_degrees = core::iter::once(1)
-        .chain((0..5).flat_map(|_| [2, 2, 6, 4]))
-        .collect();
     vec![
         Kimchi {
             gadget: "kimchi-generic",
             constraints: 2,
             source: "kimchi/src/circuits/polynomials/generic.rs:81",
-            degrees: vec![3, 3],
+            degrees: degrees("Generic"),
             current: range(6),
             next: vec![],
             coefficients: range(10),
@@ -63,7 +99,7 @@ fn kimchi() -> Vec<Kimchi> {
             gadget: "kimchi-poseidon",
             constraints: 15,
             source: "kimchi/src/circuits/polynomials/poseidon.rs:349",
-            degrees: vec![7; 15],
+            degrees: degrees("Poseidon"),
             current: range(15),
             next: range(3),
             coefficients: range(15),
@@ -72,7 +108,7 @@ fn kimchi() -> Vec<Kimchi> {
             gadget: "kimchi-complete-add",
             constraints: 7,
             source: "kimchi/src/circuits/polynomials/complete_add.rs:101",
-            degrees: vec![2, 2, 3, 2, 2, 2, 2],
+            degrees: degrees("CompleteAdd"),
             current: range(11),
             next: vec![],
             coefficients: vec![],
@@ -81,7 +117,7 @@ fn kimchi() -> Vec<Kimchi> {
             gadget: "kimchi-varbasemul",
             constraints: 21,
             source: "kimchi/src/circuits/polynomials/varbasemul.rs:417",
-            degrees: varbasemul_degrees,
+            degrees: degrees("VarBaseMul"),
             current: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14].to_vec(),
             next: range(12),
             coefficients: vec![],
@@ -184,4 +220,15 @@ fn the_poseidon_permutation() {
     };
     assert_eq!(gate.instances, 11);
     assert_eq!(f.rows, 12);
+}
+
+/// Kimchi's table is consistent: each gate's count is the number of its
+/// degrees, and the counts are Kimchi's `CONSTRAINTS`.
+#[test]
+fn kimchis_table() {
+    for (gate, constraints, degrees) in KIMCHI {
+        assert_eq!(degrees.len(), constraints, "{gate}");
+    }
+    let total: usize = KIMCHI.iter().map(|(_, c, _)| c).sum();
+    assert_eq!(total, 2 + 15 + 7 + 21 + 12 + 11 + 10 + 21 + 4 + 11 + 3 + 11);
 }

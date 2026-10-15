@@ -13,8 +13,9 @@
 //! - [`varbasemul`]: the VarBaseMul gate, five steps of a variable-base
 //!   scalar multiplication on two rows.
 //!
-//! Their figures, which `tests/figures.rs` checks against Kimchi's (each gate
-//! is one selector; degrees are without it, a cell counting 1):
+//! Their figures, which `tests/figures.rs` checks against the ones Kimchi
+//! itself computes (each gate is one selector; degrees are without it, a
+//! cell counting 1):
 //!
 //! | gate        | constraints | max degree | rows | witness cells read        | coefficients |
 //! | ----------- | ----------- | ---------- | ---- | ------------------------- | ------------ |
