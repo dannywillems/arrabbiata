@@ -843,6 +843,23 @@ output is `u64::rotate_left` / `rotate_right` for every offset from 0 to
 `shifted` to `excess`, with `rotated` and `bound` adjusted to keep the
 equations) is rejected.
 
+ForeignFieldAdd computes `left +/- right = q m + result` modulo a foreign
+`m` on three 88-bit limbs, the low two compacted into 176 bits so one carry
+suffices (`q (q - s) = 0`, the carry in `{-1, 0, 1}`, two limb equations;
+the limbs of `m` and the sign are coefficients 0-3). `ForeignFieldAdd` is
+one operation made sound on its own: two Generic rows of constants (`1`,
+`2^88`, `0`), the gate, the bound gate (the same gate, right input `(0, 0,
+2^88)` and overflow `1`, both copied from the constants, so it computes
+`result + 2^264 - m`), Kimchi's Zero row holding the bound, and range checks
+of the result and the bound: `bound < 2^264` is `result < m`. Kimchi leaves
+the constant copies and the range checks to the circuit designer; here they
+are in the gadget. The witness needs 264-bit integers, written as four
+88-bit limbs in `u128`s (`foreign_field`), since the repository has no
+bignum dependency. The tests check Kimchi's `create_chain` rows cell for
+cell for secp256k1's and BN254's base fields and `2^64 - 59`, the result
+against independent 64-bit-word arithmetic, and that the bound alone
+accepts exactly the `x < m`, the rejection coming from the range check.
+
 Terms are built with Kimchi's simplifications (constants fold, `0 + e`,
 `0 e`, `1 e`), which keep the polynomial and make the syntactic degree
 agree with Kimchi's on the same construction; without them a Horner

@@ -12,6 +12,9 @@
 //!   endomorphism-optimized scalar multiplication;
 //! - [`endomul_scalar`]: the EndoMulScalar gate, the scalar EndoMul
 //!   multiplies by, eight crumbs per row;
+//! - [`foreign_field_add`]: the ForeignFieldAdd gate, `left +/- right`
+//!   modulo a foreign modulus on 88-bit limbs, with its bound check
+//!   ([`foreign_field`] holds the limb arithmetic of the witness);
 //! - [`generic`]: the Generic gate, two PlonK half-gates per row;
 //! - [`poseidon`]: the Poseidon gate, five rounds per row;
 //! - [`range_check`]: the RangeCheck0 and RangeCheck1 gates, three 88-bit
@@ -20,7 +23,8 @@
 //!   12-bit lookups and two RangeCheck0 rows;
 //! - [`varbasemul`]: the VarBaseMul gate, five steps of a variable-base
 //!   scalar multiplication on two rows;
-//! - [`xor`]: the Xor16 gate, 16 bits of a XOR per row, with 4-bit lookups.
+//! - [`xor`]: the Xor16 gate, 16 bits of a XOR per row, with 4-bit lookups;
+//! - [`zero`]: the Zero gate, a row with no constraints.
 //!
 //! Their figures, which `tests/figures.rs` checks against the ones Kimchi
 //! itself computes (each gate is one selector; degrees are without it, a
@@ -39,6 +43,7 @@
 //! | RangeCheck1 | 21          | 4          | 2    | 0, 2-14, next row 0-2, 7-14 | none       |
 //! | Xor16       | 3           | 1          | 1    | 0-14, next row 0-2        | none         |
 //! | Rot64       | 11          | 4          | 1    | 0-14, next row 0          | 0            |
+//! | ForeignFieldAdd | 4       | 3          | 1    | 0-7, next row 0-2         | 0-3          |
 //! | VarBaseMul  | 21          | 6          | 2    | 0-5, 7-14, next row 0-11  | none         |
 
 #![no_std]
@@ -48,12 +53,15 @@ extern crate alloc;
 pub mod complete_add;
 pub mod endomul;
 pub mod endomul_scalar;
+pub mod foreign_field;
+pub mod foreign_field_add;
 pub mod generic;
 pub mod poseidon;
 pub mod range_check;
 pub mod rot;
 pub mod varbasemul;
 pub mod xor;
+pub mod zero;
 
 use arrabbiata_gadget::Layout;
 
