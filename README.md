@@ -31,14 +31,24 @@ Early, but end to end. Implemented and tested:
   relations of any degree (Nova is the degree-2 instance), with real
   (Pedersen or KZG) commitments;
 - the typed Fiat-Shamir transcript;
+- reductions of knowledge as types: relations, reductions, their
+  composition and products, arguments as reductions to the trivial
+  relation;
+- PlonKish circuits (gadgets, one-hot selectors, rotations, copies, public
+  inputs) and their relaxation;
 - PlonK over any number of witness columns, fixed columns and selectors
   (custom gates of any degree, reading any row at a fixed offset), with
   vanilla PlonK as an instance; instantiated with KZG on BN254 and with IPA
   on Pallas and on BN254;
+- the folding scheme of the Arrabbiata note on PlonKish circuits of any
+  degree, with the cross-terms computed from multivariate polynomials, copy
+  constraints and public inputs folded linearly, and a relaxed-PlonK
+  decider: accumulate any number of steps, then prove them with one PlonK
+  proof;
 - the Lean statement and proof of completeness of folding.
 
-Not yet implemented: the IVC verifier circuit on the cycle, the permutation
-argument inside the folded relation, zero-knowledge (blinding), and
+Not yet implemented: the IVC verifier circuit on the cycle, zero-knowledge
+(blinding), and
 performance work (the pairing, MSMs and polynomial products use the plain
 textbook algorithms).
 
@@ -63,10 +73,14 @@ the right group.
 | `crates/commitment` | `arrabbiata-commit` | homomorphic vector commitments; polynomial commitments by family | yes |
 | | `arrabbiata-ipa` | the inner-product argument, over any curve | not yet |
 | | `arrabbiata-kzg` | KZG, over any pairing | not yet |
+| `crates/reduction` | `arrabbiata-reduction` | reductions of knowledge: relations, reductions, composition, products, arguments | no |
 | `crates/arithmetization` | `arrabbiata-relation` | constraint systems, relaxed relations, aggregation strategies | yes |
+| | `arrabbiata-plonkish` | PlonKish circuits: gadgets, one-hot selectors, rotations, copies; their relaxation; the vanilla gate | no |
 | | `arrabbiata-frontend` | typed circuit builders: `vanilla`, for vanilla PlonK | no |
 | `crates/accumulation` | `arrabbiata-folding` | folding of homogeneous relations of any degree; Nova as a special case | yes |
-| `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; KZG (`kzg`) and IPA (`ipa`) | no |
+| | `arrabbiata-plonkish-folding` | accumulation of PlonKish circuits: the embedding `R -> R'` and the fold `R' x R' -> R'`, cross-terms from `mvpoly` | no |
+| `crates/decider` | `arrabbiata-plonk-decider` | the decider `R' -> R_top` of `plonkish-folding`, by relaxed PlonK | no |
+| `crates/snark` | `arrabbiata-plonk` | PlonK with custom gates over any number of columns; vanilla PlonK as an instance; relaxed PlonK (`relaxed`); KZG (`kzg`) and IPA (`ipa`) | no |
 
 "Extracted" means the crate is kept inside the subset of Rust that Aeneas
 supports: no `unsafe`, no trait objects, no closures or iterator chains in
@@ -78,6 +92,11 @@ Every example lives in the API documentation, where it is compiled and run
 as a doctest, so it cannot drift from the code. Good entry points:
 
 - folding two instances: the crate documentation of `arrabbiata-folding`;
+- accumulating PlonKish circuits, and deciding the accumulator with one
+  PlonK proof: the crate documentation of `arrabbiata-plonkish-folding` and
+  of `arrabbiata-plonk-decider`;
+- reductions of knowledge and their composition: the crate documentation of
+  `arrabbiata-reduction`;
 - writing custom gates and proving a circuit with PlonK: the crate
   documentation of `arrabbiata-plonk`;
 - vanilla PlonK from a circuit of `arrabbiata_frontend::vanilla`:
@@ -107,6 +126,9 @@ as a doctest, so it cannot drift from the code. Good entry points:
   position of its gadget in the gate set type.
 - A wire of a circuit cannot be used in another circuit, or escape its
   builder (generative lifetime brand).
+- Reductions compose only when the target of the first is the source of
+  the second (`Then`), and an argument is exactly a reduction whose target
+  is the trivial relation (`Argument`).
 
 Each of these is pinned by a `compile_fail` doctest.
 
@@ -147,6 +169,10 @@ MIT. See [LICENSE](LICENSE).
   Folding Schemes. CRYPTO 2022. <https://eprint.iacr.org/2021/370>
 - Bunz, Chen. ProtoStar: Generic Efficient Accumulation/Folding for Special
   Sound Protocols. ASIACRYPT 2023. <https://eprint.iacr.org/2023/620>
+- Kothapalli, Parno. Algebraic Reductions of Knowledge. CRYPTO 2023.
+  <https://eprint.iacr.org/2022/009>
+- Bunz, Chiesa, Lin, Mishra, Spooner. Proof-Carrying Data without Succinct
+  Arguments. CRYPTO 2021. <https://eprint.iacr.org/2020/1618>
 - Willems. Behind Nova: cross-terms computation for high degree gates.
   <https://hackmd.io/qq_Awc1AR3ywzkruE4Wq9Q>
 - Gabizon, Williamson, Ciobotaru. PlonK. <https://eprint.iacr.org/2019/953>

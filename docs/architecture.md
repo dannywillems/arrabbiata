@@ -38,8 +38,9 @@ theorem. Which of the two each law currently gets is recorded below.
 ## the crates
 
 The crates live under `crates/<abstraction>/<crate>`: `algebra`, `ec`,
-`oracle`, `commitment`, `arithmetization`, `accumulation` and `snark` (see
-the README of each directory). The sections below follow the crates.
+`oracle`, `commitment`, `reduction`, `arithmetization`, `accumulation`,
+`decider` and `snark` (see the README of each directory). The sections
+below follow the crates.
 
 ### `arrabbiata-field`
 
@@ -324,13 +325,141 @@ and KZG.
 It is a toy: no blinding (not zero-knowledge), no linearization, unbatched
 openings, the quotient committed in one piece.
 
+### `arrabbiata-reduction`
+
+Reductions of knowledge (Kothapalli and Parno, *Algebraic reductions of
+knowledge*, CRYPTO 2023) as types. A `Relation` is a check on (instance,
+witness) pairs; a `Reduction<F>` from `Source` to `Target` is a
+non-interactive, publicly reducible protocol on a transcript over `F`: the
+prover maps a pair to a pair and a proof, the verifier maps the instance and
+the proof to the output instance.
+
+Relations and reductions form a symmetric monoidal category (Kothapalli,
+PhD thesis, Construction 8.1 and Theorem 8.1), and the crate is that
+category: `Identity`, sequential composition `Then` (their Theorem 1),
+products of relations `Product` and of reductions `Parallel` (Theorem 2),
+the unit `Unit`, and `Top = {(true, bottom)}`. An argument of knowledge is a
+reduction to `Top` (Definition 3); `Argument` is the trait of those. That
+`Then` only composes a reduction whose target is the next one's source is a
+bound, pinned by a `compile_fail` doctest. `laws::complete` checks the two
+executable laws of a reduction on a pair (the verifier's instance is the
+prover's, the output is in the target), and the category laws (units,
+associativity) are tested on the folding scheme of linear relations.
+
+The reason for the crate is the shape of accumulation. Our framing: an
+accumulation scheme for `R` is a relaxation `R'` with three morphisms,
+
+```text
+Embed : R -> R'     Fold : R' x R' -> R'     Dec : R' -> R_top
+```
+
+and everything else is composition: accumulating a step is
+`Fold . (Embed x Id) : R x R' -> R'`, and `Dec . Embed` is a SNARK for `R`.
+By Yoneda (thesis, Theorem 8.2), a reduction `R -> R'` is the same as a
+way to turn proofs for `R'` into proofs for `R`, which is why a decider
+needs to know `R'` only. Another accumulation scheme is another choice of
+`R'` and of the three morphisms, in its own crate.
+
+### `arrabbiata-plonkish`
+
+PlonKish circuits, moved out of the PlonK crate so that the SNARK, the
+accumulation scheme and the decider share one arithmetization: gadgets,
+gate sets as type-level lists, one-hot selectors, rotations, copies and
+public inputs (described under `arrabbiata-plonk` below), the builder, the
+vanilla gate, and a circuit's encoding for a transcript (`Absorb`).
+
+Its new part is the relaxation (`relaxed`). For a degree `D` at least the
+gate set's (in the witness; fixed columns are coefficients), a relaxed
+witness `(w, E)` satisfies a circuit for a slack `u` and coefficients `c`
+when, on every row turning on gadget `g`,
+`sum_k c_k f^D_(g,k)(u, w) = E_i` (and `E_i = 0` on other rows), copied
+cells are equal and column 0 holds the public inputs. The gadgets share the
+coefficients because the selectors are one-hot: `c` needs as many entries
+as the largest gadget has constraints, not their sum.
+
+Our framing of what `R'` is: homogenizing `f` of degree at most `D` in `N`
+variables to `f^D(u, x) = u^D f(x / u)` is an injection into the
+homogeneous polynomials of degree `D` in `N + 1` variables, inverted by
+setting `u = 1`. The zero set of `f^D` is the affine cone over the
+projective closure of the zero set of `f`, which is recovered as the chart
+`u = 1`. The relaxation replaces `f^D = 0` by `f^D = E`, the graph of the
+defect, which is closed under the line through two of its points; the
+coefficients `c` add one to the degree. The tests check the chart (a
+witness satisfies the relaxation at `u = 1, E = 0` for every `c`),
+homogeneity (scaling `(u, w, x)` by `t` and `E` by `t^D`), and that random
+coefficients detect an unsatisfied witness except at the root.
+
+### `arrabbiata-plonkish-folding`
+
+The folding scheme of the Arrabbiata note on PlonKish circuits, as the
+three morphisms above minus the decider.
+
+- `Satisfiability` is `R`: a witness satisfies the circuit, for the
+  instance's public inputs.
+- `Relaxed` is `R'`: the instance `(u, c, x, [w], [E])` is opened by a
+  relaxed witness satisfying the relaxation of degree `D`.
+- `Embed : R -> R'` commits to the witness columns, draws the combiner `a`
+  after them, and outputs `(1, (1, a, a^2, ...), x, [w], [0])`. It is
+  complete because the chart holds for every `c`, and knowledge-sound
+  because `a` is drawn after the commitments.
+- `Fold : R' x R' -> R'` commits to the `D` cross-terms, draws `r`, and
+  folds every component linearly. The cross-terms are computed per row from
+  the constraints in normal form (`arrabbiata-mvpoly`), only for the gadget
+  the row turns on: one-hot selectors make the other gadgets' terms zero
+  (the branched-gate observation of Protostar, section 3.6.1).
+- `accumulate` is `Fold . (Embed x Id)`, built from the category.
+
+A column is committed as the polynomial interpolating it on the domain of
+the circuit (a Lagrange-basis commitment): linear in the column, so the
+fold works on commitments, and equal to the commitment PlonK makes, so the
+decider opens it. Copy constraints and public inputs are linear, so they
+hold on the whole line through two instances: they need no error term, and
+the decider checks them once. The transcripts absorb a digest of the
+circuit, squeezed once at setup, not the circuit itself, so the verifiers
+do `W + D + 2` scalar multiplications and no polynomial evaluation.
+
+The tests run chains of up to four steps on a vanilla circuit and on a
+custom gate set of degree 5 reading the previous and the next row, a fixed
+column, with a gadget of two constraints. The checks are completeness
+(`laws::complete` at every step), the chart, the folding of two
+accumulators, and soundness probes: an unsatisfied step, a corrupted
+accumulator, a corrupted cross-term, swapped instances, and another
+circuit's digest each leave `R'`. The completeness tests check `mvpoly`'s
+cross-terms against the relaxation computed independently, by graded
+evaluation of the constraints.
+
+### `arrabbiata-plonk-decider`
+
+The decider `Dec : R' -> R_top` of `plonkish-folding`, by relaxed PlonK
+(`arrabbiata_plonk::relaxed`). Relaxed PlonK differs from PlonK in two
+places: the witness and error commitments are in the statement (the
+accumulator carries them; the prover opens them), and the gate term is
+`sum_g q_g sum_k c_k f^D_(g,k)(u, w) - E`, the constraints of a row
+combined by the statement's `c` instead of a fresh challenge. The
+public-input, permutation and boundary terms are PlonK's, which is what
+checks the copies the fold kept linear. The homogenization multiplies by the
+scalar `u` only, so the quotient has PlonK's degree.
+
+The link to the accumulator is the law that a scheme's two `commit` agree
+on the same coefficients (`Shared`), tested for IPA and KZG. The SNARK
+`Dec . Embed` (`snark`) is obtained by composition, with no protocol of its
+own. The tests decide accumulators of up to four steps (vanilla, the custom
+gate set, KZG on BN254), reject every perturbed instance (slack,
+coefficient, public input, column or error commitment) and a changed
+evaluation of the error polynomial, compose the decider after accumulation,
+and check that the honest prover refuses an accumulator outside `R'`.
+
 ## deviations and next steps
 
-- **Copy constraints in folding.** The folding relation has no permutation
-  argument yet, so folding a PlonK circuit ignores its wiring. The relation
-  needs the permutation (or a lookup) argument as part of the folded relation.
-- **Circuit digest.** The folding transcript absorbs the whole constraint
-  system on every fold. An IVC verifier needs a digest instead.
+- **Copy constraints in folding.** `arrabbiata-folding` (the relation of
+  `arithmetization/relation`) has no permutation argument, so folding there
+  ignores wiring. `arrabbiata-plonkish-folding` folds the copies linearly
+  and its decider checks them with PlonK's permutation argument.
+- **Circuit digest.** `arrabbiata-folding` absorbs the whole constraint
+  system on every fold; `arrabbiata-plonkish-folding` absorbs a digest.
+- **The decider is a toy PlonK.** No blinding, unbatched openings, and the
+  error column is committed in full. The accumulation verifier is
+  sublinear, but nothing yet runs it inside a circuit (IVC).
 - **The verifier circuit on the cycle.** The fields, curves, Poseidon and the
   commitments of the cycle exist; the in-circuit verifier (non-native
   arithmetic, EC gadgets, Poseidon gadget) does not yet.
@@ -375,3 +504,11 @@ openings, the quotient committed in one piece.
 | path circuits ignore padding; cyclic circuits are rotation-invariant | yes | no |
 | Poseidon and curve scalar multiplication as gate sets = native | yes | no |
 | folding knowledge soundness | sanity tests only | no |
+| category of reductions: completeness of `Then` and `Parallel`, unit and associativity laws | yes, on the folding of linear relations | no |
+| relaxation: the chart `u = 1, E = 0` for every `c`, homogeneity, detection by random `c` | yes | no |
+| embedding and PlonKish fold: complete, verifier = prover, output in `R'` | yes, chains of up to 4 steps, degree 2 and 5, rotations, fixed columns | no |
+| PlonKish fold: `mvpoly` cross-terms = relaxation evaluated independently | yes, through completeness | no |
+| PlonKish fold soundness probes (bad step, bad accumulator, bad cross-term, swapped instances, digest) | yes | no |
+| decider: complete on accumulators, rejects perturbed instances and evaluations | yes, IPA and KZG | no |
+| `HomomorphicCommitment::commit = PolynomialCommitment::commit` | yes, IPA and KZG | no |
+| `Dec . Embed` is an argument for the circuit relation | yes | no |
