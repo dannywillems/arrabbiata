@@ -135,6 +135,7 @@ dependencies = [
 name = "arrabbiata-kimchi-gadgets"
 version = "0.0.0"
 dependencies = [
+ "arrabbiata-curve",
  "arrabbiata-field",
  "arrabbiata-gadget",
  "arrabbiata-generalized-plonk",

@@ -6,11 +6,14 @@
 //! columns, with the same constraints; its coefficients are the fixed
 //! columns.
 //!
+//! - [`complete_add`]: the CompleteAdd gate, the complete sum of two affine
+//!   points;
 //! - [`generic`]: the Generic gate, two PlonK half-gates per row;
 //! - [`poseidon`]: the Poseidon gate, five rounds per row.
 
 #![no_std]
 
+pub mod complete_add;
 pub mod generic;
 pub mod poseidon;
 

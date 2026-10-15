@@ -14,6 +14,7 @@ arrabbiata-gadget = { workspace = true }
 arrabbiata-poseidon = { workspace = true }
 
 [dev-dependencies]
+arrabbiata-curve = { workspace = true }
 arrabbiata-generalized-plonk = { workspace = true }
 arrabbiata-ipa = { workspace = true }
 arrabbiata-pasta = { workspace = true }
