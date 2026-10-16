@@ -15,6 +15,9 @@
 //! - [`foreign_field_add`]: the ForeignFieldAdd gate, `left +/- right`
 //!   modulo a foreign modulus on 88-bit limbs, with its bound check
 //!   ([`foreign_field`] holds the limb arithmetic of the witness);
+//! - [`foreign_field_mul`]: the ForeignFieldMul gate, `left right` modulo
+//!   a foreign modulus, checked modulo the native field and modulo `2^264`,
+//!   with the external range checks;
 //! - [`generic`]: the Generic gate, two PlonK half-gates per row;
 //! - [`poseidon`]: the Poseidon gate, five rounds per row;
 //! - [`range_check`]: the RangeCheck0 and RangeCheck1 gates, three 88-bit
@@ -44,6 +47,7 @@
 //! | Xor16       | 3           | 1          | 1    | 0-14, next row 0-2        | none         |
 //! | Rot64       | 11          | 4          | 1    | 0-14, next row 0          | 0            |
 //! | ForeignFieldAdd | 4       | 3          | 1    | 0-7, next row 0-2         | 0-3          |
+//! | ForeignFieldMul | 11      | 4          | 2    | 0-14, next row 0-11       | 0-3          |
 //! | VarBaseMul  | 21          | 6          | 2    | 0-5, 7-14, next row 0-11  | none         |
 
 #![no_std]
@@ -55,6 +59,7 @@ pub mod endomul;
 pub mod endomul_scalar;
 pub mod foreign_field;
 pub mod foreign_field_add;
+pub mod foreign_field_mul;
 pub mod generic;
 pub mod poseidon;
 pub mod range_check;

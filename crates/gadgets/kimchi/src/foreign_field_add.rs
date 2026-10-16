@@ -32,7 +32,7 @@ use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Of, Rom, TypedGadget};
 
 use crate::{
-    foreign_field::{self, LIMB_BITS, Limbs},
+    foreign_field::{self, LIMB_BITS, Limbs, two_pow},
     generic::{GenericRow, GenericSpec},
     range_check::MultiRangeCheck,
     zero::Zero,
@@ -56,16 +56,6 @@ impl FFOps {
             Self::Sub => -F::ONE,
         }
     }
-}
-
-/// `2^k` in `F`, for `k <= 256`.
-fn two_pow<F: Field>(k: u32) -> F {
-    let mut x = F::ONE;
-    let two_32 = F::from_u64(1 << 32);
-    for _ in 0..k / 32 {
-        x = x * two_32;
-    }
-    x * F::from_u64(1 << (k % 32))
 }
 
 /// `lo + 2^88 mi`, Kimchi's `compact_limb`.

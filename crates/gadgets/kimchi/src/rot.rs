@@ -198,6 +198,7 @@ where
         let [rotated, excess, shifted] = env.call(&gate, word);
         let check = RangeCheck0Gate {
             table: self.table.clone(),
+            compact: false,
         };
         let [s0, s1] = env.call(&check, shifted);
         let [e0, e1] = env.call(&check, excess);

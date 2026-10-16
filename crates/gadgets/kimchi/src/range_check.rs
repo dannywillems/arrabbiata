@@ -47,14 +47,15 @@ pub fn range_check_table<F: Field>() -> Rom<F> {
     Rom::new(RANGE_CHECK_TABLE, column, rows)
 }
 
-/// The bits `start .. end` of `x`.
+/// The bits `start .. end` of `x`, for a range of at most 128 bits.
 pub(crate) fn bits<F: PrimeField>(x: F, start: usize, end: usize) -> F {
-    let mut value = 0u64;
+    debug_assert!(end - start <= 128, "at most 128 bits");
+    let mut value = 0u128;
     for i in (start..end).rev() {
         let bit = (x.limb(i / 64) >> (i % 64)) & 1;
-        value = (value << 1) | bit;
+        value = (value << 1) | u128::from(bit);
     }
-    F::from_u64(value)
+    crate::foreign_field::field_of(value)
 }
 
 /// `x (x - 1) (x - 2) (x - 3)`, as Kimchi's `crumb`.
@@ -150,10 +151,17 @@ where
 /// RangeCheck0: `v`, input, wired by copy to column 0, decomposed on its
 /// row; the output is its two highest limbs `[vp0, vp1]`, for
 /// [`RangeCheck1Gate`] to look up.
+///
+/// `compact` is Kimchi's coefficient 0: when set, the gate also checks
+/// `v12 = v + 2^88 v'` with `v12, v'` columns 1 and 0 of the next row, which
+/// is how a 176-bit compact limb is range-checked
+/// ([`CompactMultiRangeCheck`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RangeCheck0Gate<F> {
     /// The 12-bit table.
     pub table: Rom<F>,
+    /// Kimchi's compact mode (coefficient 0 = 1).
+    pub compact: bool,
 }
 
 impl<F> TypedGadget<F> for RangeCheck0Gate<F>
@@ -190,7 +198,8 @@ where
         env.assert_zero(sum - v.clone());
         // The compact mode: coefficient 0 turns on `v12 = v + 2^88 v'`, the
         // next row's columns 1 and 0.
-        let compact = env.fixed(Cell::new(0, 0), F::ZERO);
+        let mode = if self.compact { F::ONE } else { F::ZERO };
+        let compact = env.fixed(Cell::new(0, 0), mode);
         let next0 = env.cell(Cell::new(0, 1));
         let next1 = env.cell(Cell::new(1, 1));
         let two_to_limb = env.constant(F::from_u64(1 << 44) * F::from_u64(1 << 44));
@@ -303,6 +312,7 @@ where
     {
         let zero = RangeCheck0Gate {
             table: self.table.clone(),
+            compact: false,
         };
         let one = RangeCheck1Gate {
             table: self.table.clone(),
@@ -310,5 +320,53 @@ where
         let [v0p0, v0p1] = env.call(&zero, v0);
         let [v1p0, v1p1] = env.call(&zero, v1);
         env.call(&one, (v2, [v0p0, v0p1, v1p0, v1p1]));
+    }
+}
+
+/// A compact multi-range check: a 176-bit limb `v01` and an 88-bit limb
+/// `v2`, as Kimchi's `create_compact_multi_range_check` lays them out:
+/// RangeCheck0 of `v2`, RangeCheck0 in compact mode of `v0`, RangeCheck1 of
+/// `v1` with `v01` in its column 1, and the Zero row, where `v01 = v0 + 2^88
+/// v1`. Input `[v01, v2]`, cells of copied columns; output `[v0, v1]`, the
+/// low and middle limbs, in column 0 of rows 1 and 2.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactMultiRangeCheck<F> {
+    /// The 12-bit table.
+    pub table: Rom<F>,
+}
+
+impl<F> TypedGadget<F> for CompactMultiRangeCheck<F>
+where
+    F: PrimeField,
+{
+    type Input = Array<2>;
+    type Output = Array<2>;
+    const NAME: &'static str = "kimchi-compact-multi-range-check";
+    const ROWS: usize = 4;
+
+    fn synthesize<E>(&self, env: &mut E, [v01, v2]: Of<Array<2>, E::Var>) -> Of<Array<2>, E::Var>
+    where
+        E: Env<F>,
+    {
+        let v0 = env.advice(Cell::new(0, 1), [&v01], |[x]| bits(x, 0, LIMB_BITS));
+        let v1 = env.advice(Cell::new(0, 2), [&v01], |[x]| {
+            bits(x, LIMB_BITS, 2 * LIMB_BITS)
+        });
+        env.copy(Cell::new(1, 2), &v01);
+        let zero = RangeCheck0Gate {
+            table: self.table.clone(),
+            compact: false,
+        };
+        let compact = RangeCheck0Gate {
+            table: self.table.clone(),
+            compact: true,
+        };
+        let one = RangeCheck1Gate {
+            table: self.table.clone(),
+        };
+        let [v2p0, v2p1] = env.call(&zero, v2);
+        let [v0p0, v0p1] = env.call(&compact, v0.clone());
+        env.call(&one, (v1.clone(), [v2p0, v2p1, v0p0, v0p1]));
+        [v0, v1]
     }
 }

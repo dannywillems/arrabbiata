@@ -22,6 +22,7 @@ use arrabbiata_kimchi_gadgets::{
     endomul::EndoMul,
     endomul_scalar::EndoMulScalar,
     foreign_field_add::{FFOps, ForeignFieldAddGate},
+    foreign_field_mul::ForeignFieldMulGate,
     generic::{GenericRow, GenericSpec},
     poseidon::PoseidonPermutation,
     range_check::{MultiRangeCheck, range_check_table},
@@ -190,6 +191,17 @@ fn kimchi() -> Vec<Kimchi> {
             lookups: vec![],
         },
         Kimchi {
+            gadget: "kimchi-foreign-field-mul",
+            constraints: 11,
+            source: "kimchi/src/circuits/polynomials/foreign_field_mul/circuitgates.rs:199",
+            degrees: degrees("ForeignFieldMul"),
+            current: range(15),
+            next: range(12),
+            coefficients: range(4),
+            // The ForeignFieldMul pattern: columns 7-10 of both rows.
+            lookups: (7..=10).flat_map(|c| [(c, 0), (c, 1)]).collect(),
+        },
+        Kimchi {
             gadget: "kimchi-rot64",
             constraints: 11,
             source: "kimchi/src/circuits/polynomials/rot.rs:226",
@@ -222,6 +234,7 @@ enum Harness<'a> {
     EndoMul,
     EndoMulScalar,
     ForeignFieldAdd,
+    ForeignFieldMul,
     RangeCheck,
     Rot,
     VarBaseMul,
@@ -283,6 +296,15 @@ impl TypedGadget<Fp> for Harness<'_> {
                 };
                 env.call(&gate, (left, right));
             }
+            Self::ForeignFieldMul => {
+                let left: [E::Var; 3] = core::array::from_fn(&mut cell);
+                let right: [E::Var; 3] = core::array::from_fn(|i| cell(3 + i));
+                let gate = ForeignFieldMulGate {
+                    modulus: [5, 0, 0, 0],
+                    table: range_check_table(),
+                };
+                env.call(&gate, (left, right));
+            }
             Self::Rot => {
                 let word = cell(0);
                 let gadget = Rot64 {
@@ -320,6 +342,7 @@ fn every_gate_has_kimchis_figures() {
             "kimchi-xor16" => Harness::Xor,
             "kimchi-rot64" => Harness::Rot,
             "kimchi-foreign-field-add" => Harness::ForeignFieldAdd,
+            "kimchi-foreign-field-mul" => Harness::ForeignFieldMul,
             _ => Harness::VarBaseMul,
         };
         let f = figures(&harness, LAYOUT).unwrap();

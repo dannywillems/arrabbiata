@@ -860,6 +860,23 @@ cell for secp256k1's and BN254's base fields and `2^64 - 59`, the result
 against independent 64-bit-word arithmetic, and that the bound alone
 accepts exactly the `x < m`, the rejection coming from the range check.
 
+ForeignFieldMul checks `a b = q m + r` twice: modulo the native field
+(`a_n b_n + q_n f'_n - q_n 2^264 = r_n`, with `f' = 2^264 - m`) and modulo
+`2^264` limb by limb, through the intermediate products `p0, p1, p2` and
+the carries `v0` (2 bits) and `v1` (91 bits, in seven 12-bit lookups,
+three crumbs and a bit); the two together give the equation over the
+integers by the Chinese remainder theorem when `m^2 < 2^264 n`.
+`ForeignFieldMul` is one multiplication sound on its own: the gate and its
+Zero row, then the checks Kimchi leaves to the designer
+(`ExternalChecks`): range checks of the quotient and of `(q'2, p10,
+p110)`, the compact range check of the remainder (RangeCheck0's compact
+mode, now a parameter of the gate), the remainder's high bound `r2 + 2^88 -
+m2 - 1` on a Generic `Plus` row, and its range check. The witness divides
+a 528-bit product by `m`, with `Nat`, a natural number in 64-bit words
+(binary long division). The tests check Kimchi's two rows cell for cell,
+the remainder against an independent double-and-add, and `a b + c` through
+ForeignFieldAdd.
+
 Terms are built with Kimchi's simplifications (constants fold, `0 + e`,
 `0 e`, `1 e`), which keep the polynomial and make the syntactic degree
 agree with Kimchi's on the same construction; without them a Horner
