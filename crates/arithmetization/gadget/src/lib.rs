@@ -50,8 +50,8 @@ pub mod shape;
 
 pub use crate::{
     builder::{
-        Builder, Compiled, Error, Figures, GateFigures, Layout, Rom, Witnessed, circuit, evaluate,
-        figures, witness,
+        Builder, Compiled, Error, Figures, GateConstraints, GateFigures, Layout, Rom, Witnessed,
+        circuit, evaluate, figures, gates, witness,
     },
     env::{Cell, Chain, Env, Repeat, TypedGadget},
     expr::Wire,

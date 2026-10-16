@@ -877,6 +877,22 @@ a 528-bit product by `m`, with `Nat`, a natural number in 64-bit words
 the remainder against an independent double-and-add, and `a b + c` through
 ForeignFieldAdd.
 
+The differential test against proof-systems (`tests/differential.rs`)
+runs on Kimchi's own output, produced by a tool against proof-systems
+`9227444890`. For every gate, at four pseudo-random points (all cells of
+the row and the next, and all coefficients random, so nowhere near a
+satisfying witness), each constraint of our gate kind takes exactly the
+value Kimchi's `constraint_checks` computes, in Kimchi's order, with
+Kimchi's constants (the `fp_kimchi` MDS matrix, Pallas's endomorphism
+coefficient). Two distinct polynomials of degree at most 7 agree at a
+random point of a 255-bit field with probability about `7 / 2^255`, so the
+constraints are the same polynomials, which the figures (counts and
+degrees) do not establish. On fixed inputs, our gadgets also fill the
+rows Kimchi's witness generators fill (multi-range check, 64-bit XOR,
+rotations left and right, foreign field addition and subtraction,
+multiplication), cell for cell. The builder exposes `gates`, each gate
+kind's constraints and reads as polynomials to evaluate, for this.
+
 Terms are built with Kimchi's simplifications (constants fold, `0 + e`,
 `0 e`, `1 e`), which keep the polynomial and make the syntactic degree
 agree with Kimchi's on the same construction; without them a Horner
@@ -968,6 +984,8 @@ written here are the targets).
 | Kimchi EndoMulScalar = Kimchi's test, cell for cell; its scalar is EndoMul's | yes | no |
 | Kimchi RangeCheck0/1 = Kimchi's layout and lookups; only the lookup catches a large limb | yes | no |
 | Kimchi Xor16 = Kimchi's layout; only the lookup catches a wrong nybble | yes | no |
+| every Kimchi gate's constraints = Kimchi's polynomials (evaluated at random points) | yes, Kimchi's `constraint_checks` output | no |
+| Kimchi's witness generators = our gadgets' witnesses on fixed inputs | yes, Kimchi's output | no |
 | gadget reads: in-table values pass, out-of-table rejected on their row, proofs with lookups | yes | no |
 | GLV: `phi = [lambda]`, the split recomposes `k`, GLV multiplication = scalar multiplication | yes, on every curve | no |
 | gate figures (constraints, degrees, cells read) = Kimchi's | yes, against Kimchi's own output | no |

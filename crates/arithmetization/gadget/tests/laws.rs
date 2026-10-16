@@ -11,12 +11,14 @@
 //!   between instances, a cell written twice, a false constraint, a gadget
 //!   taking more rows than it declares, a copy of an expression, a copy
 //!   outside the permuted columns, an unplaced input, and a circuit too
-//!   large for `N` or `D`.
+//!   large for `N` or `D`;
+//! - **gates as polynomials**: `gates` gives each gate kind's constraints,
+//!   which evaluate, at any cells, to the polynomial the gadget asserts.
 
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{
     Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, Shape, TypedGadget, circuit,
-    evaluate, figures, witness,
+    evaluate, figures, gates, witness,
 };
 use arrabbiata_pasta::Fq as F;
 use proptest::prelude::*;
@@ -522,4 +524,27 @@ fn connected_cells_are_equal() {
             row: 0
         }
     );
+}
+
+proptest! {
+    /// SquarePlus defines `w(0, 1) = w(0, 0)^2 + c` with `c` in fixed
+    /// column 0: its one constraint is `x^2 + c - y` at any cells, even
+    /// ones that do not satisfy it.
+    #[test]
+    fn gates_are_the_polynomials(x in arb_f(), y in arb_f(), c in arb_f()) {
+        let program = Program { inner: SquarePlus { c } };
+        let kinds = gates::<F, _>(&program, LAYOUT).unwrap();
+        let kind = kinds.iter().find(|k| k.gadget == "square-plus").unwrap();
+        let witness = |column: usize, row: usize| match (column, row) {
+            (0, 0) => x,
+            (0, 1) => y,
+            _ => F::ZERO,
+        };
+        let fixed = |_: usize, _: usize| c;
+        let values = kind.evaluate(&witness, &fixed);
+        prop_assert_eq!(values.len(), 1);
+        // `define` asserts `cell - expression`.
+        prop_assert_eq!(values[0], y - (x * x + c));
+        prop_assert!(kind.reads(&witness, &fixed).is_empty());
+    }
 }

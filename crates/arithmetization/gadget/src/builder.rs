@@ -1095,3 +1095,101 @@ fn domain_size<F>(
         .max(2)
         .next_power_of_two()
 }
+
+/// The constraints and table reads of one gate kind, as polynomials in the
+/// cells relative to the gate's row: what a differential test evaluates
+/// against another implementation of the same gate.
+#[derive(Clone, Debug)]
+pub struct GateConstraints<F> {
+    /// The gadget.
+    pub gadget: &'static str,
+    /// The row of the gadget the gates are on.
+    pub offset: isize,
+    constraints: Vec<Expr<F>>,
+    reads: Vec<(&'static str, Vec<Expr<F>>)>,
+}
+
+impl<F> GateConstraints<F>
+where
+    F: Field,
+{
+    /// The value of each constraint, in the order asserted, at the witness
+    /// cells `witness(column, rotation)` and the fixed cells
+    /// `fixed(column, rotation)`, rotation 0 being the gate's row.
+    pub fn evaluate(
+        &self,
+        witness: &dyn Fn(usize, usize) -> F,
+        fixed: &dyn Fn(usize, usize) -> F,
+    ) -> Vec<F> {
+        let w = |c: usize, r: usize| Some(witness(c, r));
+        let f = |c: usize, r: usize| Some(fixed(c, r));
+        self.constraints
+            .iter()
+            .map(|c| c.evaluate(&w, &f).unwrap_or(F::ZERO))
+            .collect()
+    }
+
+    /// The tuple each read looks up, in order, with its table, at the same
+    /// cells.
+    pub fn reads(
+        &self,
+        witness: &dyn Fn(usize, usize) -> F,
+        fixed: &dyn Fn(usize, usize) -> F,
+    ) -> Vec<(&'static str, Vec<F>)> {
+        let w = |c: usize, r: usize| Some(witness(c, r));
+        let f = |c: usize, r: usize| Some(fixed(c, r));
+        self.reads
+            .iter()
+            .map(|(name, query)| {
+                let values = query
+                    .iter()
+                    .map(|e| e.evaluate(&w, &f).unwrap_or(F::ZERO))
+                    .collect();
+                (*name, values)
+            })
+            .collect()
+    }
+}
+
+/// The gate kinds of `gadget`'s circuit with their constraints, in the
+/// order the builder met them.
+///
+/// # Errors
+///
+/// As [`circuit`].
+pub fn gates<F, G>(gadget: &G, layout: Layout) -> Result<Vec<GateConstraints<F>>, Error>
+where
+    F: Field,
+    G: TypedGadget<F>,
+{
+    let mut builder = Builder::new(layout, false);
+    let input = inputs::<F, G::Input>(None);
+    let _ = builder.call(gadget, input);
+    if let Some(e) = builder.error {
+        return Err(e);
+    }
+    Ok(builder
+        .kinds
+        .iter()
+        .map(|kind| GateConstraints {
+            gadget: kind.gadget,
+            offset: kind.offset,
+            constraints: kind
+                .entries
+                .iter()
+                .filter_map(|e| match e {
+                    Entry::Constraint(c) => Some(c.clone()),
+                    Entry::Read(..) => None,
+                })
+                .collect(),
+            reads: kind
+                .entries
+                .iter()
+                .filter_map(|e| match e {
+                    Entry::Read(name, query) => Some((*name, query.clone())),
+                    Entry::Constraint(_) => None,
+                })
+                .collect(),
+        })
+        .collect())
+}
