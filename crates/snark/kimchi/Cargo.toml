@@ -12,6 +12,7 @@ authors.workspace = true
 arrabbiata-curve = { workspace = true }
 arrabbiata-field = { workspace = true }
 arrabbiata-transcript = { workspace = true }
+blake2 = { workspace = true }
 
 [dev-dependencies]
 arrabbiata-pasta = { workspace = true }

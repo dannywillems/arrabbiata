@@ -2,7 +2,10 @@
 
 use arrabbiata_curve::{Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
-use arrabbiata_kimchi::oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge};
+use arrabbiata_kimchi::{
+    oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
+    permutation::{PERMUTS, shifts},
+};
 use arrabbiata_pasta::{Fp, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 
@@ -41,4 +44,21 @@ fn fr_sponge() {
     let c = sponge.challenge();
     assert_eq!((c.0.limb(2), c.0.limb(3)), (0, 0));
     assert_ne!(sponge.digest(), Fp::ZERO);
+}
+
+#[test]
+fn permuts() {
+    assert_eq!(PERMUTS, 7);
+}
+
+#[test]
+fn shifts_of_a_domain() {
+    // The first shift is 1, the others are non-residues, and the sampling
+    // depends on the domain only through the check `k^n != 1`, which a
+    // non-residue passes for every power-of-two `n` below 2^32: so the
+    // shifts are the same for every size Kimchi uses.
+    let small = shifts::<Fp>(4);
+    let large = shifts::<Fp>(10);
+    assert_eq!(small[0], Fp::ONE);
+    assert_eq!(small, large);
 }

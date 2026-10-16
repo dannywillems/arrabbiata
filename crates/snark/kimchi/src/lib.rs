@@ -9,10 +9,14 @@
 //! - [`oracle`]: Kimchi's two-sponge Fiat-Shamir, the base-field sponge
 //!   that absorbs commitments and squeezes 128-bit challenges, the
 //!   scalar-field sponge that absorbs evaluations, and the map of a 128-bit
-//!   challenge to a scalar through the curve's endomorphism.
+//!   challenge to a scalar through the curve's endomorphism;
+//! - [`permutation`]: the shifts of the copy argument, sampled as Kimchi
+//!   samples them (Blake2b512 of a counter, the first non-residues not in
+//!   the domain).
 
 #![no_std]
 
 extern crate alloc;
 
 pub mod oracle;
+pub mod permutation;

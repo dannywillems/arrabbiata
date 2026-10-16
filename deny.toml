@@ -2,6 +2,9 @@
 
 [licenses]
 allow = ["MIT", "Apache-2.0"]
+# `subtle` (constant-time primitives, a required dependency of `digest`,
+# hence of `blake2`) is BSD-3-Clause only; allowed for that crate alone.
+exceptions = [{ allow = ["BSD-3-Clause"], crate = "subtle" }]
 
 [bans]
 multiple-versions = "warn"
