@@ -908,6 +908,23 @@ gate's `Argument::constraints` and `Expr::degree(1, 0)` on proof-systems
 `9227444890`, for all twelve gates with constraints (the ones not yet
 written here are the targets).
 
+### `arrabbiata-kimchi`
+
+Kimchi's SNARK as a separate implementation over the shared components,
+built milestone by milestone (plan 0006) and checked against
+proof-systems' own output at each step. Milestone 1 is Kimchi's two-sponge
+Fiat-Shamir (`oracle`): `FqSponge` over the base field (points absorbed as
+their affine coordinates, the identity as `(0, 0)`; scalars embedded, or
+split into high bits and low bit when the scalar modulus is the larger;
+128-bit challenges from the two low limbs of a squeezed element; the
+digest read as a scalar), `FrSponge` over the scalar field, and
+`ScalarChallenge::to_field`, the map of 128 bits to `a lambda + b` that
+EndoMul computes in circuit. Both sponges are generic over the underlying
+sponge; on Kimchi's `KimchiSponge` every value equals Kimchi's
+`DefaultFqSponge`, `DefaultFrSponge` and `ScalarChallenge` on the same
+scripts, for Vesta and for Pallas (where the scalar split is exercised),
+and our `Vesta::lambda()` is Kimchi's `endo_r`.
+
 ## deviations and next steps
 
 - **Copy constraints in folding.** `arrabbiata-folding` (the relation of

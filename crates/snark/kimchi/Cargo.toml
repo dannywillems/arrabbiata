@@ -1,0 +1,22 @@
+[package]
+name = "arrabbiata-kimchi"
+description = "Kimchi's SNARK, as a separate implementation over the shared components"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-curve = { workspace = true }
+arrabbiata-field = { workspace = true }
+arrabbiata-transcript = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

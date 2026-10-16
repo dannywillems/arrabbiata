@@ -21,6 +21,7 @@ arrabbiata-grumpkin = { path = "crates/ec/grumpkin" }
 arrabbiata-generalized-plonk = { path = "crates/snark/generalized" }
 arrabbiata-halo = { path = "crates/accumulation/halo" }
 arrabbiata-ipa = { path = "crates/commitment/ipa" }
+arrabbiata-kimchi = { path = "crates/snark/kimchi" }
 arrabbiata-kimchi-gadgets = { path = "crates/gadgets/kimchi" }
 arrabbiata-kzg = { path = "crates/commitment/kzg" }
 arrabbiata-mvpoly = { path = "crates/algebra/mvpoly" }
