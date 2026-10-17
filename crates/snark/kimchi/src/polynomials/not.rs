@@ -6,15 +6,14 @@
 use alloc::{format, string::String, vec, vec::Vec};
 
 use arrabbiata_field::{Field, PrimeField};
-use arrabbiata_gadget::Error;
-use arrabbiata_kimchi_gadgets::generic::GenericSpec;
+use arrabbiata_gadget::{Array, Cell, Env, Error, Of, Scalar, TypedGadget};
+use arrabbiata_kimchi_gadgets::generic::{Generic, GenericPair, GenericSpec};
 
 use crate::{
-    constraints::{COLUMNS, CircuitGate, Connect, GateType, Wire},
+    constraints::{COLUMNS, CircuitGate, Connect},
     polynomials::{
-        bit_length,
-        generic::GenericGateSpec,
-        xor::{create_xor_witness, num_xors},
+        DeriveError, Rows, bit_length, derive,
+        xor::{DEGREE, VARIABLES, create_xor_witness},
     },
 };
 
@@ -27,73 +26,106 @@ fn negation<F: Field>() -> GenericSpec<F> {
     }
 }
 
+/// A row of Generic NOTs, one or two: the inputs `[ones, x]` (and the
+/// second pair) placed where the half-gates read them, then our Generic
+/// gadgets on them.
+#[derive(Clone, Copy, Debug)]
+struct NotRow {
+    /// Two NOTs, on columns 0-2 and 3-5.
+    double_generic: bool,
+}
+
+impl<F> TypedGadget<F> for NotRow
+where
+    F: PrimeField,
+{
+    type Input = Array<Array<Scalar, 2>, 2>;
+    type Output = Array<Scalar, 2>;
+    const NAME: &'static str = "kimchi-not-row";
+    const ROWS: usize = 1;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        pairs: Of<Array<Array<Scalar, 2>, 2>, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var> {
+        let mut place = |half: usize| -> [E::Var; 2] {
+            core::array::from_fn(|i| {
+                env.advice(Cell::new(3 * half + i, 0), [&pairs[half][i]], |[v]| v)
+            })
+        };
+        let first = place(0);
+        if self.double_generic {
+            let second = place(1);
+            let pair = GenericPair {
+                first: negation(),
+                second: negation(),
+            };
+            env.call(&pair, (first, second))
+        } else {
+            let single = Generic { spec: negation() };
+            let not = env.call(&single, first);
+            [not.clone(), not]
+        }
+    }
+}
+
+/// The Kimchi row of [`NotRow`], at row `offset`.
+fn not_row<F: PrimeField>(double_generic: bool, offset: usize) -> Result<Rows<F>, DeriveError> {
+    let zeros = [[F::ZERO; 2]; 2];
+    let gadget = NotRow { double_generic };
+    derive::<F, _, VARIABLES, DEGREE>(&gadget, &zeros, 1, offset)
+}
+
 impl<F> CircuitGate<F>
 where
     F: PrimeField,
 {
     /// `gates` extended by NOTs of `n` words as Generic half-gates, two per
-    /// row, each left input wired to the all-ones cell `(pub_row, 0)`: the
-    /// row after them (Kimchi's `extend_not_gadget_unchecked_length`).
+    /// row, derived from our Generic gadgets, each left input wired to the
+    /// all-ones cell `(pub_row, 0)`: the row after them (Kimchi's
+    /// `extend_not_gadget_unchecked_length`).
+    ///
+    /// # Panics
+    ///
+    /// If `pub_row` is not a row of `gates`.
     pub fn extend_not_gadget_unchecked_length(
         gates: &mut Vec<Self>,
         n: usize,
         pub_row: usize,
     ) -> usize {
-        let mut new_row = gates.len();
-        for _ in 0..n / 2 {
-            new_row = Self::extend_not_gnrc(gates, pub_row, new_row, true);
+        for i in 0..n.div_ceil(2) {
+            let double_generic = 2 * i + 1 < n;
+            let new_row = gates.len();
+            match not_row(double_generic, new_row) {
+                Ok(mut rows) => gates.append(&mut rows.gates),
+                Err(e) => panic!("no Generic NOT row: {e:?}"),
+            }
+            gates.join((pub_row, 0), (new_row, 0));
+            if double_generic {
+                gates.join((pub_row, 0), (new_row, 3));
+            }
         }
-        if n % 2 == 1 {
-            new_row = Self::extend_not_gnrc(gates, pub_row, new_row, false);
-        }
-        new_row
+        gates.len()
     }
 
-    /// One Generic NOT row, one or two half-gates.
-    fn extend_not_gnrc(
-        gates: &mut Vec<Self>,
-        pub_row: usize,
-        new_row: usize,
-        double_generic: bool,
-    ) -> usize {
-        let first = GenericGateSpec::Spec(negation());
-        let second = double_generic.then(|| GenericGateSpec::Spec(negation()));
-        gates.push(Self::create_generic_gadget(
-            Wire::for_row(new_row),
-            first,
-            second,
-        ));
-        gates.connect_cell_pair((pub_row, 0), (new_row, 0));
-        if double_generic {
-            gates.connect_cell_pair((pub_row, 0), (new_row, 3));
-        }
-        new_row + 1
-    }
-
-    /// `gates` extended by the NOT of a word of `bits` bits as a XOR with
-    /// the all-ones cell `(all_ones_row, 0)`: the number of rows after it
-    /// (Kimchi's `extend_not_gadget_checked_length`).
+    /// `gates` extended by the NOT of a word of `bits` bits as the derived
+    /// XOR ([`CircuitGate::extend_xor_gadget`]) with the all-ones cell
+    /// `(all_ones_row, 0)`: the number of rows after it (Kimchi's
+    /// `extend_not_gadget_checked_length`).
+    ///
+    /// # Panics
+    ///
+    /// As [`CircuitGate::extend_xor_gadget`].
     pub fn extend_not_gadget_checked_length(
         gates: &mut Vec<Self>,
         all_ones_row: usize,
         bits: usize,
     ) -> usize {
-        let n = num_xors(bits);
         let new_row = gates.len();
-        let mut rows: Vec<Self> = (0..n)
-            .map(|i| Self::new(GateType::Xor16, Wire::for_row(new_row + i), vec![]))
-            .collect();
-        let zero_row = new_row + n;
-        rows.push(Self::create_generic_gadget(
-            Wire::for_row(zero_row),
-            GenericGateSpec::Spec(GenericSpec::Const(F::ZERO)),
-            None,
-        ));
-        gates.extend(rows);
-        gates.connect_cell_pair((zero_row, 0), (zero_row, 1));
-        gates.connect_cell_pair((zero_row, 0), (zero_row, 2));
-        gates.connect_cell_pair((all_ones_row, 0), (new_row, 1));
-        gates.len()
+        let after = Self::extend_xor_gadget(gates, bits);
+        gates.join((all_ones_row, 0), (new_row, 1));
+        after
     }
 }
 

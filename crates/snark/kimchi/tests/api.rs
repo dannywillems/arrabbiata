@@ -1670,9 +1670,22 @@ fn polynomials_not_extend_not_gadget_unchecked_length() {
     )];
     let next = CircuitGate::extend_not_gadget_unchecked_length(&mut gates, 3, 0);
     assert_eq!(next, 3);
-    assert_eq!(gates[1].coeffs[1], -Fp::ONE);
-    assert_eq!(gates[1].coeffs[6], -Fp::ONE);
-    assert_eq!(gates[2].coeffs[6], Fp::ZERO);
+    // Coefficients past the end are zero (the derived rows trim them).
+    let coefficient = |row: usize, i: usize| gates[row].coeffs.get(i).copied().unwrap_or(Fp::ZERO);
+    assert_eq!(coefficient(1, 1), -Fp::ONE);
+    assert_eq!(coefficient(1, 6), -Fp::ONE);
+    assert_eq!(coefficient(2, 6), Fp::ZERO);
+    // The all-ones cell and the three left inputs on one cycle.
+    let start = Wire { row: 0, col: 0 };
+    let mut cycle = vec![start];
+    let mut at = gates[0].wires[0];
+    while at != start {
+        cycle.push(at);
+        at = gates[at.row].wires[at.col];
+    }
+    cycle.sort();
+    let expected = [(0, 0), (1, 0), (1, 3), (2, 0)].map(|(row, col)| Wire { row, col });
+    assert_eq!(cycle, expected);
 }
 
 #[test]

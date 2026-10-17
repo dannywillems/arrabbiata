@@ -76,17 +76,59 @@ where
 }
 
 /// The column variables of the XOR's rows.
-const VARIABLES: usize = 32;
+pub(crate) const VARIABLES: usize = 32;
 /// The Generic row's `c3 w0 w1`.
-const DEGREE: usize = 3;
+pub(crate) const DEGREE: usize = 3;
 
-/// The rows and witness of [`Words`] of `B` bits, from row `offset`.
-fn words<F: PrimeField, const B: usize>(
+/// A computation over words of `B` bits, `B` fixed at compile time by
+/// [`for_bits`] from a width known at run time.
+pub(crate) trait ForBits {
+    /// What it computes.
+    type Output;
+
+    /// It, for words of `B` bits.
+    fn call<const B: usize>(self) -> Self::Output;
+}
+
+/// `computation` for the width of the `ceil(bits / 16)` Xor16 rows of a
+/// word of `bits` bits: `call::<16 k>`. `None` beyond 256 bits, which our
+/// XOR does not cover.
+pub(crate) fn for_bits<C: ForBits>(bits: usize, computation: C) -> Option<C::Output> {
+    match num_xors(bits) {
+        0 => Some(computation.call::<0>()),
+        1 => Some(computation.call::<16>()),
+        2 => Some(computation.call::<32>()),
+        3 => Some(computation.call::<48>()),
+        4 => Some(computation.call::<64>()),
+        5 => Some(computation.call::<80>()),
+        6 => Some(computation.call::<96>()),
+        7 => Some(computation.call::<112>()),
+        8 => Some(computation.call::<128>()),
+        9 => Some(computation.call::<144>()),
+        10 => Some(computation.call::<160>()),
+        11 => Some(computation.call::<176>()),
+        12 => Some(computation.call::<192>()),
+        13 => Some(computation.call::<208>()),
+        14 => Some(computation.call::<224>()),
+        15 => Some(computation.call::<240>()),
+        16 => Some(computation.call::<256>()),
+        _ => None,
+    }
+}
+
+/// The rows and witness of [`Words`] on `input`, from row `offset`.
+struct XorRows<F> {
     input: [F; 2],
     offset: usize,
-) -> Result<Rows<F>, DeriveError> {
-    let gadget = Words(Xor::<F, B> { table: xor_table() });
-    derive::<F, _, VARIABLES, DEGREE>(&gadget, &input, Xor::<F, B>::ROWS, offset)
+}
+
+impl<F: PrimeField> ForBits for XorRows<F> {
+    type Output = Result<Rows<F>, DeriveError>;
+
+    fn call<const B: usize>(self) -> Self::Output {
+        let gadget = Words(Xor::<F, B> { table: xor_table() });
+        derive::<F, _, VARIABLES, DEGREE>(&gadget, &self.input, Xor::<F, B>::ROWS, self.offset)
+    }
 }
 
 /// The rows and witness of a XOR of `bits` bits of `input`, from row
@@ -96,28 +138,10 @@ fn xor_rows<F: PrimeField>(
     bits: usize,
     offset: usize,
 ) -> Result<Rows<F>, DeriveError> {
-    match num_xors(bits) {
-        0 => words::<F, 0>(input, offset),
-        1 => words::<F, 16>(input, offset),
-        2 => words::<F, 32>(input, offset),
-        3 => words::<F, 48>(input, offset),
-        4 => words::<F, 64>(input, offset),
-        5 => words::<F, 80>(input, offset),
-        6 => words::<F, 96>(input, offset),
-        7 => words::<F, 112>(input, offset),
-        8 => words::<F, 128>(input, offset),
-        9 => words::<F, 144>(input, offset),
-        10 => words::<F, 160>(input, offset),
-        11 => words::<F, 176>(input, offset),
-        12 => words::<F, 192>(input, offset),
-        13 => words::<F, 208>(input, offset),
-        14 => words::<F, 224>(input, offset),
-        15 => words::<F, 240>(input, offset),
-        16 => words::<F, 256>(input, offset),
-        _ => Err(DeriveError::Gadget(Error::Rows {
-            gadget: "kimchi-xor",
-        })),
-    }
+    let rows = XorRows { input, offset };
+    for_bits(bits, rows).unwrap_or(Err(DeriveError::Gadget(Error::Rows {
+        gadget: "kimchi-xor",
+    })))
 }
 
 /// The witness of a XOR of `bits` bits of `input1` and `input2`, from
