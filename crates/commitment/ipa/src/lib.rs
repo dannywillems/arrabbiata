@@ -195,6 +195,33 @@ where
         }
     }
 
+    /// A scheme on given generators: `generators` (a power of two of them)
+    /// for the coefficients and `u` for the value, with challenges from
+    /// clones of `transcript`. For a key derived elsewhere, such as
+    /// Kimchi's SRS, so that accumulators made against it are decided and
+    /// folded by this scheme. The generators must have no known discrete-log
+    /// relation, `u` included.
+    ///
+    /// # Panics
+    ///
+    /// If the number of generators is not a power of two.
+    #[must_use]
+    pub fn from_generators(
+        generators: Vec<Projective<C>>,
+        u: Projective<C>,
+        transcript: T,
+    ) -> Self {
+        assert!(
+            generators.len().is_power_of_two(),
+            "the size must be a power of two"
+        );
+        Self {
+            generators,
+            u,
+            transcript,
+        }
+    }
+
     /// The number of generators, an upper bound on the number of
     /// coefficients.
     #[must_use]

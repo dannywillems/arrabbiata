@@ -69,6 +69,19 @@ fn ipa_setup() {
 }
 
 #[test]
+fn ipa_from_generators() {
+    // The same key, rebuilt from its generators, commits alike.
+    let ipa = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    let g = Projective::<Pallas>::generator();
+    let generators: Vec<Projective<Pallas>> = (1..=4u64).map(|k| g * Fq::from_u64(k)).collect();
+    let rebuilt = Ipa::<Pallas, _>::from_generators(generators.clone(), g, vesta_sponge(1));
+    assert_eq!(rebuilt.size(), 4);
+    let p = [Fq::ONE, Fq::ONE];
+    assert_eq!(rebuilt.commit(&p), generators[0] + generators[1]);
+    assert_eq!(ipa.size(), rebuilt.size());
+}
+
+#[test]
 fn ipa_size() {
     assert_eq!(
         Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 2, vesta_sponge(1)).size(),
