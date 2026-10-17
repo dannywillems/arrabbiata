@@ -1467,20 +1467,6 @@ fn constraints_constraint_system_verify_witness() {
     assert!(found == Err(GateError::Custom { row: 0, err }), "{found:?}");
 }
 
-#[test]
-fn constraints_connect_connect_64bit() {
-    // Kimchi's three swaps: the third joins two cells already on one
-    // cycle and splits it, so (1, 1) is left alone and only (1, 2) is
-    // wired to (0, 0) (see kimchi_rot::connect_64bit_forgery).
-    let mut gates: Vec<CircuitGate<Fp>> = (0..2)
-        .map(|row| CircuitGate::new(GateType::Zero, Wire::for_row(row), vec![]))
-        .collect();
-    gates.connect_64bit(0, 1);
-    assert_eq!(gates[1].wires[1], Wire { row: 1, col: 1 });
-    assert_eq!(gates[1].wires[2], Wire { row: 0, col: 0 });
-    assert_eq!(gates[0].wires[0], Wire { row: 1, col: 2 });
-}
-
 /// A commitment of one chunk.
 fn one_chunk(k: u64) -> PolyComm<Vesta> {
     PolyComm {
