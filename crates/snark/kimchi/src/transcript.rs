@@ -26,7 +26,10 @@
 //! and squeezes `v` (polyscale) and `u` (evalscale), 128-bit challenges too.
 //!
 //! The opening, on the base-field sponge after step 7, is the inner-product
-//! argument's own transcript ([`arrabbiata_ipa::generic`]).
+//! argument's transcript, typed in its crate
+//! ([`arrabbiata_ipa::generic::OpeningTranscript`]): for Kimchi's choices,
+//! the shifted combined inner product, the base-field element hashed to the
+//! value base, the rounds' `(L, R)` and challenges, then `delta` and `c`.
 //!
 //! The tapes start [`Tape::undescribed`]: Kimchi's transcript absorbs no
 //! description of its pattern, and ours must be Kimchi's bit for bit.

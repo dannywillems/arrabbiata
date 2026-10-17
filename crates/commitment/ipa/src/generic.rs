@@ -26,13 +26,23 @@
 //! Either way the verifier trusts `sg`, and its output is the accumulator
 //! `(x, sg)`, decided by an MSM of the size of the key: the hiding changes
 //! the proof, not the accumulation.
+//!
+//! The transcript is a type, [`OpeningTranscript`]: each parameter says
+//! what it writes and draws as a step (`Binding::Step`, `ValueBase::Step`,
+//! `Hiding::Step`), and the opening is the binding's step, the value base's,
+//! the rounds (`(L, R)` sent, `x` drawn, as many as `log2` of the key), then
+//! the hiding's. The prover and the verifier both follow it, on a tape that
+//! borrows the oracle and absorbs nothing else.
 
 use alloc::vec::Vec;
-use core::fmt::Debug;
+use core::{fmt::Debug, marker::PhantomData};
 
 use arrabbiata_curve::{Curve, Projective, absorb_point, msm};
 use arrabbiata_field::{Field, PrimeField, inner_product, rng::Sampler};
-use arrabbiata_transcript::{Transcript, absorb_slice};
+use arrabbiata_transcript::{
+    Transcript, absorb_slice,
+    typed::{Draw, End, Label, Rounds, Send, Squeeze, Statement as Absorbed, Tape, Write},
+};
 
 use crate::{RecursionChallenge, Statement, b_poly, evaluation_vector};
 
@@ -91,9 +101,207 @@ pub trait Binding<C, O>
 where
     C: Curve,
 {
-    /// Absorb `statement` into `oracle`.
-    fn bind(&self, oracle: &mut O, statement: &Statement<'_, C>);
+    /// The step, then `Next`.
+    type Step<Next>;
+
+    /// Write `statement` to the tape.
+    fn bind<'a, F, Next>(
+        &self,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
+        statement: &Statement<'_, C>,
+    ) -> Tape<F, &'a mut O, Next>;
 }
+
+/// The step names of an opening's transcript, with their labels.
+macro_rules! step {
+    ($(#[$doc:meta])* $name:ident = $label:expr) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+        pub struct $name;
+
+        impl Label for $name {
+            const LABEL: u64 = $label;
+        }
+    };
+}
+
+step!(
+    /// The value base's scale `xi`.
+    ValueChallenge = 0x6901
+);
+step!(
+    /// A round's challenge.
+    RoundChallenge = 0x6902
+);
+step!(
+    /// The final step's challenge `c`.
+    FinalChallenge = 0x6903
+);
+
+/// The whole statement, as [`BindStatement`] writes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundStatement<C>
+where
+    C: Curve,
+{
+    /// The commitment.
+    pub commitment: Projective<C>,
+    /// The points.
+    pub points: Vec<C::Scalar>,
+    /// The points' scale.
+    pub evalscale: C::Scalar,
+    /// The value.
+    pub value: C::Scalar,
+}
+
+impl<C> Label for BoundStatement<C>
+where
+    C: Curve,
+{
+    const LABEL: u64 = 0x6904;
+}
+
+impl<C, T> Write<&mut ScalarOracle<'_, T>> for BoundStatement<C>
+where
+    C: Curve,
+    C::Base: PrimeField,
+    T: Transcript<C::Scalar>,
+{
+    fn write(&self, oracle: &mut &mut ScalarOracle<'_, T>) {
+        let transcript = &mut *oracle.0;
+        transcript.absorb(C::Scalar::from_u64(DOMAIN));
+        absorb_point(&self.commitment, transcript);
+        absorb_slice(transcript, &self.points);
+        transcript.absorb(self.evalscale);
+        transcript.absorb(self.value);
+    }
+}
+
+/// The value, shifted, as [`BindValue`] writes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShiftedValue<C>(pub C::Scalar)
+where
+    C: Curve;
+
+impl<C> Label for ShiftedValue<C>
+where
+    C: Curve,
+{
+    const LABEL: u64 = 0x6905;
+}
+
+impl<C, O> Write<&mut O> for ShiftedValue<C>
+where
+    C: Curve,
+    O: IpaOracle<C>,
+{
+    fn write(&self, oracle: &mut &mut O) {
+        oracle.absorb_scalar(self.0);
+    }
+}
+
+/// A round's `(L, R)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoundPoints<C>(pub Projective<C>, pub Projective<C>)
+where
+    C: Curve;
+
+impl<C> Label for RoundPoints<C>
+where
+    C: Curve,
+{
+    const LABEL: u64 = 0x6906;
+}
+
+impl<C, O> Write<&mut O> for RoundPoints<C>
+where
+    C: Curve,
+    O: IpaOracle<C>,
+{
+    fn write(&self, oracle: &mut &mut O) {
+        oracle.absorb_point(&self.0);
+        oracle.absorb_point(&self.1);
+    }
+}
+
+/// The final step's `delta` ([`Blinded`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Delta<C>(pub Projective<C>)
+where
+    C: Curve;
+
+impl<C> Label for Delta<C>
+where
+    C: Curve,
+{
+    const LABEL: u64 = 0x6907;
+}
+
+impl<C, O> Write<&mut O> for Delta<C>
+where
+    C: Curve,
+    O: IpaOracle<C>,
+{
+    fn write(&self, oracle: &mut &mut O) {
+        oracle.absorb_point(&self.0);
+    }
+}
+
+/// A scalar squeezed for the step `Name`, before the [`ChallengeMap`].
+#[derive(Debug)]
+pub struct ScalarDraw<C, Name>(PhantomData<(C, Name)>);
+
+impl<C, Name> Label for ScalarDraw<C, Name>
+where
+    Name: Label,
+{
+    const LABEL: u64 = Name::LABEL;
+}
+
+impl<C, O, Name> Draw<&mut O> for ScalarDraw<C, Name>
+where
+    C: Curve,
+    O: IpaOracle<C>,
+{
+    type Value = C::Scalar;
+
+    fn draw(oracle: &mut &mut O) -> C::Scalar {
+        oracle.squeeze_scalar()
+    }
+}
+
+/// A base-field element squeezed for the hash to the curve.
+#[derive(Debug)]
+pub struct BaseDraw<C>(PhantomData<C>);
+
+impl<C> Label for BaseDraw<C> {
+    const LABEL: u64 = 0x6908;
+}
+
+impl<C, O> Draw<&mut O> for BaseDraw<C>
+where
+    C: Curve,
+    O: BaseOracle<C>,
+{
+    type Value = C::Base;
+
+    fn draw(oracle: &mut &mut O) -> C::Base {
+        oracle.squeeze_base()
+    }
+}
+
+/// One round: `(L, R)` sent, the challenge drawn.
+pub type Round<C> = Send<RoundPoints<C>, Squeeze<ScalarDraw<C, RoundChallenge>, End>>;
+
+/// The transcript of an opening with the binding `B`, the value base `V`
+/// and the hiding `H` on the oracle `O`.
+pub type OpeningTranscript<C, B, V, H, O> = <B as Binding<C, O>>::Step<
+    <V as ValueBase<C, O>>::Step<Rounds<Round<C>, <H as Hiding<C>>::Step<End>>>,
+>;
+
+/// A tape borrowing the oracle `O` at the start of [`OpeningTranscript`].
+pub type OpeningTape<'a, C, B, V, H, O> =
+    Tape<<C as Curve>::Scalar, &'a mut O, OpeningTranscript<C, B, V, H, O>>;
 
 /// Domain separator absorbed at the start of every [`BindStatement`]
 /// opening.
@@ -104,19 +312,25 @@ pub const DOMAIN: u64 = 0x6970_615f_6f70_656e;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BindStatement;
 
-impl<C, T> Binding<C, ScalarOracle<'_, T>> for BindStatement
+impl<'b, C, T> Binding<C, ScalarOracle<'b, T>> for BindStatement
 where
     C: Curve,
     C::Base: PrimeField,
     T: Transcript<C::Scalar>,
 {
-    fn bind(&self, oracle: &mut ScalarOracle<'_, T>, statement: &Statement<'_, C>) {
-        let transcript = &mut *oracle.0;
-        transcript.absorb(C::Scalar::from_u64(DOMAIN));
-        absorb_point(statement.commitment, transcript);
-        absorb_slice(transcript, statement.points);
-        transcript.absorb(statement.evalscale);
-        transcript.absorb(statement.value);
+    type Step<Next> = Absorbed<BoundStatement<C>, Next>;
+
+    fn bind<'a, F, Next>(
+        &self,
+        tape: Tape<F, &'a mut ScalarOracle<'b, T>, Self::Step<Next>>,
+        statement: &Statement<'_, C>,
+    ) -> Tape<F, &'a mut ScalarOracle<'b, T>, Next> {
+        tape.statement(&BoundStatement {
+            commitment: *statement.commitment,
+            points: statement.points.to_vec(),
+            evalscale: statement.evalscale,
+            value: statement.value,
+        })
     }
 }
 
@@ -177,8 +391,14 @@ where
     C::Base: PrimeField,
     O: IpaOracle<C>,
 {
-    fn bind(&self, oracle: &mut O, statement: &Statement<'_, C>) {
-        oracle.absorb_scalar(shift_scalar::<C>(statement.value));
+    type Step<Next> = Absorbed<ShiftedValue<C>, Next>;
+
+    fn bind<'a, F, Next>(
+        &self,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
+        statement: &Statement<'_, C>,
+    ) -> Tape<F, &'a mut O, Next> {
+        tape.statement(&ShiftedValue(shift_scalar::<C>(statement.value)))
     }
 }
 
@@ -240,9 +460,16 @@ pub trait ValueBase<C, O>
 where
     C: Curve,
 {
-    /// The base, from `oracle` after the statement, and the scheme's
+    /// The step, then `Next`.
+    type Step<Next>;
+
+    /// The base, drawn from the tape after the statement, and the scheme's
     /// extra generator `u`.
-    fn base(&self, oracle: &mut O, u: &Projective<C>) -> Projective<C>;
+    fn base<'a, F, Next>(
+        &self,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
+        u: &Projective<C>,
+    ) -> (Projective<C>, Tape<F, &'a mut O, Next>);
 }
 
 /// `xi U`, `xi` squeezed after the statement.
@@ -254,8 +481,15 @@ where
     C: Curve,
     O: IpaOracle<C>,
 {
-    fn base(&self, oracle: &mut O, u: &Projective<C>) -> Projective<C> {
-        *u * oracle.squeeze_scalar()
+    type Step<Next> = Squeeze<ScalarDraw<C, ValueChallenge>, Next>;
+
+    fn base<'a, F, Next>(
+        &self,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
+        u: &Projective<C>,
+    ) -> (Projective<C>, Tape<F, &'a mut O, Next>) {
+        let (xi, tape) = tape.squeeze();
+        (*u * xi, tape)
     }
 }
 
@@ -279,8 +513,15 @@ where
     O: BaseOracle<C>,
     M: HashToCurve<C>,
 {
-    fn base(&self, oracle: &mut O, _u: &Projective<C>) -> Projective<C> {
-        self.0.to_group(oracle.squeeze_base())
+    type Step<Next> = Squeeze<BaseDraw<C>, Next>;
+
+    fn base<'a, F, Next>(
+        &self,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
+        _u: &Projective<C>,
+    ) -> (Projective<C>, Tape<F, &'a mut O, Next>) {
+        let (t, tape) = tape.squeeze();
+        (self.0.to_group(t), tape)
     }
 }
 
@@ -312,19 +553,22 @@ where
     /// What the final step sends.
     type Final: Clone + Debug + PartialEq;
 
+    /// The final step's messages and challenges, then `Next`.
+    type Step<Next>;
+
     /// The blinders of a round's `L` and `R`.
     fn round_blinders<R>(&self, rng: &mut R) -> (C::Scalar, C::Scalar)
     where
         R: Sampler<C::Scalar>;
 
     /// The final step, prover side.
-    fn prove_final<O, M, R>(
+    fn prove_final<'a, F, O, M, R, Next>(
         &self,
-        oracle: &mut O,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
         map: &M,
         folded: &Folded<C>,
         rng: &mut R,
-    ) -> Self::Final
+    ) -> (Self::Final, Tape<F, &'a mut O, Next>)
     where
         O: IpaOracle<C>,
         M: ChallengeMap<C::Scalar>,
@@ -333,9 +577,9 @@ where
     /// The final check, verifier side: an expression that is the identity
     /// exactly when it holds, given `Q`, `sg`, `b0`, `U` and `H`.
     #[allow(clippy::too_many_arguments)]
-    fn check_final<O, M>(
+    fn check_final<'a, F, O, M, Next>(
         &self,
-        oracle: &mut O,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
         map: &M,
         last: &Self::Final,
         q: Projective<C>,
@@ -343,7 +587,7 @@ where
         b0: C::Scalar,
         u: Projective<C>,
         h: Projective<C>,
-    ) -> Projective<C>
+    ) -> (Projective<C>, Tape<F, &'a mut O, Next>)
     where
         O: IpaOracle<C>,
         M: ChallengeMap<C::Scalar>;
@@ -358,6 +602,7 @@ where
     C: Curve,
 {
     type Final = C::Scalar;
+    type Step<Next> = Next;
 
     fn round_blinders<R>(&self, _rng: &mut R) -> (C::Scalar, C::Scalar)
     where
@@ -366,24 +611,24 @@ where
         (C::Scalar::ZERO, C::Scalar::ZERO)
     }
 
-    fn prove_final<O, M, R>(
+    fn prove_final<'a, F, O, M, R, Next>(
         &self,
-        _oracle: &mut O,
+        tape: Tape<F, &'a mut O, Next>,
         _map: &M,
         folded: &Folded<C>,
         _rng: &mut R,
-    ) -> C::Scalar
+    ) -> (C::Scalar, Tape<F, &'a mut O, Next>)
     where
         O: IpaOracle<C>,
         M: ChallengeMap<C::Scalar>,
         R: Sampler<C::Scalar>,
     {
-        folded.a
+        (folded.a, tape)
     }
 
-    fn check_final<O, M>(
+    fn check_final<'a, F, O, M, Next>(
         &self,
-        _oracle: &mut O,
+        tape: Tape<F, &'a mut O, Next>,
         _map: &M,
         a: &C::Scalar,
         q: Projective<C>,
@@ -391,12 +636,12 @@ where
         b0: C::Scalar,
         u: Projective<C>,
         _h: Projective<C>,
-    ) -> Projective<C>
+    ) -> (Projective<C>, Tape<F, &'a mut O, Next>)
     where
         O: IpaOracle<C>,
         M: ChallengeMap<C::Scalar>,
     {
-        q - (sg * *a + u * (*a * b0))
+        (q - (sg * *a + u * (*a * b0)), tape)
     }
 }
 
@@ -424,6 +669,7 @@ where
     C: Curve,
 {
     type Final = Schnorr<C>;
+    type Step<Next> = Send<Delta<C>, Squeeze<ScalarDraw<C, FinalChallenge>, Next>>;
 
     fn round_blinders<R>(&self, rng: &mut R) -> (C::Scalar, C::Scalar)
     where
@@ -434,13 +680,13 @@ where
         (l, r)
     }
 
-    fn prove_final<O, M, R>(
+    fn prove_final<'a, F, O, M, R, Next>(
         &self,
-        oracle: &mut O,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
         map: &M,
         folded: &Folded<C>,
         rng: &mut R,
-    ) -> Schnorr<C>
+    ) -> (Schnorr<C>, Tape<F, &'a mut O, Next>)
     where
         O: IpaOracle<C>,
         M: ChallengeMap<C::Scalar>,
@@ -449,18 +695,19 @@ where
         let d: C::Scalar = rng.sample();
         let r_delta: C::Scalar = rng.sample();
         let delta = (folded.sg + folded.u * folded.b) * d + folded.h * r_delta;
-        oracle.absorb_point(&delta);
-        let c = map.map(oracle.squeeze_scalar());
-        Schnorr {
+        let (raw, tape) = tape.send(&Delta(delta)).squeeze();
+        let c = map.map(raw);
+        let last = Schnorr {
             delta,
             z1: folded.a * c + d,
             z2: folded.blinder * c + r_delta,
-        }
+        };
+        (last, tape)
     }
 
-    fn check_final<O, M>(
+    fn check_final<'a, F, O, M, Next>(
         &self,
-        oracle: &mut O,
+        tape: Tape<F, &'a mut O, Self::Step<Next>>,
         map: &M,
         last: &Schnorr<C>,
         q: Projective<C>,
@@ -468,14 +715,15 @@ where
         b0: C::Scalar,
         u: Projective<C>,
         h: Projective<C>,
-    ) -> Projective<C>
+    ) -> (Projective<C>, Tape<F, &'a mut O, Next>)
     where
         O: IpaOracle<C>,
         M: ChallengeMap<C::Scalar>,
     {
-        oracle.absorb_point(&last.delta);
-        let c = map.map(oracle.squeeze_scalar());
-        q * c + last.delta - (sg + u * b0) * last.z1 - h * last.z2
+        let (raw, tape) = tape.receive(&Delta(last.delta)).squeeze();
+        let c = map.map(raw);
+        let expression = q * c + last.delta - (sg + u * b0) * last.z1 - h * last.z2;
+        (expression, tape)
     }
 }
 
@@ -578,8 +826,9 @@ where
         let mut a = witness.coefficients.to_vec();
         a.resize(n, C::Scalar::ZERO);
         let mut b = evaluation_vector(statement.points, statement.evalscale, n);
-        self.binding.bind(oracle, statement);
-        let u = self.value_base.base(oracle, &self.u);
+        let tape: OpeningTape<'_, C, B, V, H, O> = Tape::undescribed(oracle);
+        let tape = self.binding.bind(tape, statement);
+        let (u, mut tape) = self.value_base.base(tape, &self.u);
         let mut g = self.generators.clone();
         let mut rounds = Vec::with_capacity(self.rounds());
         let mut chals = Vec::with_capacity(self.rounds());
@@ -592,9 +841,9 @@ where
             let (r_l, r_r) = self.hiding.round_blinders(rng);
             let l = msm(g_lo, a_hi) + self.h * r_l + u * inner_product(a_hi, b_lo);
             let r = msm(g_hi, a_lo) + self.h * r_r + u * inner_product(a_lo, b_hi);
-            oracle.absorb_point(&l);
-            oracle.absorb_point(&r);
-            let x = self.challenges.map(oracle.squeeze_scalar());
+            let (raw, next) = tape.round().send(&RoundPoints(l, r)).squeeze();
+            tape = next;
+            let x = self.challenges.map(raw);
             let x_inv = match x.inverse() {
                 Some(inverse) => inverse,
                 // Probability 1 / |F|; the verifier rejects such a proof.
@@ -630,9 +879,10 @@ where
             h: self.h,
             blinder,
         };
-        let last = self
+        let (last, tape) = self
             .hiding
-            .prove_final(oracle, &self.challenges, &folded, rng);
+            .prove_final(tape.done(), &self.challenges, &folded, rng);
+        let _ = tape.into_inner();
         let accumulator = RecursionChallenge {
             chals,
             comm: folded.sg,
@@ -664,14 +914,15 @@ where
         if opening.rounds.len() != k {
             return None;
         }
-        self.binding.bind(oracle, statement);
-        let u = self.value_base.base(oracle, &self.u);
+        let tape: OpeningTape<'_, C, B, V, H, O> = Tape::undescribed(oracle);
+        let tape = self.binding.bind(tape, statement);
+        let (u, mut tape) = self.value_base.base(tape, &self.u);
         let mut chals = Vec::with_capacity(k);
         let mut q = *statement.commitment + u * statement.value;
         for (l, r) in &opening.rounds {
-            oracle.absorb_point(l);
-            oracle.absorb_point(r);
-            let x = self.challenges.map(oracle.squeeze_scalar());
+            let (raw, next) = tape.round().receive(&RoundPoints(*l, *r)).squeeze();
+            tape = next;
+            let x = self.challenges.map(raw);
             let x_inv = x.inverse()?;
             q = q + *l * x_inv + *r * x;
             chals.push(x);
@@ -682,8 +933,8 @@ where
             b0 = b0 + scale * b_poly(&chals, *point);
             scale = scale * statement.evalscale;
         }
-        let expression = self.hiding.check_final(
-            oracle,
+        let (expression, tape) = self.hiding.check_final(
+            tape.done(),
             &self.challenges,
             &opening.last,
             q,
@@ -692,6 +943,7 @@ where
             u,
             self.h,
         );
+        let _ = tape.into_inner();
         let accumulator = RecursionChallenge {
             chals,
             comm: opening.sg,

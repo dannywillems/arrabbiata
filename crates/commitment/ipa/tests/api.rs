@@ -10,15 +10,19 @@ use arrabbiata_field::{
 use arrabbiata_ipa::{
     Ipa, IpaProof, RecursionChallenge, Statement,
     generic::{
-        BaseOracle, BindStatement, BindValue, Binding, Blinded, CHALLENGE_BITS, ChallengeMap,
-        DOMAIN, Endo, Folded, Full, GenericIpa, HashToCurve, HashedToCurve, Hiding, IpaOracle,
-        NoRandomness, NotHiding, Opening, ScalarOracle, ScaledGenerator, Schnorr, ValueBase,
-        Witness, shift_scalar,
+        BaseDraw, BaseOracle, BindStatement, BindValue, Binding, Blinded, BoundStatement,
+        CHALLENGE_BITS, ChallengeMap, DOMAIN, Delta, Endo, FinalChallenge, Folded, Full,
+        GenericIpa, HashToCurve, HashedToCurve, Hiding, IpaOracle, NoRandomness, NotHiding,
+        Opening, OpeningTranscript, Round, RoundChallenge, RoundPoints, ScalarDraw, ScalarOracle,
+        ScaledGenerator, Schnorr, ShiftedValue, ValueBase, ValueChallenge, Witness, shift_scalar,
     },
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas};
 use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
-use arrabbiata_transcript::Transcript;
+use arrabbiata_transcript::{
+    Transcript,
+    typed::{Draw, End, Label, Pattern, Tape, Write},
+};
 
 #[test]
 fn crate_overview() {
@@ -202,7 +206,7 @@ fn generic_binding() {
         value: Fq::from_u64(17),
     };
     let mut bound = vesta_sponge(1);
-    BindStatement.bind(&mut ScalarOracle(&mut bound), &statement);
+    bind(&BindStatement, &mut ScalarOracle(&mut bound), &statement);
     assert_ne!(bound.squeeze(), vesta_sponge(1).squeeze());
 }
 
@@ -225,7 +229,7 @@ fn generic_bind_statement() {
             value,
         };
         let mut sponge = vesta_sponge(1);
-        BindStatement.bind(&mut ScalarOracle(&mut sponge), &statement);
+        bind(&BindStatement, &mut ScalarOracle(&mut sponge), &statement);
         sponge.squeeze()
     };
     assert_ne!(squeeze(Fq::from_u64(17)), squeeze(Fq::from_u64(18)));
@@ -244,7 +248,7 @@ fn generic_bind_value() {
             value: Fq::from_u64(17),
         };
         let mut sponge = vesta_sponge(1);
-        BindValue.bind(&mut ScalarOracle(&mut sponge), &statement);
+        bind(&BindValue, &mut ScalarOracle(&mut sponge), &statement);
         sponge.squeeze()
     };
     assert_eq!(squeeze(&g), squeeze(&other));
@@ -291,7 +295,7 @@ fn generic_challenge_bits() {
 fn generic_value_base() {
     let u = Projective::<Pallas>::generator();
     let mut sponge = vesta_sponge(1);
-    let base = ScaledGenerator.base(&mut ScalarOracle(&mut sponge), &u);
+    let base = base(&ScaledGenerator, &mut ScalarOracle(&mut sponge), &u);
     assert_eq!(base, u * vesta_sponge(1).squeeze());
 }
 
@@ -299,8 +303,16 @@ fn generic_value_base() {
 fn generic_scaled_generator() {
     // A different `u`, a different base.
     let u = Projective::<Pallas>::generator();
-    let a = ScaledGenerator.base(&mut ScalarOracle(&mut vesta_sponge(1)), &u);
-    let b = ScaledGenerator.base(&mut ScalarOracle(&mut vesta_sponge(1)), &(u + u));
+    let a = base(
+        &ScaledGenerator,
+        &mut ScalarOracle(&mut vesta_sponge(1)),
+        &u,
+    );
+    let b = base(
+        &ScaledGenerator,
+        &mut ScalarOracle(&mut vesta_sponge(1)),
+        &(u + u),
+    );
     assert_eq!(b, a + a);
 }
 
@@ -318,7 +330,7 @@ fn generic_hashed_to_curve() {
     // The base ignores `u`: it is the map of a squeezed base element.
     let u = Projective::<Pallas>::generator();
     let mut oracle = TwoSponges(vesta_sponge(1), pallas_sponge(2));
-    let base = HashedToCurve(ScaleGenerator).base(&mut oracle, &u);
+    let base = base(&HashedToCurve(ScaleGenerator), &mut oracle, &u);
     let t: Fp = pallas_sponge(2).squeeze();
     assert_eq!(base, ScaleGenerator.to_group(t));
 }
@@ -561,4 +573,156 @@ fn generic_ipa_decide() {
     assert!(ipa.decide(&accumulator));
     accumulator.comm = accumulator.comm + Projective::<Pallas>::generator();
     assert!(!ipa.decide(&accumulator));
+}
+
+/// `binding`'s step alone, on `oracle`.
+fn bind<B, O>(binding: &B, oracle: &mut O, statement: &Statement<'_, Pallas>)
+where
+    B: Binding<Pallas, O>,
+{
+    let tape = Tape::<Fq, &mut O, B::Step<End>>::undescribed(oracle);
+    let _ = binding.bind(tape, statement).into_inner();
+}
+
+/// `value_base`'s step alone, on `oracle`.
+fn base<V, O>(value_base: &V, oracle: &mut O, u: &Projective<Pallas>) -> Projective<Pallas>
+where
+    V: ValueBase<Pallas, O>,
+{
+    let tape = Tape::<Fq, &mut O, V::Step<End>>::undescribed(oracle);
+    let (point, tape) = value_base.base(tape, u);
+    let _ = tape.into_inner();
+    point
+}
+
+#[test]
+fn generic_bound_statement() {
+    // Written as BindStatement binds: the domain first.
+    let g = Projective::<Pallas>::generator();
+    let bound = BoundStatement::<Pallas> {
+        commitment: g,
+        points: vec![Fq::from_u64(2)],
+        evalscale: Fq::ONE,
+        value: Fq::from_u64(17),
+    };
+    let mut sponge = vesta_sponge(1);
+    bound.write(&mut &mut ScalarOracle(&mut sponge));
+    let statement = Statement {
+        commitment: &g,
+        points: &[Fq::from_u64(2)],
+        evalscale: Fq::ONE,
+        value: Fq::from_u64(17),
+    };
+    let mut reference = vesta_sponge(1);
+    bind(
+        &BindStatement,
+        &mut ScalarOracle(&mut reference),
+        &statement,
+    );
+    assert_eq!(sponge.squeeze(), reference.squeeze());
+}
+
+#[test]
+fn generic_shifted_value() {
+    let mut sponge = vesta_sponge(1);
+    ShiftedValue::<Pallas>(Fq::ONE).write(&mut &mut ScalarOracle(&mut sponge));
+    let mut reference = vesta_sponge(1);
+    reference.absorb(Fq::ONE);
+    assert_eq!(sponge.squeeze(), reference.squeeze());
+}
+
+#[test]
+fn generic_round_points() {
+    // L then R.
+    let g = Projective::<Pallas>::generator();
+    let mut a = vesta_sponge(1);
+    let mut b = vesta_sponge(1);
+    RoundPoints(g, g + g).write(&mut &mut ScalarOracle(&mut a));
+    RoundPoints(g + g, g).write(&mut &mut ScalarOracle(&mut b));
+    assert_ne!(a.squeeze(), b.squeeze());
+}
+
+#[test]
+fn generic_delta() {
+    let g = Projective::<Pallas>::generator();
+    let mut sponge = vesta_sponge(1);
+    Delta(g).write(&mut &mut ScalarOracle(&mut sponge));
+    assert_ne!(sponge.squeeze(), vesta_sponge(1).squeeze());
+}
+
+#[test]
+fn generic_scalar_draw() {
+    let mut sponge = vesta_sponge(1);
+    let x = <ScalarDraw<Pallas, RoundChallenge> as Draw<&mut ScalarOracle<'_, _>>>::draw(
+        &mut &mut ScalarOracle(&mut sponge),
+    );
+    assert_eq!(x, vesta_sponge(1).squeeze());
+}
+
+#[test]
+fn generic_base_draw() {
+    let mut oracle = TwoSponges(vesta_sponge(1), pallas_sponge(2));
+    let t = <BaseDraw<Pallas> as Draw<&mut TwoSponges>>::draw(&mut &mut oracle);
+    assert_eq!(t, pallas_sponge(2).squeeze());
+}
+
+#[test]
+fn generic_step_names() {
+    let labels = [
+        <ValueChallenge as Label>::LABEL,
+        <RoundChallenge as Label>::LABEL,
+        <FinalChallenge as Label>::LABEL,
+    ];
+    assert!(labels[0] != labels[1] && labels[1] != labels[2]);
+}
+
+#[test]
+fn generic_round() {
+    // One message and one challenge.
+    assert_eq!(<Round<Pallas> as Pattern>::MESSAGES, 1);
+    assert_eq!(<Round<Pallas> as Pattern>::CHALLENGES, 1);
+}
+
+#[test]
+fn generic_opening_transcript() {
+    // This crate's IPA: the bound statement, xi, the rounds, nothing after;
+    // Kimchi's: the shifted value, the hashed base, the rounds, delta and c.
+    type Ours<'a> = OpeningTranscript<
+        Pallas,
+        BindStatement,
+        ScaledGenerator,
+        NotHiding,
+        ScalarOracle<'a, PoseidonSponge<Fq>>,
+    >;
+    type Blinding = OpeningTranscript<Pallas, BindValue, ScaledGenerator, Blinded, TwoSponges>;
+    assert_eq!(<Ours<'_> as Pattern>::MESSAGES, 0);
+    assert_eq!(<Ours<'_> as Pattern>::CHALLENGES, 1);
+    assert_eq!(<Blinding as Pattern>::MESSAGES, 1);
+    assert_eq!(<Blinding as Pattern>::CHALLENGES, 2);
+}
+
+#[test]
+fn generic_opening_tape() {
+    // The tape starts at the binding's step: binding first, then xi.
+    let g = Projective::<Pallas>::generator();
+    let statement = Statement {
+        commitment: &g,
+        points: &[Fq::from_u64(2)],
+        evalscale: Fq::ONE,
+        value: Fq::from_u64(17),
+    };
+    let mut sponge = vesta_sponge(1);
+    let mut oracle = ScalarOracle(&mut sponge);
+    let tape: OpeningTape<'_, Pallas, BindStatement, ScaledGenerator, NotHiding, _> =
+        Tape::undescribed(&mut oracle);
+    let tape = BindStatement.bind(tape, &statement);
+    let (u, tape) = ScaledGenerator.base(tape, &g);
+    let _ = tape.done().into_inner();
+    let mut reference = vesta_sponge(1);
+    bind(
+        &BindStatement,
+        &mut ScalarOracle(&mut reference),
+        &statement,
+    );
+    assert_eq!(u, g * reference.squeeze());
 }
