@@ -12,7 +12,10 @@ use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_kimchi::{
     constraints::{CircuitGate, ConstraintSystem, GateType, Wire},
     gates::KimchiGates,
-    prover::{ProverIndex, permutation_round, quotient_round, witness_round},
+    prover::{
+        PointEvaluations, ProverIndex, evaluation_round, permutation_round, quotient_round,
+        witness_round,
+    },
     rng::{Arkworks, Sampler, SplitMix64},
     srs::{PolyComm, Srs},
 };
@@ -187,5 +190,67 @@ fn the_quotient_round_is_kimchis() {
         let oracles = lines("oracle", name);
         assert_eq!(oracles["zeta_chal"], hex(round.zeta_chal.0), "{name}");
         assert_eq!(oracles["zeta"], hex(round.zeta), "{name} zeta");
+    }
+}
+
+fn values(v: &[Fp]) -> String {
+    let hexes: Vec<String> = v.iter().map(|x| hex(*x)).collect();
+    format!("{} {}", v.len(), hexes.join(" "))
+}
+
+fn evaluation(e: &PointEvaluations<Fp>) -> String {
+    format!("{} {}", values(&e.zeta), values(&e.zeta_omega))
+}
+
+#[test]
+fn the_evaluation_round_is_kimchis() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size);
+        let sponge = KimchiSponge::new(vesta_base());
+        let scalar_sponge = KimchiSponge::new(pallas_base());
+        let mut rng = Arkworks(SplitMix64(7));
+        let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+        let second = permutation_round(&index, first, &mut rng).unwrap();
+        let third = quotient_round(&index, second, &gates, &mut rng).unwrap();
+        let round = evaluation_round(&index, third, &scalar_sponge);
+        let expected = lines("eval", name);
+        let e = &round.evals;
+        let mut ours = vec![("public".to_string(), evaluation(&e.public))];
+        for (i, w) in e.w.iter().enumerate() {
+            ours.push((format!("w{i}"), evaluation(w)));
+        }
+        ours.push(("z".to_string(), evaluation(&e.z)));
+        for (i, s) in e.s.iter().enumerate() {
+            ours.push((format!("s{i}"), evaluation(s)));
+        }
+        for (i, c) in e.coefficients.iter().enumerate() {
+            ours.push((format!("coefficient{i}"), evaluation(c)));
+        }
+        for (label, p) in [
+            ("Generic", &e.generic_selector),
+            ("Poseidon", &e.poseidon_selector),
+            ("CompleteAdd", &e.complete_add_selector),
+            ("VarBaseMul", &e.mul_selector),
+            ("EndoMul", &e.emul_selector),
+            ("EndoMulScalar", &e.endomul_scalar_selector),
+        ] {
+            ours.push((label.to_string(), evaluation(p)));
+        }
+        assert_eq!(ours.len(), expected.len(), "{name}");
+        for (label, value) in &ours {
+            assert_eq!(&expected[label], value, "{name} {label}");
+        }
+        assert!(e.optional_selectors.is_empty());
+        let ft_eval1 = VECTORS
+            .lines()
+            .find(|l| l.starts_with(&format!("ft_eval1 {name} ")))
+            .unwrap();
+        assert_eq!(ft_eval1, format!("ft_eval1 {name} {}", hex(round.ft_eval1)));
+        let oracles = lines("oracle", name);
+        assert_eq!(oracles["v_chal"], hex(round.v_chal.0), "{name}");
+        assert_eq!(oracles["v"], hex(round.v), "{name} v");
+        assert_eq!(oracles["u_chal"], hex(round.u_chal.0), "{name}");
+        assert_eq!(oracles["u"], hex(round.u), "{name} u");
     }
 }

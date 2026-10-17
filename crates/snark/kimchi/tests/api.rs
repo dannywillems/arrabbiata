@@ -12,7 +12,8 @@ use arrabbiata_kimchi::{
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
     prover::{
-        self, PERMUTATION_ALPHA, PermutationRound, ProverIndex, QuotientRound, WitnessRound,
+        self, EvaluationRound, PERMUTATION_ALPHA, PermutationRound, PointEvaluations,
+        ProofEvaluations, ProverIndex, QuotientRound, WitnessRound, evaluation_round,
         permutation_round, quotient_round, witness_round,
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
@@ -495,4 +496,65 @@ fn quotient_round_state() {
         error.to_string(),
         "the constraints do not vanish on the domain"
     );
+}
+
+/// A proof's rounds up to the evaluations, on two satisfied Generic rows.
+fn evaluated() -> (
+    ProverIndex<Vesta>,
+    EvaluationRound<Vesta, KimchiSponge<Fq>, KimchiSponge<Fp>>,
+) {
+    let gates: Vec<CircuitGate<Fp>> = (0..2)
+        .map(|row| {
+            let coeffs = vec![Fp::ONE, Fp::ONE, -Fp::ONE];
+            CircuitGate::new(GateType::Generic, Wire::for_row(row), coeffs)
+        })
+        .collect();
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(8));
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let sponge = KimchiSponge::new(vesta_base());
+    let scalar_sponge = KimchiSponge::new(pallas_base());
+    let witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|c| {
+        let value = if c < 3 {
+            Fp::from_u64(c as u64 + 1)
+        } else {
+            Fp::ZERO
+        };
+        vec![value; 2]
+    });
+    let mut rng = Arkworks(SplitMix64(11));
+    let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+    let second = permutation_round(&index, first, &mut rng).unwrap();
+    let third = quotient_round(&index, second, &kimchi, &mut rng).unwrap();
+    let round = evaluation_round(&index, third, &scalar_sponge);
+    (index, round)
+}
+
+#[test]
+fn point_and_proof_evaluations() {
+    let (_, round) = evaluated();
+    let e: &ProofEvaluations<Fp> = &round.evals;
+    // One chunk each; the witness value 1 of column 0 on every row but
+    // the zk rows, so not 1 at zeta.
+    let w0: &PointEvaluations<Fp> = &e.w[0];
+    assert_eq!(w0.zeta.len(), 1);
+    assert_eq!(w0.zeta_omega.len(), 1);
+    // The absorption order: z, six selectors, 15 + 15 + 6 columns.
+    let absorbed = e.absorbed();
+    assert_eq!(absorbed.len(), 7 + 15 + 15 + 6);
+    assert_eq!(absorbed[0], &e.z);
+    assert_eq!(absorbed[7], &e.w[0]);
+}
+
+#[test]
+fn evaluation_round_state() {
+    let (index, round) = evaluated();
+    let zeta = round.previous.zeta;
+    assert_eq!(round.zeta_omega, zeta * index.cs.domain.d1.generator());
+    assert_eq!(round.ft_eval1, round.ft.evaluate(round.zeta_omega));
+    // ft has degree below the chunk size.
+    assert!(round.ft.coefficients().len() <= index.srs.max_poly_size());
+    assert_eq!(round.v, round.v_chal.to_field(Vesta::lambda()));
+    assert_eq!(round.u, round.u_chal.to_field(Vesta::lambda()));
+    assert_ne!(round.blinding_ft, Fp::ZERO);
 }
