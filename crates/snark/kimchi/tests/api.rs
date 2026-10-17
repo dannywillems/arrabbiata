@@ -10,8 +10,10 @@ use arrabbiata_kimchi::{
     },
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
+    srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
+    verifier_index::VerifierIndex,
 };
-use arrabbiata_pasta::{Fp, Vesta};
+use arrabbiata_pasta::{Fp, Fq, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 
 #[test]
@@ -229,4 +231,72 @@ fn constraint_system() {
     let wide = cs.extend(&column, &cs.domain.d8).unwrap();
     assert_eq!(wide[8], column[1]);
     assert!(cs.extend(&column[1..], &cs.domain.d8).is_none());
+}
+
+#[test]
+fn group_map() {
+    // Every image is on the curve (Affine::new checks it), and for each t
+    // at least one candidate is.
+    let map = GroupMap::<Vesta>::setup();
+    for k in 0..20 {
+        let t = Fq::from_u64(k);
+        let p = map.to_group(t);
+        assert!(p.to_projective().is_on_curve());
+        let xs = map.potential_xs(t);
+        assert!(xs.contains(&p.x().unwrap()));
+    }
+}
+
+#[test]
+fn packing() {
+    // Bit 0 of byte 0 is the top bit, 2^247; bit 7 of byte 30 is 2^0.
+    let mut bytes = [0u8; 31];
+    bytes[0] = 1;
+    let top: Fq = packed(&bytes);
+    assert_eq!(top.limb(3), 1 << (247 - 192));
+    let mut bytes = [0u8; 31];
+    bytes[30] = 0x80;
+    assert_eq!(packed::<Fq>(&bytes), Fq::ONE);
+}
+
+#[test]
+fn point_of_bytes() {
+    let map = GroupMap::<Vesta>::setup();
+    let bytes = [7u8; 64];
+    let p = point_of_random_bytes(&map, &bytes);
+    assert_eq!(p, map.to_group(packed(&bytes)).to_projective());
+}
+
+#[test]
+fn srs_and_commitments() {
+    let srs = Srs::<Vesta>::create(4);
+    assert_eq!(srs.max_poly_size(), 4);
+    assert_eq!(srs.g.len(), 4);
+    assert!(!srs.g.contains(&srs.h));
+    // Six coefficients over 8 rows: two chunks, the second the high two.
+    let coefficients: Vec<Fp> = (1..=6).map(Fp::from_u64).collect();
+    let rows = 8;
+    let c: PolyComm<Vesta> = srs.commit_non_hiding(&coefficients, rows);
+    assert_eq!(c.chunks.len(), 2);
+    assert_eq!(
+        c.chunks[1],
+        srs.g[0] * Fp::from_u64(5) + srs.g[1] * Fp::from_u64(6)
+    );
+    // A zero polynomial still has one chunk per block of rows.
+    let zero = srs.commit_non_hiding(&[], rows);
+    assert!(zero.chunks.iter().all(Projective::is_identity));
+    let masked = srs.mask_fixed(zero);
+    assert_eq!(masked.chunks, vec![srs.h, srs.h]);
+}
+
+#[test]
+fn verifier_index() {
+    let cs = ConstraintSystem::create(two_generic()).build().unwrap();
+    let srs = Srs::<Vesta>::create(cs.domain.d1.size());
+    let index = VerifierIndex::create(&cs, &srs);
+    assert_eq!(index.domain_size, 8);
+    assert_eq!(index.shift, cs.shift);
+    // No Poseidon row: the masked selector is h alone.
+    assert_eq!(index.psm_comm.chunks, vec![srs.h]);
+    assert!(index.rot_comm.is_none());
 }
