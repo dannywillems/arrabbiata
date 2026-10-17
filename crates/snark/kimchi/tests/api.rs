@@ -2,10 +2,11 @@
 
 use arrabbiata_curve::{Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_ipa::generic::{BaseOracle, ChallengeMap, HashToCurve, IpaOracle, Opening, Schnorr};
 use arrabbiata_kimchi::{
     accumulation::{
-        self, AccumulateProofs, Assignment, KimchiSuccinct, Satisfied, Statement, Verify,
-        accumulate_proofs, ipa_of,
+        self, AccumulateProofs, Assignment, KimchiSuccinct, Satisfied, Separate, Statement, Verify,
+        accumulate_proofs, ipa_of, separate,
     },
     constraints::{
         self, Builder, COLUMNS, CircuitGate, Connect, ConstraintSystem, EvaluationDomains,
@@ -13,6 +14,7 @@ use arrabbiata_kimchi::{
         XOR_TABLE_SIZE, zk_rows_strict_lower_bound,
     },
     gates::{Gates, KimchiGates},
+    ipa::{KimchiIpa, kimchi_ipa, kimchi_ipa_with},
     lookup::{
         self as lookups, JointLookup, LookupError, LookupIndex, LookupInfo, LookupPattern,
         LookupPoint, LookupTableId, PATTERNS, RANGE_CHECK_TABLE_ID, RuntimeTable, XOR_TABLE_ID,
@@ -1135,4 +1137,90 @@ fn accumulation_reductions() {
         .prove(transcript(), &vec![statement], &vec![assignment])
         .unwrap();
     assert!(ipa.decide(&out.instance));
+}
+
+#[test]
+fn accumulation_separate() {
+    // A proof without previous accumulators, folded with one: the composite
+    // proves, its verifier agrees, and the accumulator is decided.
+    let (index, _, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let ipa = ipa_of(&index.srs, scalar.clone());
+    let relation = Satisfied::new(&index, &kimchi, (&base, &scalar), &ipa);
+    let (statement, assignment) = statement_of_two_generic();
+    let transcript = || KimchiSponge::new(pallas_base());
+    let first = KimchiSuccinct::new(relation, Arkworks(SplitMix64(3)));
+    let previous = first
+        .prove(transcript(), &statement, &assignment)
+        .unwrap()
+        .instance;
+    let folded: Separate<'_, Vesta, _, _, _, _> =
+        separate(KimchiSuccinct::new(relation, Arkworks(SplitMix64(4))));
+    let instance = (statement, vec![previous]);
+    let witness = (assignment, vec![()]);
+    let out = folded.prove(transcript(), &instance, &witness).unwrap();
+    assert!(ipa.decide(&out.instance));
+    let (accumulator, _) = folded.verify(transcript(), &instance, out.proof).unwrap();
+    assert_eq!(accumulator, out.instance);
+}
+
+#[test]
+fn ipa_kimchi_ipa() {
+    // On the SRS's generators and blinding point, and its challenges are
+    // Kimchi's scalar challenges.
+    let srs = Srs::<Vesta>::create(4);
+    let ipa: KimchiIpa<Vesta> = kimchi_ipa(&srs);
+    assert_eq!(ipa.generators, srs.g);
+    assert_eq!(ipa.h, srs.h);
+    let mut rng = SplitMix64(7);
+    for _ in 0..16 {
+        let limbs = [rng.next_u64(), rng.next_u64()];
+        let raw = ScalarChallenge::<Fp>::from_limbs(limbs);
+        assert_eq!(ipa.challenges.map(raw.0), raw.to_field(Vesta::lambda()));
+    }
+}
+
+#[test]
+fn ipa_kimchi_ipa_with() {
+    let srs = Srs::<Vesta>::create(4);
+    let with = kimchi_ipa_with(&srs, GroupMap::setup());
+    assert_eq!(with.generators, kimchi_ipa(&srs).generators);
+    assert_eq!(with.challenges, kimchi_ipa(&srs).challenges);
+}
+
+#[test]
+fn ipa_fq_sponge_oracle() {
+    // The oracle squeezes the sponge's 128-bit challenges and its base
+    // field elements.
+    let new = || FqSponge::<Vesta, _>::new(KimchiSponge::new(vesta_base()));
+    let mut oracle = new();
+    let mut reference = new();
+    IpaOracle::<Vesta>::absorb_scalar(&mut oracle, Fp::ONE);
+    reference.absorb_fr(&[Fp::ONE]);
+    let squeezed = IpaOracle::<Vesta>::squeeze_scalar(&mut oracle);
+    let expected: Fp = reference.challenge();
+    assert_eq!(squeezed, expected);
+    let base = BaseOracle::<Vesta>::squeeze_base(&mut oracle);
+    assert_eq!(base, reference.challenge_fq());
+}
+
+#[test]
+fn ipa_group_map_hash_to_curve() {
+    let map = GroupMap::<Vesta>::setup();
+    let t = Fq::from_u64(3);
+    assert_eq!(
+        HashToCurve::to_group(&map, t),
+        map.to_group(t).to_projective()
+    );
+}
+
+#[test]
+fn ipa_opening_conversions() {
+    // Kimchi's opening proof and the generic opening carry the same data.
+    let (_, proof, _) = proved();
+    let opening: Opening<Vesta, Schnorr<Vesta>> = (&proof.proof).into();
+    assert_eq!(opening.last.z1, proof.proof.z1);
+    let back: OpeningProof<Vesta> = opening.into();
+    assert_eq!(back, proof.proof);
 }

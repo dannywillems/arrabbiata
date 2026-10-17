@@ -27,6 +27,19 @@
 //! - [`AccumulateProofs`] `= Each(KimchiSuccinct) ; Fold : Satisfied^* ->
 //!   Accumulated`, many proofs to one accumulator, then one `Decide`.
 //!
+//! Previous accumulators can be folded two ways, and both are morphisms here:
+//!
+//! - merged ([`KimchiSuccinct`] itself, Kimchi's way): the proof absorbs
+//!   them first and opens their `b` at its own points, in its own IPA;
+//! - separate ([`Separate`] `= Parallel(KimchiSuccinct ; Single, Identity)
+//!   ; Concat ; Fold : Product(Satisfied_0, Accumulated^*) ->
+//!   Accumulated`): a proof of the circuit with no previous accumulators,
+//!   and Halo's fold of its accumulator with the previous ones, one more
+//!   IPA.
+//!
+//! Both decide the same statements: the circuit satisfied and every
+//! previous accumulator valid.
+//!
 //! The reduction's transcript (over the scalar field) is the composition's:
 //! Kimchi's Fiat-Shamir runs on its own two sponges, and the reduction
 //! absorbs its output accumulator into the composition's transcript, so
@@ -38,7 +51,9 @@ use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::{PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_halo::{Accumulated, Decide, Fold};
 use arrabbiata_ipa::{Ipa, RecursionChallenge};
-use arrabbiata_reduction::{Each, Output, OutputOf, Reduction, Relation, Then};
+use arrabbiata_reduction::{
+    Batch, Concat, Each, Identity, Output, OutputOf, Parallel, Reduction, Relation, Single, Then,
+};
 use arrabbiata_transcript::{Absorb, Transcript};
 
 use crate::{
@@ -356,4 +371,38 @@ where
 {
     let ipa = reduction.relation.ipa;
     Then(Each(reduction), Fold::new(ipa))
+}
+
+/// Halo's accumulated relation over `C`'s IPA with transcript `T`.
+type Acc<'a, C, T> = Accumulated<'a, <C as arrabbiata_curve::Curve>::Scalar, Ipa<C, T>>;
+
+/// Previous accumulators folded separately: `Parallel(KimchiSuccinct ;
+/// Single, Identity) ; Concat ; Fold`, from a proof of a circuit with no
+/// previous accumulator and the accumulators themselves.
+pub type Separate<'a, C, G, S, T, R> = Then<
+    Parallel<
+        Then<KimchiSuccinct<'a, C, G, S, T, R>, Single<Acc<'a, C, T>>>,
+        Identity<Batch<Acc<'a, C, T>>>,
+    >,
+    Then<Concat<Acc<'a, C, T>>, Fold<'a, <C as arrabbiata_curve::Curve>::Scalar, Ipa<C, T>>>,
+>;
+
+/// The composite [`Separate`] over `reduction`, whose index must carry no
+/// previous accumulator.
+#[must_use]
+pub const fn separate<'a, C, G, S, T, R>(
+    reduction: KimchiSuccinct<'a, C, G, S, T, R>,
+) -> Separate<'a, C, G, S, T, R>
+where
+    C: Glv,
+{
+    let ipa = reduction.relation.ipa;
+    let accumulated = Accumulated::new(ipa);
+    Then(
+        Parallel(
+            Then(reduction, Single(accumulated)),
+            Identity(Batch(accumulated)),
+        ),
+        Then(Concat(accumulated), Fold::new(ipa)),
+    )
 }

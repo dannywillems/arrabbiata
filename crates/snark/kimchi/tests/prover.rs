@@ -13,7 +13,7 @@ use arrabbiata_halo::Accumulated;
 use arrabbiata_ipa::RecursionChallenge;
 use arrabbiata_kimchi::{
     accumulation::{
-        self, Assignment, KimchiSuccinct, Satisfied, Statement, accumulate_proofs, ipa_of,
+        self, Assignment, KimchiSuccinct, Satisfied, Statement, accumulate_proofs, ipa_of, separate,
     },
     constraints::{CircuitGate, ConstraintSystem, GateType, LookupTable, RuntimeTableCfg, Wire},
     gates::KimchiGates,
@@ -1192,4 +1192,65 @@ fn a_false_previous_accumulator_is_caught() {
         result.err(),
         Some(accumulation::Error::Verify(VerifyError::OpeningProof))
     );
+}
+
+#[test]
+fn merged_and_separate_folding_decide_the_same_statements() {
+    // Merged: the recursion circuit's proof opens its previous accumulator
+    // in its own IPA. Separate: the same circuit without it (the generic
+    // circuit), then Halo's fold of the two accumulators.
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let transcript = || KimchiSponge::new(pallas_base());
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+
+    let (merged_name, max_poly_size, public) = CIRCUITS[3];
+    let (merged_index, _) = index(merged_name, max_poly_size, public);
+    let merged_ipa = ipa_of(&merged_index.srs, scalar.clone());
+    let merged_relation = Satisfied::new(&merged_index, &gates, (&base, &scalar), &merged_ipa);
+    let (merged_statement, merged_assignment) = statement(merged_name, public);
+    let previous = merged_statement.prev_challenges.clone();
+    assert!(!previous.is_empty());
+
+    let (separate_name, max_poly_size, public) = CIRCUITS[0];
+    let (separate_index, _) = index(separate_name, max_poly_size, public);
+    let separate_ipa = ipa_of(&separate_index.srs, scalar.clone());
+    let separate_relation =
+        Satisfied::new(&separate_index, &gates, (&base, &scalar), &separate_ipa);
+    let (separate_statement, separate_assignment) = statement(separate_name, public);
+    assert!(separate_statement.prev_challenges.is_empty());
+
+    // A valid previous accumulator: both accept.
+    let merged = KimchiSuccinct::new(merged_relation, Arkworks(SplitMix64(11)));
+    let out = merged
+        .prove(transcript(), &merged_statement, &merged_assignment)
+        .unwrap();
+    assert!(merged_ipa.decide(&out.instance));
+    let folded = separate(KimchiSuccinct::new(
+        separate_relation,
+        Arkworks(SplitMix64(11)),
+    ));
+    let witnesses = vec![(); previous.len()];
+    let instance = (separate_statement.clone(), previous.clone());
+    let assignment = (separate_assignment.clone(), witnesses.clone());
+    let out = laws::complete(&folded, transcript, &instance, &assignment).unwrap();
+    assert!(separate_ipa.decide(&out.instance));
+
+    // A false one: merged refuses to prove; separate's prover still folds
+    // (it computes the new accumulator from its own coefficients), and its
+    // verifier, which opens the claimed commitments, refuses.
+    let mut false_previous = previous;
+    false_previous[0].comm = false_previous[0].comm + Projective::<Vesta>::generator();
+    let mut false_statement = merged_statement;
+    false_statement.prev_challenges = false_previous.clone();
+    assert!(
+        merged
+            .prove(transcript(), &false_statement, &merged_assignment)
+            .is_err()
+    );
+    let instance = (separate_statement, false_previous);
+    let assignment = (separate_assignment, witnesses);
+    let out = folded.prove(transcript(), &instance, &assignment).unwrap();
+    let verified = folded.verify(transcript(), &instance, out.proof);
+    assert!(verified.is_err());
 }

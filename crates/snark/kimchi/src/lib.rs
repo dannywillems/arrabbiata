@@ -3,8 +3,7 @@
 //! `arrabbiata-kimchi-gadgets`, the IPA of `arrabbiata-ipa`, the
 //! accumulation of `arrabbiata-halo`, and any sponge.
 //!
-//! Built milestone by milestone (plan 0006 of the project notes), each
-//! checked against proof-systems' own output:
+//! Each module is checked against proof-systems' own output:
 //!
 //! - [`oracle`]: Kimchi's two-sponge Fiat-Shamir, the base-field sponge
 //!   that absorbs commitments and squeezes 128-bit challenges, the
@@ -17,6 +16,8 @@
 //!   permutation, selector and coefficient columns;
 //! - [`gates`]: the constraints of each gate type, a parameter of the
 //!   prover, Kimchi's from the gadget crate;
+//! - [`ipa`]: Kimchi's opening as an instance of the generic IPA of
+//!   `arrabbiata-ipa`;
 //! - [`lookup`]: the lookup patterns, the built-in tables and the lookup
 //!   index;
 //! - [`permutation`]: the shifts of the copy argument, sampled as Kimchi
@@ -38,6 +39,7 @@ extern crate alloc;
 pub mod accumulation;
 pub mod constraints;
 pub mod gates;
+pub mod ipa;
 pub mod lookup;
 pub mod oracle;
 pub mod permutation;

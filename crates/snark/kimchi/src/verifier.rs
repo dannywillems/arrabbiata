@@ -36,22 +36,23 @@ use core::fmt;
 
 use arrabbiata_curve::{Curve, Projective, glv::Glv, msm};
 use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
-use arrabbiata_ipa::{RecursionChallenge, b_poly, b_poly_coefficients};
+use arrabbiata_ipa::{RecursionChallenge, Statement, b_poly, b_poly_coefficients};
 use arrabbiata_poly::Domain;
 use arrabbiata_transcript::Transcript;
 
 use crate::{
     constraints::GateType,
     gates::Gates,
+    ipa::kimchi_ipa,
     lookup::{LookupPoint, constraint_count, constraints as lookup_constraints},
     oracle::{FqSponge, FrSponge, ScalarChallenge},
     permutation::PERMUTS,
     prover::{
         CONSTRAINED, LOOKUP_ALPHA, PERMUTATION_ALPHA, PointEvaluations, ProverProof, combine,
-        shift_scalar, unnormalized_lagrange,
+        unnormalized_lagrange,
     },
     rng::Sampler,
-    srs::{GroupMap, PolyComm, Srs},
+    srs::{PolyComm, Srs},
     verifier_index::VerifierIndex,
 };
 
@@ -573,26 +574,10 @@ where
     C::Base: PrimeField + Sqrt,
     S: Transcript<C::Base> + Clone,
 {
-    let opening = &proof.proof;
     let size = srs.g.len();
-    if !size.is_power_of_two() || opening.lr.len() != size.trailing_zeros() as usize {
+    if !size.is_power_of_two() || proof.proof.lr.len() != size.trailing_zeros() as usize {
         return Err(VerifyError::IncorrectRounds);
     }
-    let mut sponge = oracles.fq_sponge.clone();
-    let cip = oracles.combined_inner_product;
-    sponge.absorb_fr(&[shift_scalar::<C>(cip)]);
-    let group_map = GroupMap::<C>::setup();
-    let u_base = group_map.to_group(sponge.challenge_fq()).to_projective();
-    let mut chals = Vec::with_capacity(opening.lr.len());
-    for (l, r) in &opening.lr {
-        sponge.absorb_g(&[*l]);
-        sponge.absorb_g(&[*r]);
-        chals.push(ScalarChallenge(sponge.challenge()).to_field(C::lambda()));
-    }
-    sponge.absorb_g(&[opening.delta]);
-    let c = ScalarChallenge(sponge.challenge()).to_field(C::lambda());
-    let b0 = b_poly(&chals, oracles.zeta) + oracles.u * b_poly(&chals, oracles.zeta_omega);
-
     // C: every chunk at the next power of v.
     let mut combined = Projective::<C>::identity();
     let mut scale = C::Scalar::ONE;
@@ -602,14 +587,19 @@ where
             scale = scale * oracles.v;
         }
     }
-    let mut rounds = Projective::<C>::identity();
-    for ((l, r), u) in opening.lr.iter().zip(&chals) {
-        let u_inv = u.inverse().ok_or(VerifyError::OpeningProof)?;
-        rounds = rounds + *l * u_inv + *r * *u;
-    }
-    let ipa = (combined + u_base * cip + rounds) * c + opening.delta
-        - (opening.sg + u_base * b0) * opening.z1
-        - srs.h * opening.z2;
+    let points = [oracles.zeta, oracles.zeta_omega];
+    let statement = Statement {
+        commitment: &combined,
+        points: &points,
+        evalscale: oracles.u,
+        value: oracles.combined_inner_product,
+    };
+    // Kimchi's IPA (crate::ipa), continuing the base sponge after zeta.
+    let mut sponge = oracles.fq_sponge.clone();
+    let (accumulator, ipa) = kimchi_ipa(srs)
+        .check(&mut sponge, &statement, &(&proof.proof).into())
+        .ok_or(VerifyError::OpeningProof)?;
+    let chals = accumulator.chals;
     Ok((chals, ipa))
 }
 

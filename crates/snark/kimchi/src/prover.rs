@@ -100,9 +100,9 @@
 //!    `z1 = a c + d`, `z2 = r' c + r_delta` with `r'` the blinder plus the
 //!    rounds' `r_l u_j^(-1) + r_r u_j`; `sg = G`.
 //!
-//! This is the IPA of `arrabbiata-ipa` with Kimchi's choices for the four
-//! deviations of plan 0005 (hiding, the base of the value, endomorphism
-//! challenges, and the scales drawn by the protocol), written out here.
+//! This is the generic IPA of `arrabbiata-ipa` with Kimchi's choice of each
+//! parameter (hiding, the base of the value, endomorphism challenges, and
+//! the scales drawn by the protocol): [`crate::ipa::KimchiIpa`].
 //!
 //! [`prove`] runs the five rounds and gives the proof.
 //!
@@ -122,15 +122,18 @@ use core::fmt;
 
 use arrabbiata_curve::{Curve, Projective, glv::Glv, msm};
 use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
-use arrabbiata_ipa::{RecursionChallenge, b_poly_coefficients};
+use arrabbiata_ipa::{
+    RecursionChallenge, Statement, b_poly_coefficients, evaluation_vector, generic::Witness,
+};
 use arrabbiata_poly::UniPoly;
 use arrabbiata_transcript::Transcript;
 
 use crate::{
     constraints::{COLUMNS, ConstraintSystem, GateType, zk_rows_strict_lower_bound},
     gates::Gates,
+    ipa::kimchi_ipa_with,
     lookup::{LookupError, LookupIndex, LookupPattern, LookupPoint, RuntimeTable},
-    oracle::{FqSponge, FrSponge, ScalarChallenge, compare_moduli},
+    oracle::{FqSponge, FrSponge, ScalarChallenge},
     permutation::PERMUTS,
     rng::Sampler,
     srs::{GroupMap, PolyComm, Srs},
@@ -1268,27 +1271,11 @@ where
     pub prev_challenges: Vec<RecursionChallenge<C>>,
 }
 
-/// Kimchi's `shift_scalar`: the scalar `x` as the base-field sponge must
-/// see it, `(x - 2^b - 1) / 2` when the scalar modulus is the smaller and
-/// `x - 2^b` otherwise, `b` the scalar modulus's bit length.
-#[must_use]
-pub fn shift_scalar<C>(x: C::Scalar) -> C::Scalar
-where
-    C: Curve,
-    C::Base: PrimeField,
-{
-    let two = C::Scalar::ONE + C::Scalar::ONE;
-    let two_pow = two.pow(u64::from(C::Scalar::MODULUS_BITS));
-    if compare_moduli::<C::Scalar, C::Base>() == core::cmp::Ordering::Less {
-        let half = match two.inverse() {
-            Some(h) => h,
-            None => unreachable!("the scalar field is odd"),
-        };
-        (x - (two_pow + C::Scalar::ONE)) * half
-    } else {
-        x - two_pow
-    }
-}
+/// Kimchi's `shift_scalar`, now the generic IPA's (its [`BindValue`]
+/// binding absorbs it).
+///
+/// [`BindValue`]: arrabbiata_ipa::generic::BindValue
+pub use arrabbiata_ipa::generic::shift_scalar;
 
 /// A polynomial to open, its coefficients and one blinder per chunk.
 type Blinded<F> = (Vec<F>, Vec<F>);
@@ -1426,76 +1413,25 @@ where
             scale = scale * polyscale;
         }
     }
-    let mut b = alloc::vec![C::Scalar::ZERO; m];
-    let mut point_scale = C::Scalar::ONE;
-    for point in [quotient.zeta, previous.zeta_omega] {
-        let mut power = C::Scalar::ONE;
-        for slot in &mut b {
-            *slot = *slot + point_scale * power;
-            power = power * point;
-        }
-        point_scale = point_scale * evalscale;
-    }
+    // Kimchi's IPA (crate::ipa) on the combined polynomial and blinder,
+    // continuing the base sponge as it was after zeta.
+    let ipa = kimchi_ipa_with(&index.srs, *group_map);
+    let points = [quotient.zeta, previous.zeta_omega];
+    let b = evaluation_vector(&points, evalscale, m);
     let combined_inner_product = inner(&a, &b);
-
+    let commitment = msm(&index.srs.g, &a) + index.srs.h * blinding;
+    let statement = Statement {
+        commitment: &commitment,
+        points: &points,
+        evalscale,
+        value: combined_inner_product,
+    };
+    let witness = Witness {
+        coefficients: &a,
+        blinder: blinding,
+    };
     let mut sponge = quotient.fq_sponge.clone();
-    sponge.absorb_fr(&[shift_scalar::<C>(combined_inner_product)]);
-    let u_base = group_map.to_group(sponge.challenge_fq()).to_projective();
-    let h = index.srs.h;
-    let mut g = index.srs.g.clone();
-    let mut lr = Vec::new();
-    let mut blinders = Vec::new();
-    let mut chals = Vec::new();
-    while g.len() > 1 {
-        let half = g.len() / 2;
-        let (g_lo, g_hi) = g.split_at(half);
-        let (a_lo, a_hi) = a.split_at(half);
-        let (b_lo, b_hi) = b.split_at(half);
-        let rand_l: C::Scalar = rng.sample();
-        let rand_r: C::Scalar = rng.sample();
-        let l = msm(g_lo, a_hi) + h * rand_l + u_base * inner(a_hi, b_lo);
-        let r = msm(g_hi, a_lo) + h * rand_r + u_base * inner(a_lo, b_hi);
-        sponge.absorb_g(&[l]);
-        sponge.absorb_g(&[r]);
-        let u = ScalarChallenge(sponge.challenge()).to_field(C::lambda());
-        let u_inv = match u.inverse() {
-            Some(x) => x,
-            None => unreachable!("a 128-bit endomorphism challenge is not zero"),
-        };
-        let next_a: Vec<C::Scalar> = a_lo
-            .iter()
-            .zip(a_hi)
-            .map(|(lo, hi)| *lo + u_inv * *hi)
-            .collect();
-        let next_b: Vec<C::Scalar> = b_lo
-            .iter()
-            .zip(b_hi)
-            .map(|(lo, hi)| *lo + u * *hi)
-            .collect();
-        let next_g: Vec<Projective<C>> = g_lo
-            .iter()
-            .zip(g_hi)
-            .map(|(lo, hi)| *lo + *hi * u)
-            .collect();
-        lr.push((l, r));
-        blinders.push((rand_l, rand_r));
-        chals.push((u, u_inv));
-        a = next_a;
-        b = next_b;
-        g = next_g;
-    }
-    let (a0, b0, g0) = (a[0], b[0], g[0]);
-    let r_prime = blinders
-        .iter()
-        .zip(&chals)
-        .fold(blinding, |acc, ((l, r), (u, u_inv))| {
-            acc + *l * *u_inv + *r * *u
-        });
-    let d: C::Scalar = rng.sample();
-    let r_delta: C::Scalar = rng.sample();
-    let delta = (g0 + u_base * b0) * d + h * r_delta;
-    sponge.absorb_g(&[delta]);
-    let c = ScalarChallenge(sponge.challenge()).to_field(C::lambda());
+    let (opening, _) = ipa.prove(&mut sponge, &statement, &witness, rng);
     ProverProof {
         w_comm: first.w_comm.clone(),
         z_comm: permutation.z_comm.clone(),
@@ -1510,13 +1446,7 @@ where
         },
         evals: previous.evals.clone(),
         ft_eval1: previous.ft_eval1,
-        proof: OpeningProof {
-            lr,
-            delta,
-            z1: a0 * c + d,
-            z2: r_prime * c + r_delta,
-            sg: g0,
-        },
+        proof: opening.into(),
         prev_challenges: first.prev_challenges.clone(),
     }
 }
