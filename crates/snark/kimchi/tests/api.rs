@@ -39,6 +39,7 @@ use arrabbiata_kimchi::{
             extend_multi, extend_multi_compact, extend_multi_compact_limbs, extend_multi_limbs,
         },
         rot::{RotMode, extend_rot},
+        varbasemul::{VarbaseMulResult, witness as varbasemul_witness},
         xor::{create_xor_witness, extend_xor_witness, num_xors},
     },
     prover::{
@@ -1855,4 +1856,24 @@ fn polynomials_endosclmul_gen_witness_and_result() {
     let mut short: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 4]);
     assert!(endomul_witness(&mut short, 0, Pallas::beta(), base, &bits, acc0).is_err());
     assert!(endomul_witness(&mut witness, 0, Pallas::beta(), base, &bits[..12], acc0).is_err());
+}
+
+#[test]
+fn polynomials_varbasemul_witness_and_result() {
+    // Five one bits from A = 2 T: two rows, n = 31 and A' = (1 + 2^5 + 62) T;
+    // a length that is not supported, or too few rows, refused.
+    let t = Projective::<Pallas>::generator();
+    let point = |p: Projective<Pallas>| {
+        let a = p.to_affine();
+        (a.x().unwrap(), a.y().unwrap())
+    };
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
+    let bits = [true; 5];
+    let result: VarbaseMulResult<Fp> =
+        varbasemul_witness(&mut witness, 0, point(t), &bits, point(t + t)).unwrap();
+    assert_eq!(result.n, Fp::from_u64(31));
+    assert_eq!(result.acc, point(t * Fq::from_u64(95)));
+    assert!(varbasemul_witness(&mut witness, 0, point(t), &bits[..4], point(t + t)).is_err());
+    let mut short: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 1]);
+    assert!(varbasemul_witness(&mut short, 0, point(t), &bits, point(t + t)).is_err());
 }

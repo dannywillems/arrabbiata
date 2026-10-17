@@ -20,6 +20,7 @@ mod generic;
 mod not;
 mod range_check;
 mod rot;
+mod varbasemul;
 mod xor;
 
 fn main() {
@@ -32,4 +33,5 @@ fn main() {
     and::serialization();
     endomul_scalar::run();
     endomul::run();
+    varbasemul::run();
 }

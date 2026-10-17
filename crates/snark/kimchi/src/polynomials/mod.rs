@@ -10,6 +10,7 @@ pub mod generic;
 pub mod not;
 pub mod range_check;
 pub mod rot;
+pub mod varbasemul;
 pub mod xor;
 
 use alloc::vec::Vec;
