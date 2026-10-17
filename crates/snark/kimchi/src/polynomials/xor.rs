@@ -97,7 +97,7 @@ fn words<F: PrimeField, const B: usize>(input: [F; 2]) -> Result<[Vec<F>; COLUMN
 /// # Errors
 ///
 /// [`Error::Rows`] when an input is wider than `bits` (Kimchi panics), or
-/// when `bits` is above 128.
+/// when `bits` is above 256.
 pub fn create_xor_witness<F: PrimeField>(
     input1: F,
     input2: F,
@@ -110,7 +110,8 @@ pub fn create_xor_witness<F: PrimeField>(
     }
     let input = [input1, input2];
     match num_xors(bits) {
-        0 | 1 => words::<F, 16>(input),
+        0 => words::<F, 0>(input),
+        1 => words::<F, 16>(input),
         2 => words::<F, 32>(input),
         3 => words::<F, 48>(input),
         4 => words::<F, 64>(input),
@@ -118,6 +119,14 @@ pub fn create_xor_witness<F: PrimeField>(
         6 => words::<F, 96>(input),
         7 => words::<F, 112>(input),
         8 => words::<F, 128>(input),
+        9 => words::<F, 144>(input),
+        10 => words::<F, 160>(input),
+        11 => words::<F, 176>(input),
+        12 => words::<F, 192>(input),
+        13 => words::<F, 208>(input),
+        14 => words::<F, 224>(input),
+        15 => words::<F, 240>(input),
+        16 => words::<F, 256>(input),
         _ => Err(Error::Rows {
             gadget: "kimchi-xor",
         }),

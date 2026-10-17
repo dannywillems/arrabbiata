@@ -28,6 +28,7 @@ use arrabbiata_kimchi::{
             GenericGateSpec,
             testing::{create_circuit, fill_in_witness},
         },
+        not::{extend_not_witness_checked_length, extend_not_witness_unchecked_length},
         range_check::{
             create as create_range_check_witness, create_multi, create_multi_compact,
             create_multi_compact_limbs, create_multi_limbs, extend as extend_range_check_witness,
@@ -1553,7 +1554,7 @@ fn transcript_after_gamma() {
 
 #[test]
 fn polynomials_bit_length() {
-    assert_eq!(bit_length(Fp::ZERO), 0);
+    assert_eq!(bit_length(Fp::ZERO), 1);
     assert_eq!(bit_length(Fp::from_u64(1 << 40)), 41);
 }
 
@@ -1647,4 +1648,57 @@ fn polynomials_generic_testing_fill_in_witness() {
             Ok(())
         );
     }
+}
+
+#[test]
+fn polynomials_not_extend_not_gadget_unchecked_length() {
+    // Three NOTs: a double row and a single one, wired to the all-ones cell.
+    let mut gates = vec![CircuitGate::<Fp>::new(
+        GateType::Generic,
+        Wire::for_row(0),
+        vec![],
+    )];
+    let next = CircuitGate::extend_not_gadget_unchecked_length(&mut gates, 3, 0);
+    assert_eq!(next, 3);
+    assert_eq!(gates[1].coeffs[1], -Fp::ONE);
+    assert_eq!(gates[1].coeffs[6], -Fp::ONE);
+    assert_eq!(gates[2].coeffs[6], Fp::ZERO);
+}
+
+#[test]
+fn polynomials_not_extend_not_gadget_checked_length() {
+    // A XOR of 16 bits whose second input is the all-ones cell.
+    let mut gates = vec![CircuitGate::<Fp>::new(
+        GateType::Generic,
+        Wire::for_row(0),
+        vec![],
+    )];
+    let next = CircuitGate::extend_not_gadget_checked_length(&mut gates, 0, 16);
+    assert_eq!(next, 3);
+    assert_eq!(gates[1].typ, GateType::Xor16);
+    assert_eq!(gates[0].wires[0], Wire { row: 1, col: 1 });
+}
+
+#[test]
+fn polynomials_not_extend_not_witness_checked_length() {
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| Vec::new());
+    extend_not_witness_checked_length(&mut witness, Fp::from_u64(0b1010), Some(4)).unwrap();
+    assert_eq!(witness[2][0], Fp::from_u64(0b0101));
+}
+
+#[test]
+fn polynomials_not_extend_not_witness_unchecked_length() {
+    // ones - x, two per row; an input wider than `bits` is refused.
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| Vec::new());
+    let inputs = [Fp::from_u64(1), Fp::from_u64(2), Fp::from_u64(3)];
+    extend_not_witness_unchecked_length(&mut witness, &inputs, 4).unwrap();
+    assert_eq!(witness[0].len(), 2);
+    assert_eq!(witness[5][0], Fp::from_u64(13));
+    let error = extend_not_witness_unchecked_length(&mut witness, &[Fp::from_u64(32)], 4);
+    assert_eq!(
+        error,
+        Err(String::from(
+            "Bits must be greater or equal than the inputs length: 4 < 6"
+        ))
+    );
 }

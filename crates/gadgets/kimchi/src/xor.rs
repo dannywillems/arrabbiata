@@ -60,12 +60,17 @@ fn bits<F: PrimeField>(x: F, start: usize, count: usize) -> F {
     F::from_u64(value)
 }
 
-/// `x >> 16`, for `x` below `2^192` (Kimchi's words are at most 128 bits).
+/// `x >> 16`, as an integer, over all the field's limbs.
 fn shifted<F: PrimeField>(x: F) -> F {
     let two_64 = F::from_u64(1 << 32) * F::from_u64(1 << 32);
     let mut value = F::ZERO;
-    for limb in (0..3).rev() {
-        let chunk = (x.limb(limb) >> BITS_PER_ROW) | (x.limb(limb + 1) << (64 - BITS_PER_ROW));
+    for limb in (0..F::LIMBS).rev() {
+        let high = if limb + 1 < F::LIMBS {
+            x.limb(limb + 1) << (64 - BITS_PER_ROW)
+        } else {
+            0
+        };
+        let chunk = (x.limb(limb) >> BITS_PER_ROW) | high;
         value = value * two_64 + F::from_u64(chunk);
     }
     value

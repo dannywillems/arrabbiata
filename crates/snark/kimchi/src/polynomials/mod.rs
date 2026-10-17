@@ -4,6 +4,7 @@
 //! `arrabbiata-kimchi-gadgets` on Kimchi's rows.
 
 pub mod generic;
+pub mod not;
 pub mod range_check;
 pub mod rot;
 pub mod xor;
@@ -40,11 +41,13 @@ where
     }))
 }
 
-/// The number of bits of `x`, as an integer.
+/// The number of bits of `x`, as an integer, with o1-utils' convention that
+/// zero has one bit (`BigUintHelpers::bitlen`): Kimchi sizes its XOR and NOT
+/// by it.
 #[must_use]
 pub fn bit_length<F: arrabbiata_field::PrimeField>(x: F) -> usize {
     (0..F::LIMBS)
         .rev()
         .find(|&i| x.limb(i) != 0)
-        .map_or(0, |i| 64 * i + 64 - x.limb(i).leading_zeros() as usize)
+        .map_or(1, |i| 64 * i + 64 - x.limb(i).leading_zeros() as usize)
 }
