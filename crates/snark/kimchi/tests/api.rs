@@ -24,7 +24,10 @@ use arrabbiata_kimchi::{
     permutation::{PERMUTS, shifts},
     polynomials::{
         self as gadgets, bit_length,
-        generic::GenericGateSpec,
+        generic::{
+            GenericGateSpec,
+            testing::{create_circuit, fill_in_witness},
+        },
         range_check::{
             create as create_range_check_witness, create_multi, create_multi_compact,
             create_multi_compact_limbs, create_multi_limbs, extend as extend_range_check_witness,
@@ -1618,4 +1621,30 @@ fn polynomials_range_check_witnesses() {
     extend_multi_compact_limbs(&mut w, &[v0, v2]).unwrap();
     extend_range_check_witness(&mut w, v0).unwrap();
     assert_eq!(w[0].len(), 17);
+}
+
+#[test]
+fn polynomials_generic_testing_create_circuit() {
+    // 2 public rows, 10 add/mul rows, 10 constant rows.
+    let gates = create_circuit::<Fp>(0, 2);
+    assert_eq!(gates.len(), 22);
+    assert_eq!(gates[2].coeffs[1], Fp::from_u64(3));
+    assert_eq!(gates[2].coeffs[8], Fp::from_u64(2));
+    assert_eq!(gates[21].coeffs[9], -Fp::from_u64(5));
+}
+
+#[test]
+fn polynomials_generic_testing_fill_in_witness() {
+    // 11 + 3 23 = 80 and 2 11 23 = 506; every row satisfies its gate.
+    let gates = create_circuit::<Fp>(0, 1);
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; gates.len()]);
+    fill_in_witness(0, &mut witness, &[Fp::from_u64(9)]);
+    assert_eq!(witness[2][1], Fp::from_u64(80));
+    assert_eq!(witness[5][1], Fp::from_u64(506));
+    for (row, gate) in gates.iter().enumerate() {
+        assert_eq!(
+            gate.verify_generic(row, &witness, &[Fp::from_u64(9)]),
+            Ok(())
+        );
+    }
 }
