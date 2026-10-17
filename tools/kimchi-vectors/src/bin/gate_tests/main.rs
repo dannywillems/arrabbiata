@@ -19,6 +19,7 @@ mod endomul;
 mod endomul_scalar;
 mod generic;
 mod not;
+mod poseidon;
 mod range_check;
 mod rot;
 mod varbasemul;
@@ -36,4 +37,5 @@ fn main() {
     endomul::run();
     varbasemul::run();
     ec::run();
+    poseidon::run();
 }

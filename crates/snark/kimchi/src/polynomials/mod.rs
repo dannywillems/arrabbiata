@@ -8,6 +8,7 @@ pub mod endomul_scalar;
 pub mod endosclmul;
 pub mod generic;
 pub mod not;
+pub mod poseidon;
 pub mod range_check;
 pub mod rot;
 pub mod varbasemul;
