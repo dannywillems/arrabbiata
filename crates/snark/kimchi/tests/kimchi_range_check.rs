@@ -1,33 +1,103 @@
 //! Kimchi's `kimchi/src/tests/range_check.rs`, test by test, with the same
-//! inputs and outputs: Kimchi's rows from our constructors, the witnesses
-//! from our range-check gadgets, every verdict (the gate checks and the
-//! proofs) against Kimchi's run of the same test (`gate_tests/`).
+//! inputs and outputs. The circuits are our range-check gadgets, their
+//! values placed where Kimchi lays them out: their rows are the symbolic
+//! run, their witness the numeric run, both checked against Kimchi's run of
+//! the same test (`gate_tests/`), with every verdict (the gate checks and
+//! the proofs).
 
 mod gate_tests;
 mod kimchi_runs;
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_gadget::{Cell, Env, Of, Placed, Scalar, TypedGadget};
 use arrabbiata_kimchi::{
-    constraints::{COLUMNS, CircuitGate, ConstraintSystem, Wire},
+    constraints::{COLUMNS, CircuitGate, ConstraintSystem},
     gates::KimchiGates,
-    polynomials::{
-        generic::GenericGateSpec,
-        range_check::{create, create_multi, create_multi_compact_limbs},
-    },
+};
+use arrabbiata_kimchi_gadgets::{
+    generic::PublicInput,
+    range_check::{CompactMultiRangeCheck, MultiRangeCheck, RangeCheck0Gate, range_check_table},
 };
 use arrabbiata_pasta::Fp;
-use gate_tests::{Case, case, debug, from_hex_le, prove_and_verify, rows, vesta_gates};
+use gate_tests::{
+    Case, case, debug, from_hex_le, kimchi_rows, kimchi_witness, prove_and_verify, rows,
+    vesta_gates,
+};
 
 type W = [Vec<Fp>; COLUMNS];
 
+/// The multi-range check of three values in column 0 of rows 0-2.
+fn multi<F: PrimeField>() -> Placed<MultiRangeCheck<F>> {
+    Placed {
+        gadget: MultiRangeCheck {
+            table: range_check_table(),
+        },
+        cells: vec![Cell::new(0, 0), Cell::new(0, 1), Cell::new(0, 2)],
+    }
+}
+
+/// The compact multi-range check of `[v01, v2]`, `v01` in column 1 of row
+/// 2 and `v2` in column 0 of row 0, as Kimchi lays them out.
+fn compact_multi<F: PrimeField>() -> Placed<CompactMultiRangeCheck<F>> {
+    Placed {
+        gadget: CompactMultiRangeCheck {
+            table: range_check_table(),
+        },
+        cells: vec![Cell::new(1, 2), Cell::new(0, 0)],
+    }
+}
+
+/// The rows of a multi-range check, compact or not.
+fn multi_rows(compact: bool) -> Vec<CircuitGate<Fp>> {
+    if compact {
+        kimchi_rows(&compact_multi::<Fp>(), 4)
+    } else {
+        kimchi_rows(&multi::<Fp>(), 4)
+    }
+}
+
 /// Kimchi's `create_test_cs`.
 fn create_test_cs(compact: bool) -> ConstraintSystem<Fp> {
-    let (_, gates) = if compact {
-        CircuitGate::<Fp>::create_compact_multi_range_check(0)
-    } else {
-        CircuitGate::<Fp>::create_multi_range_check(0)
-    };
-    ConstraintSystem::create(gates).build().unwrap()
+    ConstraintSystem::create(multi_rows(compact))
+        .build()
+        .unwrap()
+}
+
+/// Kimchi's `create_multi`: the witness of three values.
+fn create_multi(v0: Fp, v1: Fp, v2: Fp) -> W {
+    kimchi_witness(&multi::<Fp>(), &[v0, v1, v2], 4)
+}
+
+/// Kimchi's `create_multi_compact_limbs`: the witness of `[v01, v2]`.
+fn create_multi_compact_limbs(limbs: &[Fp; 2]) -> W {
+    kimchi_witness(&compact_multi::<Fp>(), limbs, 4)
+}
+
+/// The public zero on row 0, then the RangeCheck0 of a value in column 0
+/// of row 1, its two high limbs copied to the zero: Kimchi's
+/// `verify_64_bit_range_check`, whose wires Kimchi sets by hand. Input
+/// `(zero, v)`.
+#[derive(Clone, Debug)]
+struct Range64<F>(RangeCheck0Gate<F>);
+
+impl<F: PrimeField> TypedGadget<F> for Range64<F> {
+    type Input = (Scalar, Scalar);
+    type Output = Scalar;
+    const NAME: &'static str = "range-64";
+    const ROWS: usize = 2;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        (zero, v): Of<Self::Input, E::Var>,
+    ) -> Of<Scalar, E::Var> {
+        let zero = env.call(&PublicInput, zero);
+        let v = env.advice(Cell::new(0, 1), [&v], |[x]| x);
+        let [high0, high1] = env.call(&self.0, v.clone());
+        env.connect(&zero, &high0);
+        env.connect(&zero, &high1);
+        v
+    }
 }
 
 /// A test replayed against Kimchi's run: its witnesses and verdicts in
@@ -73,7 +143,7 @@ impl Run {
 
     /// Kimchi's `create_multi`, by our gadget.
     fn multi(&mut self, v0: Fp, v1: Fp, v2: Fp) -> W {
-        self.witnessed(create_multi(v0, v1, v2).unwrap())
+        self.witnessed(create_multi(v0, v1, v2))
     }
 
     /// TestFramework's proof of `w` on the constraint system's rows.
@@ -386,23 +456,16 @@ fn verify_range_check1_test_next_row_lookups() {
 
 #[test]
 fn verify_64_bit_range_check() {
-    let mut gates = vec![CircuitGate::<Fp>::create_generic_gadget(
-        Wire::for_row(0),
-        GenericGateSpec::Pub,
-        None,
-    )];
-    gates.append(&mut CircuitGate::<Fp>::create_range_check(1).1);
-    gates[1].wires[1] = Wire { row: 1, col: 2 };
-    gates[1].wires[2] = Wire { row: 0, col: 0 };
-    gates[0].wires[0] = Wire { row: 1, col: 1 };
-    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let gadget = Range64(RangeCheck0Gate {
+        table: range_check_table(),
+        compact: false,
+    });
+    let cs = ConstraintSystem::create(kimchi_rows(&gadget, 2))
+        .build()
+        .unwrap();
     let mut run = Run::new("verify_64_bit_range_check", cs);
     for v in [two_pow(64) - Fp::ONE, two_pow(64)] {
-        let mut w: W = core::array::from_fn(|_| vec![Fp::ZERO]);
-        for (column, mut rows) in w.iter_mut().zip(create(v).unwrap()) {
-            column.append(&mut rows);
-        }
-        let w = run.witnessed(w);
+        let w = run.witnessed(kimchi_witness(&gadget, &(Fp::ZERO, v), 2));
         run.check(&w, 1);
     }
 }
@@ -434,7 +497,7 @@ fn compact_multi_range_check() {
     for (limbs, expected) in limbs.iter().zip(&compacts) {
         let limbs = compact(limbs);
         assert_eq!(limbs.to_vec(), *expected);
-        let mut w = run.witnessed(create_multi_compact_limbs(&limbs).unwrap());
+        let mut w = run.witnessed(create_multi_compact_limbs(&limbs));
         run.check(&w, 1);
         w[1][2] = Fp::ONE;
         run.check(&w, 1);
@@ -443,7 +506,7 @@ fn compact_multi_range_check() {
 
 #[test]
 fn verify_range_check_valid_proof1() {
-    let (_, gates) = CircuitGate::<Fp>::create_multi_range_check(0);
+    let gates = multi_rows(false);
     let cs = ConstraintSystem::create(gates.clone()).build().unwrap();
     let mut run = Run::new("verify_range_check_valid_proof1", cs);
     let w = run.multi(
@@ -457,13 +520,13 @@ fn verify_range_check_valid_proof1() {
 
 #[test]
 fn verify_compact_multi_range_check_proof() {
-    let (_, gates) = CircuitGate::<Fp>::create_compact_multi_range_check(0);
+    let gates = multi_rows(true);
     let cs = ConstraintSystem::create(gates.clone()).build().unwrap();
     let mut run = Run::new("verify_compact_multi_range_check_proof", cs);
     let limbs: Vec<Fp> = run.case.elements("limbs");
     let limbs = compact(&limbs);
     assert_eq!(limbs.to_vec(), run.case.elements::<Fp>("compact"));
-    let w = run.witnessed(create_multi_compact_limbs(&limbs).unwrap());
+    let w = run.witnessed(create_multi_compact_limbs(&limbs));
     let result = prove_and_verify(gates, w, vec![]);
     assert_eq!(debug(&result), run.case.verdict("prove"));
 }

@@ -743,8 +743,9 @@ coefficients (`GenericRow`, degree 3). `GenericSpec` mirrors Kimchi's
 `GenericGateSpec` (`Add`, `Mul`, `Const`, `Plus`) and sets the coefficients
 as `create_generic_gadget` does; `Generic` and `GenericPair` compute one or
 two operations, the output in the half's third cell, pinned by the
-constraint. Inputs are wired by copies, as in Kimchi. Kimchi's `Pub`
-half-gate has no counterpart: public inputs are bindings here. The tests
+constraint. Inputs are wired by copies, as in Kimchi. A public input is a
+binding of the compiled circuit (`PublicInput`), which Kimchi presents as its
+`Pub` row, a Generic row of coefficient 1. The tests
 rebuild Kimchi's own test circuit (`create_circuit`, `fill_in_witness`)
 cell for cell, check that the operations solve their half-gates, and prove
 a root of `x^3 + x + 5 = 35`.
@@ -924,6 +925,20 @@ sponge; on Kimchi's `KimchiSponge` every value equals Kimchi's
 `DefaultFqSponge`, `DefaultFrSponge` and `ScalarChallenge` on the same
 scripts, for Vesta and for Pallas (where the scalar split is exercised),
 and our `Vesta::lambda()` is Kimchi's `endo_r`.
+
+Every circuit of the port, including the circuit each of Kimchi's gate
+tests builds, is one typed gadget, run twice: symbolically
+(`arrabbiata_gadget::compile`), which gives the constraints, the copy
+partition, the lookups and the fixed columns, and numerically on an input
+(`assign`), which gives the witness. `compiled` reads Kimchi's rows off the
+symbolic run: a row's gate type is the kind of the selector on it, its
+coefficients the fixed columns, its wires the copy permutation (each
+permuted cell wired to the next of its cycle), and a public input is
+Kimchi's Generic row of coefficient 1. Two presentations of one circuit
+agree up to the order inside each cycle, which the permutation argument
+does not see, so the tests compare rows up to the partition. There are no
+Kimchi-shaped constructors or witness functions: the witness is the
+gadget's, and a tampered witness is ours, edited.
 
 ## deviations and next steps
 

@@ -491,6 +491,21 @@ pub fn partition(wires: &[[(usize, usize); 7]]) -> Vec<Vec<(usize, usize)>> {
 /// Our rows are Kimchi's: the same gate types and coefficients (trailing
 /// zeros aside), and the same copy cycles as sets of cells.
 pub fn assert_kimchi_rows<F: PrimeField>(ours: &[CircuitGate<F>], kimchi: &[KimchiRow]) {
+    let (missing, extra) = kimchi_rows_difference(ours, kimchi);
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "copy cycles: missing {missing:?}, extra {extra:?}"
+    );
+}
+
+/// Our rows against Kimchi's: the same gate types and coefficients
+/// (trailing zeros aside), then the copy cycles Kimchi has and we do not,
+/// and those we have and Kimchi does not.
+#[allow(clippy::type_complexity)]
+pub fn kimchi_rows_difference<F: PrimeField>(
+    ours: &[CircuitGate<F>],
+    kimchi: &[KimchiRow],
+) -> (Vec<Vec<(usize, usize)>>, Vec<Vec<(usize, usize)>>) {
     assert!(
         ours.len() >= kimchi.len(),
         "{} rows, Kimchi has {}",
@@ -522,7 +537,18 @@ pub fn assert_kimchi_rows<F: PrimeField>(ours: &[CircuitGate<F>], kimchi: &[Kimc
         .iter()
         .map(|k| core::array::from_fn(|c| k.wires[c]))
         .collect();
-    assert_eq!(partition(&ours_wires), partition(&theirs), "copy cycles");
+    let (ours, theirs) = (partition(&ours_wires), partition(&theirs));
+    let missing = theirs
+        .iter()
+        .filter(|c| !ours.contains(c))
+        .cloned()
+        .collect();
+    let extra = ours
+        .iter()
+        .filter(|c| !theirs.contains(c))
+        .cloned()
+        .collect();
+    (missing, extra)
 }
 
 /// A copy-constraint verdict, as `Debug` prints it.
@@ -588,4 +614,105 @@ pub fn assert_verdict<F: PrimeField>(
         at = gates[at.row].wires[at.col];
     }
     panic!("{what}: Kimchi's {kimchi_dst:?} is not on our cycle of {src:?}");
+}
+
+/// The column variables and the degree every test circuit compiles with
+/// (Poseidon's rounds have degree 7).
+pub const VARIABLES: usize = 64;
+/// See [`VARIABLES`].
+pub const DEGREE: usize = 7;
+
+/// The first `rows` rows `gadget` compiles to, as Kimchi's: the symbolic
+/// run alone.
+pub fn kimchi_rows<F, G>(gadget: &G, rows: usize) -> Vec<CircuitGate<F>>
+where
+    F: PrimeField,
+    G: arrabbiata_gadget::TypedGadget<F>,
+{
+    match arrabbiata_kimchi::compiled::circuit_rows::<F, G, VARIABLES, DEGREE>(gadget, rows, 0) {
+        Ok(gates) => gates,
+        Err(e) => panic!("{} does not compile to Kimchi rows: {e:?}", G::NAME),
+    }
+}
+
+/// The first `rows` rows of the witness `gadget` computes on `input`: the
+/// numeric run, unchecked.
+pub fn kimchi_witness<F, G>(
+    gadget: &G,
+    input: &arrabbiata_gadget::Of<G::Input, F>,
+    rows: usize,
+) -> [Vec<F>; COLUMNS]
+where
+    F: PrimeField,
+    G: arrabbiata_gadget::TypedGadget<F>,
+{
+    match arrabbiata_kimchi::compiled::witness_columns::<F, G, VARIABLES, DEGREE>(
+        gadget, input, rows,
+    ) {
+        Ok((witness, _)) => witness,
+        Err(e) => panic!("{} computes no witness: {e:?}", G::NAME),
+    }
+}
+
+/// A computation over words of `B` bits, `B` fixed by [`for_bits`] from a
+/// width known at run time.
+pub trait ForBits {
+    /// What it computes.
+    type Output;
+
+    /// It, for words of `B` bits.
+    fn call<const B: usize>(self) -> Self::Output;
+}
+
+/// `computation` for the width of the `ceil(bits / 16)` Xor16 rows of
+/// `bits` bits.
+///
+/// # Panics
+///
+/// Beyond 256 bits.
+pub fn for_bits<C: ForBits>(bits: usize, computation: C) -> C::Output {
+    match bits.div_ceil(16) {
+        0 => computation.call::<0>(),
+        1 => computation.call::<16>(),
+        2 => computation.call::<32>(),
+        3 => computation.call::<48>(),
+        4 => computation.call::<64>(),
+        5 => computation.call::<80>(),
+        6 => computation.call::<96>(),
+        7 => computation.call::<112>(),
+        8 => computation.call::<128>(),
+        9 => computation.call::<144>(),
+        10 => computation.call::<160>(),
+        11 => computation.call::<176>(),
+        12 => computation.call::<192>(),
+        13 => computation.call::<208>(),
+        14 => computation.call::<224>(),
+        15 => computation.call::<240>(),
+        16 => computation.call::<256>(),
+        _ => panic!("no XOR of {bits} bits"),
+    }
+}
+
+/// The number of bits of `x`, zero having one (o1-utils' `bitlen`): Kimchi
+/// sizes its XOR and NOT by it.
+pub fn bit_length<F: PrimeField>(x: F) -> usize {
+    (0..F::LIMBS)
+        .rev()
+        .find(|&i| x.limb(i) != 0)
+        .map_or(1, |i| 64 * i + 64 - x.limb(i).leading_zeros() as usize)
+}
+
+/// The stack of [`with_stack`]: a circuit whose input is thousands of
+/// scalars holds an array of that many variables on the stack.
+const LARGE_STACK: usize = 1 << 28;
+
+/// `f`, on a thread with a stack large enough for a circuit of thousands
+/// of input scalars.
+pub fn with_stack(f: impl FnOnce() + Send + 'static) {
+    let thread = std::thread::Builder::new().stack_size(LARGE_STACK).spawn(f);
+    match thread.map(std::thread::JoinHandle::join) {
+        Ok(Ok(())) => {}
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(e) => panic!("no thread: {e}"),
+    }
 }

@@ -1,69 +1,181 @@
 //! Kimchi's `kimchi/src/tests/not.rs`, test by test, with the same inputs
-//! and outputs: Kimchi's rows from our constructors, the witnesses from our
-//! XOR and Generic half-gates, every verdict against Kimchi's run of the
-//! same test (`gate_tests/`).
+//! and outputs. The two circuits are typed gadgets: the all-ones public
+//! input, then either its XOR with the word (the checked NOT) or Generic
+//! rows `ones - x` (the unchecked NOT). Their rows are the symbolic run,
+//! their witness the numeric run, both checked against Kimchi's run of the
+//! same test (`gate_tests/`), with every verdict.
 
 mod gate_tests;
 mod kimchi_runs;
 
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, Unit};
 use arrabbiata_kimchi::{
-    constraints::{COLUMNS, CircuitGate, ConstraintSystem, Wire},
+    constraints::{COLUMNS, CircuitGate, ConstraintSystem},
     gates::Gates,
-    polynomials::{
-        bit_length,
-        generic::GenericGateSpec,
-        not::{extend_not_witness_checked_length, extend_not_witness_unchecked_length},
-    },
+};
+use arrabbiata_kimchi_gadgets::{
+    generic::{Generic, GenericPair, GenericSpec, PublicInput},
+    xor::{Xor, xor_table},
 };
 use arrabbiata_pasta::{Fp, Fq};
-use gate_tests::{Case, case, debug, pallas_gates, prove_and_verify, rows, vesta_gates};
+use gate_tests::{
+    Case, ForBits, bit_length, case, debug, for_bits, kimchi_rows, kimchi_witness, pallas_gates,
+    prove_and_verify, rows, vesta_gates,
+};
 
 /// `2^bits - 1`.
 fn all_ones<F: Field>(bits: usize) -> F {
     F::from_u64(2).pow(bits as u64) - F::ONE
 }
 
-/// Kimchi's `create_not_witness_unchecked_length`: the all-ones row, then
-/// the Generic NOTs.
-fn witness_unchecked<F: PrimeField>(inputs: &[F], bits: usize) -> [Vec<F>; COLUMNS] {
-    let mut witness: [Vec<F>; COLUMNS] = core::array::from_fn(|_| vec![F::ZERO; 1]);
-    witness[0][0] = all_ones(bits);
-    extend_not_witness_unchecked_length(&mut witness, inputs, bits).unwrap();
-    witness
+/// The NOT half-gate, `l - r = o`.
+fn negation<F: Field>() -> GenericSpec<F> {
+    GenericSpec::Add {
+        left: None,
+        right: Some(-F::ONE),
+        output: None,
+    }
 }
 
-/// Kimchi's `create_not_witness_checked_length`: the all-ones row, then
-/// the XOR NOT.
-fn witness_checked<F: PrimeField>(input: F, bits: Option<usize>) -> [Vec<F>; COLUMNS] {
-    let mut witness: [Vec<F>; COLUMNS] = core::array::from_fn(|_| vec![F::ZERO; 1]);
-    let real = bit_length(input).max(bits.unwrap_or(0));
-    witness[0][0] = all_ones(real);
-    extend_not_witness_checked_length(&mut witness, input, bits).unwrap();
-    witness
+/// The checked NOT of a word of `B` bits: the all-ones public input on
+/// row 0, the word in column 0 of row 1, then their XOR (Kimchi's
+/// `extend_not_gadget_checked_length` after its public row). Input
+/// `[ones, x]`.
+#[derive(Clone, Debug)]
+struct NotXor<F, const B: usize>(Xor<F, B>);
+
+impl<F: PrimeField, const B: usize> TypedGadget<F> for NotXor<F, B> {
+    type Input = Array<Scalar, 2>;
+    type Output = Scalar;
+    const NAME: &'static str = "not-xor";
+    const ROWS: usize = 1 + Xor::<F, B>::ROWS;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        [ones, x]: Of<Array<Scalar, 2>, E::Var>,
+    ) -> Of<Scalar, E::Var> {
+        let ones = env.call(&PublicInput, ones);
+        let x = env.advice(Cell::new(0, 1), [&x], |[v]| v);
+        env.call(&self.0, [x, ones])
+    }
 }
 
-/// The public all-ones row, then the gadget.
-fn public_row<F: PrimeField>() -> Vec<CircuitGate<F>> {
-    vec![CircuitGate::create_generic_gadget(
-        Wire::for_row(0),
-        GenericGateSpec::Pub,
-        None,
-    )]
+/// One row of NOTs: the word (or the two words) where the half-gates read
+/// them, then our Generic gate on `(ones, x)`. Input `(ones, [x1, x2])`,
+/// `x2` unused for a single NOT.
+#[derive(Clone, Copy, Debug)]
+struct NotRow {
+    double: bool,
 }
 
-/// Kimchi's `create_test_constraint_system_not_xor`.
-fn cs_xor<F: PrimeField + TwoAdicField>(bits: usize) -> ConstraintSystem<F> {
-    let mut gates = public_row();
-    CircuitGate::extend_not_gadget_checked_length(&mut gates, 0, bits);
-    ConstraintSystem::create(gates).public(1).build().unwrap()
+impl<F: PrimeField> TypedGadget<F> for NotRow {
+    type Input = (Scalar, Array<Scalar, 2>);
+    type Output = Array<Scalar, 2>;
+    const NAME: &'static str = "not-row";
+    const ROWS: usize = 1;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        (ones, [x1, x2]): Of<Self::Input, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var> {
+        let x1 = env.advice(Cell::new(1, 0), [&x1], |[v]| v);
+        if self.double {
+            let x2 = env.advice(Cell::new(4, 0), [&x2], |[v]| v);
+            let pair = GenericPair {
+                first: negation(),
+                second: negation(),
+            };
+            env.call(&pair, ([ones.clone(), x1], [ones, x2]))
+        } else {
+            let not = env.call(&Generic { spec: negation() }, [ones, x1]);
+            [not.clone(), not]
+        }
+    }
 }
 
-/// Kimchi's `create_test_constraint_system_not_gnrc`.
-fn cs_gnrc<F: PrimeField + TwoAdicField>(n: usize) -> ConstraintSystem<F> {
-    let mut gates = public_row();
-    CircuitGate::extend_not_gadget_unchecked_length(&mut gates, n, 0);
-    ConstraintSystem::create(gates).public(1).build().unwrap()
+/// The unchecked NOT of `N` words: the all-ones public input on row 0,
+/// then their NOTs two per row (Kimchi's
+/// `extend_not_gadget_unchecked_length` after its public row). Input
+/// `(ones, xs)`.
+#[derive(Clone, Copy, Debug)]
+struct NotGnrc<const N: usize>;
+
+impl<F: PrimeField, const N: usize> TypedGadget<F> for NotGnrc<N> {
+    type Input = (Scalar, Array<Scalar, N>);
+    type Output = Unit;
+    const NAME: &'static str = "not-gnrc";
+    const ROWS: usize = 1 + N.div_ceil(2);
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        (ones, xs): Of<Self::Input, E::Var>,
+    ) -> Of<Unit, E::Var> {
+        let ones = env.call(&PublicInput, ones);
+        for pair in xs.chunks(2) {
+            let double = pair.len() == 2;
+            let second = pair.get(1).unwrap_or(&pair[0]).clone();
+            env.call(
+                &NotRow { double },
+                (ones.clone(), [pair[0].clone(), second]),
+            );
+        }
+    }
+}
+
+/// The checked NOT of `input` on words of `B` bits.
+struct NotXorCase<F> {
+    input: [F; 2],
+}
+
+impl<F: PrimeField> ForBits for NotXorCase<F> {
+    type Output = (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS]);
+
+    fn call<const B: usize>(self) -> Self::Output {
+        let gadget = NotXor(Xor::<F, B> { table: xor_table() });
+        let rows = NotXor::<F, B>::ROWS;
+        (
+            kimchi_rows(&gadget, rows),
+            kimchi_witness(&gadget, &self.input, rows),
+        )
+    }
+}
+
+/// The checked NOT of `x` on `bits` bits (at least `bitlen(x)`): rows and
+/// witness (Kimchi's `create_not_witness_checked_length`).
+fn checked<F: PrimeField>(x: F, bits: usize) -> (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS]) {
+    for_bits(
+        bits,
+        NotXorCase {
+            input: [all_ones(bits), x],
+        },
+    )
+}
+
+/// The unchecked NOT of `xs` on `bits` bits: rows and witness (Kimchi's
+/// `create_not_witness_unchecked_length`).
+fn unchecked<F: PrimeField>(xs: &[F], bits: usize) -> (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS]) {
+    fn of<F: PrimeField, const N: usize>(
+        xs: &[F],
+        ones: F,
+    ) -> (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS]) {
+        let input: [F; N] = xs.try_into().unwrap();
+        let rows = <NotGnrc<N> as TypedGadget<F>>::ROWS;
+        (
+            kimchi_rows(&NotGnrc::<N>, rows),
+            kimchi_witness(&NotGnrc::<N>, &(ones, input), rows),
+        )
+    }
+    let ones = all_ones(bits);
+    match xs.len() {
+        1 => of::<F, 1>(xs, ones),
+        2 => of::<F, 2>(xs, ones),
+        5 => of::<F, 5>(xs, ones),
+        n => panic!("no NOT of {n} words here"),
+    }
 }
 
 /// Every row's verdict is Kimchi's.
@@ -93,8 +205,8 @@ where
     let input: F = case.elements("in")[0];
     let bits = (case.number("given") == 1).then(|| case.number("bits"));
     let real = bit_length(input).max(bits.unwrap_or(0));
-    let cs = cs_xor::<F>(real);
-    let witness = witness_checked(input, bits);
+    let (circuit, witness) = checked(input, real);
+    let cs = ConstraintSystem::create(circuit).public(1).build().unwrap();
     assert_eq!(rows(&witness), case.witnesses[0], "{name}");
     // Kimchi's check_not_xor: the output is the NOT on `real` bits.
     assert_eq!(witness[2][1], all_ones::<F>(real) - input);
@@ -113,8 +225,8 @@ where
     let case = case(name);
     let inputs: Vec<F> = case.elements("inputs");
     let bits = case.number("bits");
-    let cs = cs_gnrc::<F>(inputs.len());
-    let witness = witness_unchecked(&inputs, bits);
+    let (circuit, witness) = unchecked(&inputs, bits);
+    let cs = ConstraintSystem::create(circuit).public(1).build().unwrap();
     assert_eq!(rows(&witness), case.witnesses[0], "{name}");
     // Kimchi's check_not_gnrc.
     for (i, input) in inputs.iter().enumerate() {
@@ -135,9 +247,7 @@ where
 fn test_prove_and_verify_not_xor() {
     let case = case("test_prove_and_verify_not_xor");
     let bits = 64;
-    let mut gates = public_row::<Fp>();
-    CircuitGate::extend_not_gadget_checked_length(&mut gates, 0, bits);
-    let witness = witness_checked(case.elements::<Fp>("in")[0], Some(bits));
+    let (gates, witness) = checked(case.elements::<Fp>("in")[0], bits);
     assert_eq!(rows(&witness), case.witnesses[0]);
     let result = prove_and_verify(gates, witness, vec![all_ones(bits)]);
     assert_eq!(debug(&result), case.verdict("prove"));
@@ -147,9 +257,7 @@ fn test_prove_and_verify_not_xor() {
 fn test_prove_and_verify_five_not_gnrc() {
     let case = case("test_prove_and_verify_five_not_gnrc");
     let bits = 64;
-    let mut gates = public_row::<Fp>();
-    CircuitGate::extend_not_gadget_unchecked_length(&mut gates, 5, 0);
-    let witness = witness_unchecked(&case.elements::<Fp>("inputs"), bits);
+    let (gates, witness) = unchecked(&case.elements::<Fp>("inputs"), bits);
     assert_eq!(rows(&witness), case.witnesses[0]);
     let result = prove_and_verify(gates, witness, vec![all_ones(bits)]);
     assert_eq!(debug(&result), case.verdict("prove"));

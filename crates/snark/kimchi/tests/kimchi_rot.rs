@@ -1,40 +1,169 @@
 //! Kimchi's `kimchi/src/tests/rot.rs`, test by test, with the same inputs
-//! and outputs: Kimchi's rows from our constructors, the witness from our
-//! rotation gates, every verdict checked against Kimchi's run of the same
-//! test (`gate_tests/`).
+//! and outputs. The circuits are typed gadgets (a public zero, then our
+//! rotation gates, the four high limbs of the range checks copied to the
+//! zero): their rows are the symbolic run, their witness the numeric run,
+//! both checked against Kimchi's run of the same test (`gate_tests/`), with
+//! every verdict.
 
 mod gate_tests;
 mod kimchi_runs;
 
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Rom, Scalar, TypedGadget};
 use arrabbiata_kimchi::{
-    constraints::{COLUMNS, CircuitGate, Connect, ConstraintSystem, Wire},
+    constraints::{COLUMNS, CircuitGate, ConstraintSystem, Wire},
     gates::Gates,
-    polynomials::{
-        generic::GenericGateSpec,
-        rot::{RotMode, extend_rot},
-    },
+};
+use arrabbiata_kimchi_gadgets::{
+    generic::PublicInput,
+    range_check::{RangeCheck0Gate, range_check_table},
+    rot::{Rot64Gate, RotMode, WORD_BITS},
 };
 use arrabbiata_pasta::{Fp, Fq};
 use gate_tests::{
-    case, debug, pallas_gates, prove_and_verify, prove_and_verify_pallas, rows, vesta_gates,
+    case, debug, kimchi_rows, kimchi_witness, pallas_gates, prove_and_verify,
+    prove_and_verify_pallas, rows, vesta_gates,
 };
 
-/// A public row (the zero the range checks' high limbs are wired to),
-/// then the rotation: Kimchi's `create_rot_gadget`.
-fn gadget<F: PrimeField>(rot: u32, side: RotMode) -> Vec<CircuitGate<F>> {
-    let zero = CircuitGate::create_generic_gadget(Wire::for_row(0), GenericGateSpec::Pub, None);
-    let mut gates = vec![zero];
-    CircuitGate::extend_rot(&mut gates, rot, side, 0);
-    gates
+/// The left offset of a rotation by `rot` to `side`.
+const fn left(rot: u32, side: RotMode) -> u32 {
+    match side {
+        RotMode::Left => rot,
+        RotMode::Right => WORD_BITS - rot,
+    }
 }
 
-/// The zero row, then the rotation's witness: Kimchi's
-/// `create_rot_witness`.
+/// A rotation's three rows: Rot64 of the word, the RangeCheck0 rows of
+/// `shifted` and of `excess`, their four high limbs copied to the zero.
+/// Input `(zero, word)`, two cells.
+#[derive(Clone, Debug)]
+struct Rotation<F> {
+    rot: u32,
+    table: Rom<F>,
+}
+
+impl<F: PrimeField> TypedGadget<F> for Rotation<F> {
+    type Input = (Scalar, Scalar);
+    type Output = Scalar;
+    const NAME: &'static str = "rotation";
+    const ROWS: usize = 3;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        (zero, word): Of<Self::Input, E::Var>,
+    ) -> Of<Scalar, E::Var> {
+        let gate = Rot64Gate {
+            table: self.table.clone(),
+            rot: self.rot,
+        };
+        let [rotated, excess, shifted] = env.call(&gate, word);
+        let check = RangeCheck0Gate {
+            table: self.table.clone(),
+            compact: false,
+        };
+        let [s0, s1] = env.call(&check, shifted);
+        let [e0, e1] = env.call(&check, excess);
+        for high in [s0, s1, e0, e1] {
+            env.connect(&zero, &high);
+        }
+        rotated
+    }
+}
+
+/// The zero as a public input on row 0, then the rotation of the word
+/// (placed in column 0 of row 1): Kimchi's `create_rot_gadget` and
+/// `create_rot_witness`. Input `(zero, word)`.
+#[derive(Clone, Debug)]
+struct ZeroThenRotation<F>(Rotation<F>);
+
+impl<F: PrimeField> TypedGadget<F> for ZeroThenRotation<F> {
+    type Input = (Scalar, Scalar);
+    type Output = Scalar;
+    const NAME: &'static str = "zero-then-rotation";
+    const ROWS: usize = 4;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        (zero, word): Of<Self::Input, E::Var>,
+    ) -> Of<Scalar, E::Var> {
+        let zero = env.call(&PublicInput, zero);
+        let word = env.advice(Cell::new(0, 1), [&word], |[v]| v);
+        env.call(&self.0, (zero, word))
+    }
+}
+
+/// The rotation by `rot` to `side`.
+fn rotation<F: PrimeField>(rot: u32, side: RotMode) -> Rotation<F> {
+    Rotation {
+        rot: left(rot, side),
+        table: range_check_table(),
+    }
+}
+
+/// Kimchi's `create_rot_gadget`: the rows.
+fn gadget<F: PrimeField>(rot: u32, side: RotMode) -> Vec<CircuitGate<F>> {
+    kimchi_rows(&ZeroThenRotation(rotation::<F>(rot, side)), 4)
+}
+
+/// Kimchi's `create_rot_witness`: the witness.
 fn rot_witness<F: PrimeField>(word: u64, rot: u32, side: RotMode) -> [Vec<F>; COLUMNS] {
-    let mut witness: [Vec<F>; COLUMNS] = core::array::from_fn(|_| vec![F::ZERO]);
-    extend_rot(&mut witness, word, rot, side).unwrap();
-    witness
+    let gadget = ZeroThenRotation(rotation::<F>(rot, side));
+    kimchi_witness(&gadget, &(F::ZERO, F::from_u64(word)), 4)
+}
+
+/// The word and the zero as public inputs on rows 0 and 1, then the
+/// rotation of the word, copied from its public cell (Kimchi's
+/// `test_rot_finalization`). Input `(word, zero)`.
+#[derive(Clone, Debug)]
+struct PublicThenRotation<F>(Rotation<F>);
+
+impl<F: PrimeField> TypedGadget<F> for PublicThenRotation<F> {
+    type Input = (Scalar, Scalar);
+    type Output = Scalar;
+    const NAME: &'static str = "public-then-rotation";
+    const ROWS: usize = 5;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        (word, zero): Of<Self::Input, E::Var>,
+    ) -> Of<Scalar, E::Var> {
+        let word = env.call(&PublicInput, word);
+        let zero = env.call(&PublicInput, zero);
+        env.call(&self.0, (zero, word))
+    }
+}
+
+/// The rotations of Keccak's state with a non-zero offset.
+const ROTATIONS: usize = 24;
+
+/// The zero as a public input on row 0, then every rotation of Keccak's
+/// state, each word in column 0 of its first row (Kimchi's
+/// `test_keccak_table`). Input `(zero, words)`.
+#[derive(Clone, Debug)]
+struct Keccak<F> {
+    rotations: Vec<Rotation<F>>,
+}
+
+impl<F: PrimeField> TypedGadget<F> for Keccak<F> {
+    type Input = (Scalar, Array<Scalar, ROTATIONS>);
+    type Output = Array<Scalar, ROTATIONS>;
+    const NAME: &'static str = "keccak-rotations";
+    const ROWS: usize = 1 + 3 * ROTATIONS;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        (zero, words): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var> {
+        let zero = env.call(&PublicInput, zero);
+        core::array::from_fn(|k| {
+            let word = env.advice(Cell::new(0, 1 + 3 * k), [&words[k]], |[v]| v);
+            env.call(&self.rotations[k], (zero.clone(), word))
+        })
+    }
 }
 
 /// `word` rotated by `rot` to `side`, the value Kimchi's `setup_rot`
@@ -182,17 +311,10 @@ fn test_bad_constraints() {
 fn test_rot_finalization() {
     let case = case("test_rot_finalization");
     let rot = 32;
-    let mut gates: Vec<CircuitGate<Fp>> = (0..2)
-        .map(|row| {
-            CircuitGate::create_generic_gadget(Wire::for_row(row), GenericGateSpec::Pub, None)
-        })
-        .collect();
-    CircuitGate::extend_rot(&mut gates, rot, RotMode::Left, 1);
-    gates.connect_cell_pair((0, 0), (2, 0));
     let input = 0xDC81_1727_DAF2_2EC1_u64;
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
-    witness[0][0] = Fp::from_u64(input);
-    extend_rot(&mut witness, input, rot, RotMode::Left).unwrap();
+    let gadget = PublicThenRotation(rotation::<Fp>(rot, RotMode::Left));
+    let gates = kimchi_rows(&gadget, 5);
+    let witness = kimchi_witness(&gadget, &(Fp::from_u64(input), Fp::ZERO), 5);
     assert_eq!(rows(&witness), case.witnesses[0]);
     let cs = ConstraintSystem::create(gates.clone())
         .public(2)
@@ -225,31 +347,28 @@ fn test_keccak_table() {
         |y: usize, x: usize| off[5 * y + x],
         |x: usize, y: usize| state[5 * x + y],
     );
-    let zero = CircuitGate::create_generic_gadget(Wire::for_row(0), GenericGateSpec::Pub, None);
-    let mut gates: Vec<CircuitGate<Fp>> = vec![zero];
-    let mut rot_row = 1;
+    let mut offsets = Vec::new();
+    let mut words = Vec::new();
     for y in 0..5 {
         for x in 0..5 {
-            let rot = off(y, x);
-            if rot == 0 {
-                continue;
-            }
-            let mut rot64 = CircuitGate::create_rot64(rot_row, rot);
-            rot_row += rot64.len();
-            gates.append(&mut rot64);
-            gates.connect_64bit(0, rot_row - 1);
-        }
-    }
-    let cs = ConstraintSystem::create(gates).build().unwrap();
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
-    for y in 0..5 {
-        for x in 0..5 {
-            let rot = off(y, x);
-            if rot != 0 {
-                extend_rot(&mut witness, state(x, y), rot, RotMode::Left).unwrap();
+            if off(y, x) != 0 {
+                offsets.push(off(y, x));
+                words.push(Fp::from_u64(state(x, y)));
             }
         }
     }
+    let table = Keccak {
+        rotations: offsets
+            .iter()
+            .map(|rot| rotation::<Fp>(*rot, RotMode::Left))
+            .collect(),
+    };
+    let input: [Fp; ROTATIONS] = words.try_into().unwrap();
+    let rows_used = 1 + 3 * ROTATIONS;
+    let cs = ConstraintSystem::create(kimchi_rows(&table, rows_used))
+        .build()
+        .unwrap();
+    let witness = kimchi_witness(&table, &(Fp::ZERO, input), rows_used);
     assert_eq!(rows(&witness), case.witnesses[0]);
     let kimchi = vesta_gates();
     for (row, gate) in cs.gates.iter().enumerate().take(49) {
@@ -318,21 +437,24 @@ fn connect_64bit_forgery() {
         .unwrap();
     let kimchi = vesta_gates();
     // Kimchi accepts the forged witness row by row and proves it; we refuse
-    // it at the copy constraints of both range checks, whose high limbs
-    // the forgery moved, and refuse to prove it.
+    // it at a copy constraint of the zero's cycle (the public zero and the
+    // high limbs of both range checks, which the forgery moved), and refuse
+    // to prove it. Which row of the cycle reports the break depends on the
+    // order inside the cycle.
+    let mut refused = 0;
     for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
         let ours = debug(&gate.verify_witness(row, &witness, &kimchi));
         let theirs = case.verdict(&format!("row{row}"));
-        if row == 2 || row == 3 {
+        if [0, 2, 3].contains(&row) {
             assert_eq!(theirs, "Ok(())");
-            assert!(
-                ours.starts_with("Err(CopyConstraint { typ: RangeCheck0"),
-                "row {row}: {ours}"
-            );
+            let broken = ours.starts_with("Err(CopyConstraint");
+            assert!(broken || ours == "Ok(())", "row {row}: {ours}");
+            refused += usize::from(broken);
         } else {
             gate_tests::assert_verdict(&ours, theirs, &cs.gates, &format!("row {row}"));
         }
     }
+    assert!(refused > 0, "no row of the zero's cycle refuses");
     assert_eq!(case.verdict("prove"), "Ok(())");
     let result = prove_and_verify(gates, witness, vec![Fp::ZERO]);
     assert!(result.is_err(), "{result:?}");

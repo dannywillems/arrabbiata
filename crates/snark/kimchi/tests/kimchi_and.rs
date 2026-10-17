@@ -1,27 +1,55 @@
 //! Kimchi's `kimchi/src/tests/and.rs`, test by test, with the same inputs
-//! and outputs: Kimchi's rows from our constructors, the witnesses from our
-//! XOR and Generic half-gates, every verdict against Kimchi's run of the
-//! same test (`gate_tests/`).
+//! and outputs. The circuit is our AND gadget, its inputs placed: its rows
+//! are the symbolic run, its witness the numeric run, both checked against
+//! Kimchi's run of the same test (`gate_tests/`), with every verdict.
 
 mod gate_tests;
 mod kimchi_runs;
 
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
+use arrabbiata_gadget::{Cell, Placed, TypedGadget};
 use arrabbiata_kimchi::{
     constraints::{COLUMNS, CircuitGate, ConstraintSystem},
     gates::Gates,
-    polynomials::and::create_and_witness,
+};
+use arrabbiata_kimchi_gadgets::{
+    and::And,
+    xor::{Xor, xor_table},
 };
 use arrabbiata_pasta::{Fp, Fq};
 use gate_tests::{
-    Case, case, debug, pallas_gates, prove_and_verify, prove_and_verify_pallas, rows, vesta_gates,
+    Case, ForBits, case, debug, for_bits, kimchi_rows, kimchi_witness, pallas_gates,
+    prove_and_verify, prove_and_verify_pallas, rows, vesta_gates,
 };
 
-/// Kimchi's `create_test_gates_and`.
-fn gates<F: PrimeField>(bytes: usize) -> Vec<CircuitGate<F>> {
-    let mut gates = Vec::new();
-    CircuitGate::extend_and(&mut gates, bytes);
-    gates
+/// The rows and the witness of the AND of `input` on words of `B` bits,
+/// their cells in columns 0 and 1 of the first row (Kimchi's
+/// `create_test_gates_and` and `create_and_witness`).
+struct AndCase<F> {
+    input: [F; 2],
+}
+
+impl<F: PrimeField> ForBits for AndCase<F> {
+    type Output = (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS]);
+
+    fn call<const B: usize>(self) -> Self::Output {
+        let gadget = Placed {
+            gadget: And {
+                xor: Xor::<F, B> { table: xor_table() },
+            },
+            cells: vec![Cell::new(0, 0), Cell::new(1, 0)],
+        };
+        let rows = And::<F, B>::ROWS;
+        (
+            kimchi_rows(&gadget, rows),
+            kimchi_witness(&gadget, &self.input, rows),
+        )
+    }
+}
+
+/// The AND of `input` on `bytes` bytes.
+fn and<F: PrimeField>(input: [F; 2], bytes: usize) -> (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS]) {
+    for_bits(8 * bytes, AndCase { input })
 }
 
 /// Kimchi's `setup_and` with the inputs of Kimchi's run, and with `verify`
@@ -38,8 +66,8 @@ where
     let case = case(name);
     let [in1, in2]: [F; 2] = case.elements("in").try_into().unwrap();
     let bytes = case.number("bytes");
-    let cs = ConstraintSystem::create(gates::<F>(bytes)).build().unwrap();
-    let witness = create_and_witness(in1, in2, bytes).unwrap();
+    let (gates, witness) = and([in1, in2], bytes);
+    let cs = ConstraintSystem::create(gates).build().unwrap();
     assert_eq!(rows(&witness), case.witnesses[0], "{name}");
     // Kimchi's check_and: the sum, the XOR and the AND on the AND row.
     let and_row = witness[0].len() - 1;
@@ -69,15 +97,15 @@ fn test_prove_and_verify() {
     let bytes = 8;
     let case = gate_tests::case("and test_prove_and_verify vesta");
     let [in1, in2]: [Fp; 2] = case.elements("in").try_into().unwrap();
-    let witness = create_and_witness(in1, in2, bytes).unwrap();
+    let (gates, witness) = and([in1, in2], bytes);
     assert_eq!(rows(&witness), case.witnesses[0]);
-    let result = prove_and_verify(gates(bytes), witness, vec![]);
+    let result = prove_and_verify(gates, witness, vec![]);
     assert_eq!(debug(&result), case.verdict("prove"));
     let case = gate_tests::case("and test_prove_and_verify pallas");
     let [in1, in2]: [Fq; 2] = case.elements("in").try_into().unwrap();
-    let witness = create_and_witness(in1, in2, bytes).unwrap();
+    let (gates, witness) = and([in1, in2], bytes);
     assert_eq!(rows(&witness), case.witnesses[0]);
-    let result = prove_and_verify_pallas(gates(bytes), witness, vec![]);
+    let result = prove_and_verify_pallas(gates, witness, vec![]);
     assert_eq!(debug(&result), case.verdict("prove"));
 }
 
@@ -194,11 +222,11 @@ fn test_serialization_regression() {
         .iter()
         .map(|w| w.parse().unwrap())
         .collect();
-    let witness = create_and_witness(in1, in2, 8).unwrap();
+    let (gates, witness) = and([in1, in2], 8);
     assert_eq!(rows(&witness), case.witnesses[0]);
     // Our rows are Kimchi's up to the order in each copy cycle; the proof,
     // which reads that order through the sigmas, is made on Kimchi's.
-    gate_tests::assert_kimchi_rows(&gates::<Fp>(8), &case.gates[0]);
+    gate_tests::assert_kimchi_rows(&gates, &case.gates[0]);
     let proof =
         gate_tests::prove_replayed(gate_tests::kimchi_gates(&case.gates[0]), witness, words);
     let mut expected = case.proof.clone();

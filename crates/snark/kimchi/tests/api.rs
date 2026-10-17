@@ -2,12 +2,14 @@
 
 use arrabbiata_curve::{Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_gadget::{Cell, Env, Of, Placed, Scalar as Value, TypedGadget, Unit, compile};
 use arrabbiata_ipa::generic::{BaseOracle, ChallengeMap, HashToCurve, IpaOracle, Opening, Schnorr};
 use arrabbiata_kimchi::{
     accumulation::{
         self, AccumulateProofs, Assignment, KimchiSuccinct, Satisfied, Separate, Statement, Verify,
         accumulate_proofs, ipa_of, separate,
     },
+    compiled::{self, RowsError},
     constraints::{
         self, Builder, COLUMNS, CircuitGate, CircuitGateError, Connect, ConstraintSystem,
         EvaluationDomains, GateError, GateTable, GateType, LookupTable, RANGE_CHECK_TABLE_SIZE,
@@ -22,26 +24,6 @@ use arrabbiata_kimchi::{
     },
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
-    polynomials::{
-        self as gadgets,
-        and::{create_and_witness, extend_and_witness},
-        bit_length,
-        endomul_scalar::gen_witness as endomul_scalar_witness,
-        endosclmul::{EndoMulResult, gen_witness as endomul_witness},
-        generic::{
-            GenericGateSpec,
-            testing::{create_circuit, fill_in_witness},
-        },
-        not::{extend_not_witness_checked_length, extend_not_witness_unchecked_length},
-        range_check::{
-            create as create_range_check_witness, create_multi, create_multi_compact,
-            create_multi_compact_limbs, create_multi_limbs, extend as extend_range_check_witness,
-            extend_multi, extend_multi_compact, extend_multi_compact_limbs, extend_multi_limbs,
-        },
-        rot::{RotMode, extend_rot},
-        varbasemul::{VarbaseMulResult, witness as varbasemul_witness},
-        xor::{create_xor_witness, extend_xor_witness, num_xors},
-    },
     prover::{
         self, EvaluationRound, Hidden, LOOKUP_ALPHA, LookupCommitments, LookupEvaluations,
         LookupRound, OpeningProof, PERMUTATION_ALPHA, PermutationRound, PointEvaluations,
@@ -57,7 +39,12 @@ use arrabbiata_kimchi::{
     verifier::{Claim, Oracles, VerifyError, oracles, succinct, verify},
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
-use arrabbiata_kimchi_gadgets::{generic::GenericSpec, zero::Zero};
+use arrabbiata_kimchi_gadgets::{
+    LAYOUT,
+    and::And,
+    generic::{Generic, GenericSpec, PublicInput},
+    xor::{Xor, xor_table as xor_rom},
+};
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 use arrabbiata_reduction::{Reduction, Relation};
@@ -1262,14 +1249,142 @@ fn ipa_opening_conversions() {
     assert_eq!(back, proof.proof);
 }
 
+/// The column variables of the compiled circuits.
+const VARIABLES: usize = 64;
+/// Their degree.
+const DEGREE: usize = 7;
+
+/// A 16-bit XOR of two words in columns 0 and 1 of its first row.
+fn xor16_gadget() -> Placed<Xor<Fp, 16>> {
+    Placed {
+        gadget: Xor { table: xor_rom() },
+        cells: vec![Cell::new(0, 0), Cell::new(1, 0)],
+    }
+}
+
 /// A 16-bit XOR's rows and witness.
 fn xor16() -> (ConstraintSystem<Fp>, [Vec<Fp>; COLUMNS]) {
-    let mut gates = Vec::new();
-    CircuitGate::<Fp>::extend_xor_gadget(&mut gates, 16);
+    let gadget = xor16_gadget();
+    let gates = compiled::circuit_rows::<Fp, _, VARIABLES, DEGREE>(&gadget, 2, 0).unwrap();
     let cs = ConstraintSystem::create(gates).build().unwrap();
-    let in1 = Fp::from_u64(0x1234);
-    let in2 = Fp::from_u64(0x00ff);
-    (cs, create_xor_witness(in1, in2, 16).unwrap())
+    let input = [Fp::from_u64(0x1234), Fp::from_u64(0x00ff)];
+    let (witness, _) =
+        compiled::witness_columns::<Fp, _, VARIABLES, DEGREE>(&gadget, &input, 2).unwrap();
+    (cs, witness)
+}
+
+/// A constraint that is no gate of Kimchi's: `x^2 = x` on one cell.
+#[derive(Clone, Copy, Debug)]
+struct NotKimchi;
+
+impl TypedGadget<Fp> for NotKimchi {
+    type Input = Unit;
+    type Output = Unit;
+    const NAME: &'static str = "not-kimchi";
+    const ROWS: usize = 1;
+
+    fn synthesize<E: Env<Fp>>(&self, env: &mut E, (): Of<Unit, E::Var>) -> Of<Unit, E::Var> {
+        let x = env.advice(Cell::new(0, 0), [], |[]| Fp::ONE);
+        env.assert_zero(x.clone() * x.clone() - x);
+    }
+}
+
+/// A public input on a row that also carries a Generic gate.
+#[derive(Clone, Copy, Debug)]
+struct PublicOnAGate;
+
+impl TypedGadget<Fp> for PublicOnAGate {
+    type Input = Value;
+    type Output = Value;
+    const NAME: &'static str = "public-on-a-gate";
+    const ROWS: usize = 1;
+
+    fn synthesize<E: Env<Fp>>(&self, env: &mut E, x: Of<Value, E::Var>) -> Of<Value, E::Var> {
+        let x = env.advice(Cell::new(0, 0), [&x], |[v]| v);
+        let y = env.advice(Cell::new(1, 0), [], |[]| Fp::ZERO);
+        env.public(&x);
+        let generic = Generic {
+            spec: GenericSpec::Const(Fp::from_u64(3)),
+        };
+        env.call(&generic, [x, y])
+    }
+}
+
+#[test]
+fn compiled_rows() {
+    // The XOR's row, then its zero constant, a Generic row of coefficient
+    // 1; numbered from 5, the wires follow.
+    let compiled = compile::<Fp, _, VARIABLES, DEGREE>(&xor16_gadget(), LAYOUT).unwrap();
+    let gates = compiled::rows(&compiled, 2, 0).unwrap();
+    assert_eq!(gates[0].typ, GateType::Xor16);
+    assert_eq!(
+        (gates[1].typ, gates[1].coeffs.clone()),
+        (GateType::Generic, vec![Fp::ONE])
+    );
+    let shifted = compiled::rows(&compiled, 2, 5).unwrap();
+    assert_eq!(shifted[1].wires[0].row, gates[1].wires[0].row + 5);
+}
+
+#[test]
+fn compiled_rows_error() {
+    // A copy cycle past the rows asked for, a constraint of no Kimchi gate,
+    // a public input on a gate's row, and a gadget that does not compile.
+    let and = Placed {
+        gadget: And::<Fp, 16> {
+            xor: Xor { table: xor_rom() },
+        },
+        cells: vec![Cell::new(0, 0), Cell::new(1, 0)],
+    };
+    let compiled = compile::<Fp, _, VARIABLES, DEGREE>(&and, LAYOUT).unwrap();
+    assert_eq!(
+        compiled::rows(&compiled, 1, 0),
+        Err(RowsError::CycleOutside(0))
+    );
+    let compiled = compile::<Fp, _, VARIABLES, DEGREE>(&NotKimchi, LAYOUT).unwrap();
+    assert_eq!(
+        compiled::rows(&compiled, 1, 0),
+        Err(RowsError::UnknownGate("not-kimchi"))
+    );
+    let rows = compiled::circuit_rows::<Fp, _, VARIABLES, DEGREE>(&PublicOnAGate, 1, 0);
+    assert_eq!(rows, Err(RowsError::PublicRowTaken(0)));
+    let error = arrabbiata_gadget::Error::Rows { gadget: "g" };
+    assert_eq!(RowsError::from(error.clone()), RowsError::Gadget(error));
+}
+
+#[test]
+fn compiled_columns() {
+    // The numeric run's first rows, in 15 columns: the XOR of 0x1234 and
+    // 0x00ff in column 2.
+    let input = [Fp::from_u64(0x1234), Fp::from_u64(0x00ff)];
+    let (compiled, _) =
+        arrabbiata_gadget::assign::<Fp, _, VARIABLES, DEGREE>(&xor16_gadget(), LAYOUT, &input)
+            .unwrap();
+    let columns = compiled::columns(&compiled, 2);
+    assert_eq!(columns[2], vec![Fp::from_u64(0x12cb), Fp::ZERO]);
+}
+
+#[test]
+fn compiled_circuit_rows() {
+    // A public input alone is Kimchi's Generic row of coefficient 1.
+    let rows = compiled::circuit_rows::<Fp, _, VARIABLES, DEGREE>(&PublicInput, 1, 0).unwrap();
+    assert_eq!(
+        rows,
+        vec![CircuitGate::new(
+            GateType::Generic,
+            Wire::for_row(0),
+            vec![Fp::ONE]
+        )]
+    );
+}
+
+#[test]
+fn compiled_witness_columns() {
+    // The witness and the output: the XOR of the words.
+    let input = [Fp::from_u64(0x1234), Fp::from_u64(0x00ff)];
+    let (witness, output) =
+        compiled::witness_columns::<Fp, _, VARIABLES, DEGREE>(&xor16_gadget(), &input, 2).unwrap();
+    assert_eq!(output, Fp::from_u64(0x12cb));
+    assert_eq!(witness[0][0], input[0]);
 }
 
 #[test]
@@ -1313,8 +1428,8 @@ fn constraints_circuit_gate_verify_endomul() {
 #[test]
 fn constraints_circuit_gate_verify_generic() {
     // w0 = 3 is `Const(3)`; w0 = 4 is not.
-    let spec = GenericGateSpec::Spec(GenericSpec::Const(Fp::from_u64(3)));
-    let gate = CircuitGate::create_generic_gadget(Wire::for_row(0), spec, None);
+    let coefficients = GenericSpec::Const(Fp::from_u64(3)).coefficients().to_vec();
+    let gate = CircuitGate::new(GateType::Generic, Wire::for_row(0), coefficients);
     let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
     witness[0][0] = Fp::from_u64(3);
     assert_eq!(gate.verify_generic(0, &witness, &[]), Ok(()));
@@ -1353,126 +1468,6 @@ fn constraints_constraint_system_verify_witness() {
 }
 
 #[test]
-fn polynomials_columns() {
-    // The witness of a gadget, cut to the rows asked for: the Zero row,
-    // empty.
-    let witness = gadgets::columns::<Fp, Zero, 8, 2>(&Zero, &(), 1).unwrap();
-    assert!(witness.iter().all(|c| c == &vec![Fp::ZERO]));
-}
-
-#[test]
-fn polynomials_generic_generic_gate_spec() {
-    let public = GenericGateSpec::<Fp>::Pub;
-    assert_eq!(public.coefficients()[0], Fp::ONE);
-}
-
-#[test]
-fn polynomials_generic_create_generic_gadget() {
-    // Kimchi's coefficients: [1, 0, 0, 0, -c] for Const(c).
-    let spec = GenericGateSpec::Spec(GenericSpec::Const(Fp::from_u64(5)));
-    let gate = CircuitGate::create_generic_gadget(Wire::for_row(0), spec, None);
-    assert_eq!(gate.typ, GateType::Generic);
-    assert_eq!(gate.coeffs[0], Fp::ONE);
-    assert_eq!(gate.coeffs[4], -Fp::from_u64(5));
-    assert_eq!(gate.coeffs.len(), 10);
-}
-
-#[test]
-fn polynomials_xor_num_xors() {
-    assert_eq!(num_xors(8), 1);
-    assert_eq!(num_xors(64), 4);
-    assert_eq!(num_xors(65), 5);
-}
-
-#[test]
-fn polynomials_xor_create_xor_gadget() {
-    let (next, gates) = CircuitGate::<Fp>::create_xor_gadget(3, 32);
-    assert_eq!(next, 6);
-    assert_eq!(gates[0].typ, GateType::Xor16);
-    assert_eq!(gates[2].typ, GateType::Generic);
-}
-
-#[test]
-fn polynomials_xor_extend_xor_gadget() {
-    // The zero row's three first cells on one cycle.
-    let mut gates = Vec::new();
-    let next = CircuitGate::<Fp>::extend_xor_gadget(&mut gates, 16);
-    assert_eq!(next, 2);
-    let mut cycle = vec![Wire { row: 1, col: 0 }];
-    let mut at = gates[1].wires[0];
-    while at != cycle[0] {
-        cycle.push(at);
-        at = gates[at.row].wires[at.col];
-    }
-    cycle.sort();
-    let expected: Vec<Wire> = (0..3).map(|col| Wire { row: 1, col }).collect();
-    assert_eq!(cycle, expected);
-}
-
-#[test]
-fn polynomials_xor_create_xor_witness() {
-    let witness = create_xor_witness(Fp::from_u64(0xf0f0), Fp::from_u64(0x0ff0), 16).unwrap();
-    assert_eq!(witness[2][0], Fp::from_u64(0xff00));
-    assert!(create_xor_witness(Fp::from_u64(1 << 20), Fp::ZERO, 16).is_err());
-}
-
-#[test]
-fn polynomials_xor_extend_xor_witness() {
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
-    extend_xor_witness(&mut witness, Fp::ONE, Fp::ONE, 16).unwrap();
-    assert_eq!(witness[0].len(), 3);
-}
-
-#[test]
-fn polynomials_rot_create_rot64() {
-    // Rot64 with 2^rot, then two RangeCheck0 rows: the excess (row 1,
-    // column 2) copied to the second range check, and the four high limbs
-    // (columns 1 and 2 of rows 2 and 3) on one cycle.
-    let gates = CircuitGate::<Fp>::create_rot64(1, 3);
-    assert_eq!(gates[0].typ, GateType::Rot64);
-    assert_eq!(gates[0].coeffs, vec![Fp::from_u64(8)]);
-    assert_eq!(gates[2].typ, GateType::RangeCheck0);
-    let at = |row: usize, col: usize| gates[row - 1].wires[col];
-    let cycle_of = |row: usize, col: usize| {
-        let start = Wire { row, col };
-        let mut cycle = vec![start];
-        let mut next = at(row, col);
-        while next != start {
-            cycle.push(next);
-            next = at(next.row, next.col);
-        }
-        cycle.sort();
-        cycle
-    };
-    let wires = |cells: &[(usize, usize)]| -> Vec<Wire> {
-        cells.iter().map(|&(row, col)| Wire { row, col }).collect()
-    };
-    assert_eq!(cycle_of(1, 2), wires(&[(1, 2), (3, 0)]));
-    assert_eq!(cycle_of(2, 1), wires(&[(2, 1), (2, 2), (3, 1), (3, 2)]));
-}
-
-#[test]
-fn polynomials_rot_create_rot() {
-    // A right rotation by 3 is a left one by 61.
-    let (next, gates) = CircuitGate::<Fp>::create_rot(0, 3, RotMode::Right);
-    assert_eq!(next, 3);
-    assert_eq!(gates[0].coeffs, vec![Fp::from_u64(2).pow(61)]);
-}
-
-#[test]
-fn polynomials_rot_extend_rot() {
-    // The excess on the Rot64 row is wired to the second range check.
-    let mut gates = vec![CircuitGate::<Fp>::new(
-        GateType::Zero,
-        Wire::for_row(0),
-        vec![],
-    )];
-    let next = CircuitGate::extend_rot(&mut gates, 5, RotMode::Left, 0);
-    assert_eq!(next, 4);
-    assert_eq!(gates[1].wires[2], Wire { row: 3, col: 0 });
-}
-
-#[test]
 fn constraints_connect_connect_64bit() {
     // Kimchi's three swaps: the third joins two cells already on one
     // cycle and splits it, so (1, 1) is left alone and only (1, 2) is
@@ -1484,21 +1479,6 @@ fn constraints_connect_connect_64bit() {
     assert_eq!(gates[1].wires[1], Wire { row: 1, col: 1 });
     assert_eq!(gates[1].wires[2], Wire { row: 0, col: 0 });
     assert_eq!(gates[0].wires[0], Wire { row: 1, col: 2 });
-}
-
-#[test]
-fn polynomials_rot_extend_rot_witness() {
-    // Three rows; the rotated word in column 1 of the first.
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
-    extend_rot(&mut witness, 0x8000_0000_0000_0001, 1, RotMode::Left).unwrap();
-    assert_eq!(witness[0].len(), 4);
-    assert_eq!(witness[1][1], Fp::from_u64(3));
-    assert!(extend_rot(&mut witness, 1, 65, RotMode::Left).is_err());
-}
-
-#[test]
-fn polynomials_rot_rot_mode() {
-    assert_ne!(RotMode::Left, RotMode::Right);
 }
 
 /// A commitment of one chunk.
@@ -1609,280 +1589,4 @@ fn transcript_after_gamma() {
     let mut rng = Arkworks(SplitMix64(3));
     let (_, tape) = witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
     assert!(matches!(tape, AfterGamma::WithoutLookup(_)));
-}
-
-#[test]
-fn polynomials_bit_length() {
-    assert_eq!(bit_length(Fp::ZERO), 1);
-    assert_eq!(bit_length(Fp::from_u64(1 << 40)), 41);
-}
-
-#[test]
-fn polynomials_range_check_create_multi_range_check() {
-    // RC0, RC0, RC1, Zero; the high limbs wired to the Zero row's 3-6.
-    let (next, gates) = CircuitGate::<Fp>::create_multi_range_check(2);
-    assert_eq!(next, 6);
-    let types: Vec<GateType> = gates.iter().map(|g| g.typ).collect();
-    let expected = [
-        GateType::RangeCheck0,
-        GateType::RangeCheck0,
-        GateType::RangeCheck1,
-        GateType::Zero,
-    ];
-    assert_eq!(types, expected);
-    // Not compact: the coefficient is zero (trimmed off the derived row).
-    assert!(gates[1].coeffs.iter().all(|c| *c == Fp::ZERO));
-    // The two high limbs of each RangeCheck0 row wired to columns 3-6 of
-    // the Zero row.
-    for (from, to) in [
-        ((2, 1), (5, 3)),
-        ((2, 2), (5, 4)),
-        ((3, 1), (5, 5)),
-        ((3, 2), (5, 6)),
-    ] {
-        let start = Wire {
-            row: from.0,
-            col: from.1,
-        };
-        let mut at = gates[from.0 - 2].wires[from.1];
-        let mut cycle = vec![start];
-        while at != start {
-            cycle.push(at);
-            at = gates[at.row - 2].wires[at.col];
-        }
-        assert!(
-            cycle.contains(&Wire {
-                row: to.0,
-                col: to.1
-            }),
-            "{from:?}: {cycle:?}"
-        );
-    }
-}
-
-#[test]
-fn polynomials_range_check_create_compact_multi_range_check() {
-    let (_, gates) = CircuitGate::<Fp>::create_compact_multi_range_check(0);
-    assert_eq!(gates[1].coeffs, vec![Fp::ONE]);
-}
-
-#[test]
-fn polynomials_range_check_extend_multi_range_check() {
-    let mut gates = Vec::new();
-    let mut row = 0;
-    CircuitGate::<Fp>::extend_multi_range_check(&mut gates, &mut row);
-    CircuitGate::<Fp>::extend_compact_multi_range_check(&mut gates, &mut row);
-    assert_eq!((row, gates.len()), (8, 8));
-}
-
-#[test]
-fn polynomials_range_check_create_range_check() {
-    let mut gates = Vec::new();
-    let mut row = 0;
-    CircuitGate::<Fp>::extend_range_check(&mut gates, &mut row);
-    let (next, single) = CircuitGate::<Fp>::create_range_check(1);
-    assert_eq!((row, next), (1, 2));
-    assert_eq!(single[0].typ, GateType::RangeCheck0);
-}
-
-#[test]
-fn polynomials_range_check_witnesses() {
-    // Four rows for the multi checks, one for the single; the values in
-    // column 0 as Kimchi lays them out (compact: v2, v0, v1).
-    let (v0, v1, v2) = (Fp::from_u64(3), Fp::from_u64(5), Fp::from_u64(7));
-    let multi = create_multi(v0, v1, v2).unwrap();
-    assert_eq!([multi[0][0], multi[0][1], multi[0][2]], [v0, v1, v2]);
-    assert_eq!(create_multi_limbs(&[v0, v1, v2]).unwrap(), multi);
-    let two_88 = Fp::from_u64(1 << 44) * Fp::from_u64(1 << 44);
-    let compact = create_multi_compact(v0 + two_88 * v1, v2).unwrap();
-    assert_eq!([compact[0][0], compact[0][1], compact[0][2]], [v2, v0, v1]);
-    assert_eq!(
-        create_multi_compact_limbs(&[v0 + two_88 * v1, v2]).unwrap(),
-        compact
-    );
-    assert_eq!(create_range_check_witness(v0).unwrap()[0], vec![v0]);
-    let mut w: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| Vec::new());
-    extend_multi(&mut w, v0, v1, v2).unwrap();
-    extend_multi_limbs(&mut w, &[v0, v1, v2]).unwrap();
-    extend_multi_compact(&mut w, v0, v2).unwrap();
-    extend_multi_compact_limbs(&mut w, &[v0, v2]).unwrap();
-    extend_range_check_witness(&mut w, v0).unwrap();
-    assert_eq!(w[0].len(), 17);
-}
-
-#[test]
-fn polynomials_generic_testing_create_circuit() {
-    // 2 public rows, 10 add/mul rows, 10 constant rows.
-    let gates = create_circuit::<Fp>(0, 2);
-    assert_eq!(gates.len(), 22);
-    assert_eq!(gates[2].coeffs[1], Fp::from_u64(3));
-    assert_eq!(gates[2].coeffs[8], Fp::from_u64(2));
-    assert_eq!(gates[21].coeffs[9], -Fp::from_u64(5));
-}
-
-#[test]
-fn polynomials_generic_testing_fill_in_witness() {
-    // 11 + 3 23 = 80 and 2 11 23 = 506; every row satisfies its gate.
-    let gates = create_circuit::<Fp>(0, 1);
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; gates.len()]);
-    fill_in_witness(0, &mut witness, &[Fp::from_u64(9)]);
-    assert_eq!(witness[2][1], Fp::from_u64(80));
-    assert_eq!(witness[5][1], Fp::from_u64(506));
-    for (row, gate) in gates.iter().enumerate() {
-        assert_eq!(
-            gate.verify_generic(row, &witness, &[Fp::from_u64(9)]),
-            Ok(())
-        );
-    }
-}
-
-#[test]
-fn polynomials_not_extend_not_gadget_unchecked_length() {
-    // Three NOTs: a double row and a single one, wired to the all-ones cell.
-    let mut gates = vec![CircuitGate::<Fp>::new(
-        GateType::Generic,
-        Wire::for_row(0),
-        vec![],
-    )];
-    let next = CircuitGate::extend_not_gadget_unchecked_length(&mut gates, 3, 0);
-    assert_eq!(next, 3);
-    // Coefficients past the end are zero (the derived rows trim them).
-    let coefficient = |row: usize, i: usize| gates[row].coeffs.get(i).copied().unwrap_or(Fp::ZERO);
-    assert_eq!(coefficient(1, 1), -Fp::ONE);
-    assert_eq!(coefficient(1, 6), -Fp::ONE);
-    assert_eq!(coefficient(2, 6), Fp::ZERO);
-    // The all-ones cell and the three left inputs on one cycle.
-    let start = Wire { row: 0, col: 0 };
-    let mut cycle = vec![start];
-    let mut at = gates[0].wires[0];
-    while at != start {
-        cycle.push(at);
-        at = gates[at.row].wires[at.col];
-    }
-    cycle.sort();
-    let expected = [(0, 0), (1, 0), (1, 3), (2, 0)].map(|(row, col)| Wire { row, col });
-    assert_eq!(cycle, expected);
-}
-
-#[test]
-fn polynomials_not_extend_not_gadget_checked_length() {
-    // A XOR of 16 bits whose second input is the all-ones cell.
-    let mut gates = vec![CircuitGate::<Fp>::new(
-        GateType::Generic,
-        Wire::for_row(0),
-        vec![],
-    )];
-    let next = CircuitGate::extend_not_gadget_checked_length(&mut gates, 0, 16);
-    assert_eq!(next, 3);
-    assert_eq!(gates[1].typ, GateType::Xor16);
-    assert_eq!(gates[0].wires[0], Wire { row: 1, col: 1 });
-}
-
-#[test]
-fn polynomials_not_extend_not_witness_checked_length() {
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| Vec::new());
-    extend_not_witness_checked_length(&mut witness, Fp::from_u64(0b1010), Some(4)).unwrap();
-    assert_eq!(witness[2][0], Fp::from_u64(0b0101));
-}
-
-#[test]
-fn polynomials_not_extend_not_witness_unchecked_length() {
-    // ones - x, two per row; an input wider than `bits` is refused.
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| Vec::new());
-    let inputs = [Fp::from_u64(1), Fp::from_u64(2), Fp::from_u64(3)];
-    extend_not_witness_unchecked_length(&mut witness, &inputs, 4).unwrap();
-    assert_eq!(witness[0].len(), 2);
-    assert_eq!(witness[5][0], Fp::from_u64(13));
-    let error = extend_not_witness_unchecked_length(&mut witness, &[Fp::from_u64(32)], 4);
-    assert_eq!(
-        error,
-        Err(String::from(
-            "Bits must be greater or equal than the inputs length: 4 < 6"
-        ))
-    );
-}
-
-#[test]
-fn polynomials_and_extend_and() {
-    // The XOR of 16 bits, its zero row, then the Generic AND row.
-    let mut gates = Vec::new();
-    let next = CircuitGate::<Fp>::extend_and(&mut gates, 2);
-    assert_eq!(next, 3);
-    assert_eq!(gates[2].typ, GateType::Generic);
-    assert_eq!(gates[2].coeffs[7], -Fp::from_u64(2));
-}
-
-#[test]
-fn polynomials_and_create_and_witness() {
-    // a + b = xor + 2 and: [a, b, sum, sum, xor, and] on the last row.
-    let (a, b) = (Fp::from_u64(0b1100), Fp::from_u64(0b1010));
-    let witness = create_and_witness(a, b, 1).unwrap();
-    let row = witness[0].len() - 1;
-    assert_eq!(witness[4][row], Fp::from_u64(0b0110));
-    assert_eq!(witness[5][row], Fp::from_u64(0b1000));
-    assert!(create_and_witness(Fp::from_u64(1 << 9), b, 1).is_err());
-}
-
-#[test]
-fn polynomials_and_extend_and_witness() {
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
-    extend_and_witness(&mut witness, Fp::ONE, Fp::ONE, 2).unwrap();
-    assert_eq!(witness[0].len(), 4);
-    assert_eq!(witness[5][3], Fp::ONE);
-}
-
-#[test]
-fn polynomials_endomul_scalar_gen_witness() {
-    // The 16-bit challenge 1 is one row, and stands for the scalar `b = 1`
-    // (`a = 0`); a width that is not a multiple of 16 is refused.
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![]);
-    let lambda = Vesta::lambda();
-    let scalar = endomul_scalar_witness(&mut witness, Fp::ONE, lambda, 16).unwrap();
-    assert_eq!(witness[0].len(), 1);
-    assert_eq!(
-        scalar,
-        ScalarChallenge(Fp::ONE).to_field_with_length(16, lambda)
-    );
-    assert!(endomul_scalar_witness(&mut witness, Fp::ONE, lambda, 12).is_err());
-}
-
-#[test]
-fn polynomials_endosclmul_gen_witness_and_result() {
-    // Sixteen zero bits: four EndoMul rows, then the accumulator and n = 0
-    // on the fifth; too few rows, or a width not a multiple of 16, refused.
-    let t = Projective::<Pallas>::generator();
-    let start = t.endomorphism() + t;
-    let start = (start + start).to_affine();
-    let acc0 = (start.x().unwrap(), start.y().unwrap());
-    let g = t.to_affine();
-    let base = (g.x().unwrap(), g.y().unwrap());
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 5]);
-    let bits = [false; 16];
-    let result: EndoMulResult<Fp> =
-        endomul_witness(&mut witness, 0, Pallas::beta(), base, &bits, acc0).unwrap();
-    assert_eq!(result.n, Fp::ZERO);
-    assert_eq!((witness[4][4], witness[5][4]), result.acc);
-    let mut short: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 4]);
-    assert!(endomul_witness(&mut short, 0, Pallas::beta(), base, &bits, acc0).is_err());
-    assert!(endomul_witness(&mut witness, 0, Pallas::beta(), base, &bits[..12], acc0).is_err());
-}
-
-#[test]
-fn polynomials_varbasemul_witness_and_result() {
-    // Five one bits from A = 2 T: two rows, n = 31 and A' = (1 + 2^5 + 62) T;
-    // a length that is not supported, or too few rows, refused.
-    let t = Projective::<Pallas>::generator();
-    let point = |p: Projective<Pallas>| {
-        let a = p.to_affine();
-        (a.x().unwrap(), a.y().unwrap())
-    };
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
-    let bits = [true; 5];
-    let result: VarbaseMulResult<Fp> =
-        varbasemul_witness(&mut witness, 0, point(t), &bits, point(t + t)).unwrap();
-    assert_eq!(result.n, Fp::from_u64(31));
-    assert_eq!(result.acc, point(t * Fq::from_u64(95)));
-    assert!(varbasemul_witness(&mut witness, 0, point(t), &bits[..4], point(t + t)).is_err());
-    let mut short: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 1]);
-    assert!(varbasemul_witness(&mut short, 0, point(t), &bits, point(t + t)).is_err());
 }

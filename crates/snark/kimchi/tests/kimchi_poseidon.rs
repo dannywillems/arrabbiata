@@ -1,6 +1,8 @@
 //! Kimchi's `kimchi/src/tests/poseidon.rs`, test by test, with the same
-//! inputs and outputs: the permutation of `[1, 2, 3]` on Kimchi's rows (ours
-//! derived from our Poseidon gadget), its witness and the proof's verdict;
+//! inputs and outputs. Each circuit is one typed gadget, our Poseidon
+//! permutations each on its own rows: the permutation of `[1, 2, 3]`, its
+//! rows (the symbolic run), its witness (the numeric run), the proof's
+//! verdict;
 //! and the circuit of one block against the circuit of two, each proof
 //! verified by its own verifier index and not by the other's
 //! (`gate_tests/`).
@@ -8,39 +10,83 @@
 mod gate_tests;
 mod kimchi_runs;
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, Unit};
 use arrabbiata_kimchi::{
-    constraints::{COLUMNS, CircuitGate, ConstraintSystem, Wire},
-    polynomials::poseidon::generate_witness,
+    constraints::{COLUMNS, CircuitGate, ConstraintSystem},
     prover::{ProverIndex, prove},
     rng::{Arkworks, SplitMix64},
     srs::Srs,
     verifier::verify,
 };
+use arrabbiata_kimchi_gadgets::poseidon::{PoseidonPermutation, ROWS_PER_PERMUTATION};
 use arrabbiata_pasta::{Fp, Vesta};
-use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
-use gate_tests::{case, debug, prove_and_verify, rows, vesta_gates};
+use arrabbiata_poseidon::kimchi::{KimchiPoseidon, KimchiSponge, WIDTH, pallas_base, vesta_base};
+use gate_tests::{case, debug, kimchi_rows, kimchi_witness, prove_and_verify, rows, vesta_gates};
 
-/// The rows of one permutation and its output row.
-const ROWS_PER: usize = 12;
+/// One permutation of the input in columns 0-2 of its first row, its
+/// output on the Zero row after its rounds.
+#[derive(Clone, Copy, Debug)]
+struct Permutation<'a, F> {
+    poseidon: &'a KimchiPoseidon<F>,
+}
 
-/// Kimchi's `build_poseidon_instance`: one permutation per input, each on
-/// its own 12 rows, the first and last rows wired to themselves.
-fn instance(inputs: &[[Fp; 3]]) -> (Vec<CircuitGate<Fp>>, [Vec<Fp>; COLUMNS]) {
+impl<F: PrimeField> TypedGadget<F> for Permutation<'_, F> {
+    type Input = Array<Scalar, WIDTH>;
+    type Output = Array<Scalar, WIDTH>;
+    const NAME: &'static str = "kimchi-poseidon-instance";
+    const ROWS: usize = ROWS_PER_PERMUTATION + 1;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        input: Of<Array<Scalar, WIDTH>, E::Var>,
+    ) -> Of<Array<Scalar, WIDTH>, E::Var> {
+        let state = core::array::from_fn(|k| env.advice(Cell::new(k, 0), [&input[k]], |[v]| v));
+        env.call(
+            &PoseidonPermutation {
+                poseidon: self.poseidon,
+            },
+            state,
+        )
+    }
+}
+
+/// Kimchi's `build_poseidon_instance`: `P` permutations, each on its own
+/// rows. Input the `P` inputs.
+#[derive(Clone, Copy, Debug)]
+struct Instance<'a, F, const P: usize> {
+    poseidon: &'a KimchiPoseidon<F>,
+}
+
+impl<F: PrimeField, const P: usize> TypedGadget<F> for Instance<'_, F, P> {
+    type Input = Array<Array<Scalar, WIDTH>, P>;
+    type Output = Unit;
+    const NAME: &'static str = "kimchi-poseidon-test";
+    const ROWS: usize = P * (ROWS_PER_PERMUTATION + 1);
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        inputs: Of<Self::Input, E::Var>,
+    ) -> Of<Unit, E::Var> {
+        let permutation = Permutation {
+            poseidon: self.poseidon,
+        };
+        for input in inputs {
+            env.call(&permutation, input);
+        }
+    }
+}
+
+/// The rows and the witness of the permutations of `inputs`.
+fn instance<const P: usize>(inputs: [[Fp; 3]; P]) -> (Vec<CircuitGate<Fp>>, [Vec<Fp>; COLUMNS]) {
     let poseidon = pallas_base();
-    let mut gates = Vec::new();
-    for i in 0..inputs.len() {
-        let row = i * ROWS_PER;
-        let ends = [Wire::for_row(row), Wire::for_row(row + ROWS_PER - 1)];
-        let (rows, _) = CircuitGate::create_poseidon_gadget(row, ends, &poseidon);
-        gates.extend(rows);
-    }
-    let mut witness: [Vec<Fp>; COLUMNS] =
-        core::array::from_fn(|_| vec![Fp::ZERO; inputs.len() * ROWS_PER]);
-    for (i, input) in inputs.iter().enumerate() {
-        generate_witness(i * ROWS_PER, &poseidon, &mut witness, *input).unwrap();
-    }
-    (gates, witness)
+    let gadget = Instance::<Fp, P> {
+        poseidon: &poseidon,
+    };
+    let n = <Instance<Fp, P> as TypedGadget<Fp>>::ROWS;
+    (kimchi_rows(&gadget, n), kimchi_witness(&gadget, &inputs, n))
 }
 
 #[test]
@@ -48,7 +94,7 @@ fn test_poseidon() {
     let case = case("test_poseidon");
     let input: [Fp; 3] = case.elements("input").try_into().unwrap();
     assert_eq!(input, [1, 2, 3].map(Fp::from_u64));
-    let (gates, witness) = instance(&[input]);
+    let (gates, witness) = instance([input]);
     gate_tests::assert_kimchi_rows(&gates, &case.gates[0]);
     assert_eq!(rows(&witness), case.witnesses[0]);
     let result = prove_and_verify(gates, witness, vec![]);
@@ -65,8 +111,8 @@ fn index(gates: Vec<CircuitGate<Fp>>, srs: Srs<Vesta>) -> ProverIndex<Vesta> {
 fn test_poseidon_in_circuit_extra_zero_block() {
     let case = case("test_poseidon_in_circuit_extra_zero_block");
     let one_two_three = [1, 2, 3].map(Fp::from_u64);
-    let (gates1, witness1) = instance(&[one_two_three]);
-    let (gates2, witness2) = instance(&[one_two_three, [Fp::ZERO; 3]]);
+    let (gates1, witness1) = instance([one_two_three]);
+    let (gates2, witness2) = instance([one_two_three, [Fp::ZERO; 3]]);
     assert_eq!(gates1.len(), case.number("rows1"));
     assert_eq!(gates2.len(), case.number("rows2"));
     gate_tests::assert_kimchi_rows(&gates2, &case.gates[0]);

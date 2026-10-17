@@ -1,57 +1,137 @@
 //! Kimchi's `kimchi/src/tests/xor.rs`, test by test, with the same inputs
-//! and outputs: each test builds Kimchi's rows with our constructors, the
-//! witness with our XOR gadget, and checks the witness and every verdict
-//! against Kimchi's run of the same test (`gate_tests/`).
+//! and outputs. Each test's circuit is a typed gadget (our XOR, its inputs
+//! placed or public): its rows are the symbolic run, its witness the
+//! numeric run, and both are checked against Kimchi's run of the same test
+//! (`gate_tests/`), with every verdict.
 
 mod gate_tests;
 mod kimchi_runs;
 
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Placed, Scalar, TypedGadget};
 use arrabbiata_kimchi::{
-    constraints::{COLUMNS, CircuitGate, Connect, ConstraintSystem, Wire},
+    constraints::{COLUMNS, CircuitGate, ConstraintSystem, GateType, Wire},
     gates::Gates,
-    polynomials::{
-        generic::GenericGateSpec,
-        xor::{create_xor_witness, extend_xor_witness},
-    },
 };
-use arrabbiata_kimchi_gadgets::generic::GenericSpec;
+use arrabbiata_kimchi_gadgets::{
+    generic::PublicInput,
+    xor::{Xor, xor_table},
+};
 use arrabbiata_pasta::{Fp, Fq};
-use gate_tests::{Case, case, debug, pallas_gates, prove_and_verify, rows, vesta_gates};
+use gate_tests::{
+    Case, ForBits, case, debug, for_bits, kimchi_rows, kimchi_witness, pallas_gates,
+    prove_and_verify, rows, vesta_gates,
+};
 
-/// Kimchi's `setup_xor` on the inputs of `case`: the constraint system
-/// and our witness, which is Kimchi's.
-fn setup<F>(case: &Case) -> (ConstraintSystem<F>, [Vec<F>; COLUMNS])
+/// The XOR of two words of `B` bits, their cells in columns 0 and 1 of the
+/// first row: Kimchi's `create_xor_gadget`.
+fn xor<F: PrimeField, const B: usize>() -> Placed<Xor<F, B>> {
+    Placed {
+        gadget: Xor { table: xor_table() },
+        cells: vec![Cell::new(0, 0), Cell::new(1, 0)],
+    }
+}
+
+/// Two public inputs on rows 0 and 1, then their XOR: the circuit of
+/// Kimchi's `test_extend_xor` and `test_xor_finalization`.
+#[derive(Clone, Debug)]
+struct PublicXor<F, const B: usize>(Xor<F, B>);
+
+impl<F: PrimeField, const B: usize> TypedGadget<F> for PublicXor<F, B> {
+    type Input = Array<Scalar, 2>;
+    type Output = Scalar;
+    const NAME: &'static str = "public-xor";
+    const ROWS: usize = 2 + Xor::<F, B>::ROWS;
+
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        words: Of<Array<Scalar, 2>, E::Var>,
+    ) -> Of<Scalar, E::Var> {
+        let [a, b] = words;
+        let a = env.call(&PublicInput, a);
+        let b = env.call(&PublicInput, b);
+        env.call(&self.0, [a, b])
+    }
+}
+
+/// The rows and witness of the XOR of `input` on `bits` bits.
+struct XorCase<F> {
+    input: [F; 2],
+    public: bool,
+}
+
+impl<F: PrimeField> ForBits for XorCase<F> {
+    type Output = (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS]);
+
+    fn call<const B: usize>(self) -> Self::Output {
+        if self.public {
+            let gadget = PublicXor(Xor::<F, B> { table: xor_table() });
+            let rows = PublicXor::<F, B>::ROWS;
+            (
+                kimchi_rows(&gadget, rows),
+                kimchi_witness(&gadget, &self.input, rows),
+            )
+        } else {
+            let gadget = xor::<F, B>();
+            let rows = Xor::<F, B>::ROWS;
+            (
+                kimchi_rows(&gadget, rows),
+                kimchi_witness(&gadget, &self.input, rows),
+            )
+        }
+    }
+}
+
+/// Kimchi's `setup_xor` on the inputs of `case`: the rows and the witness,
+/// which is Kimchi's.
+fn setup<F>(case: &Case, public: bool) -> (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS])
 where
     F: PrimeField + TwoAdicField,
 {
-    let [in1, in2]: [F; 2] = case.elements("in").try_into().unwrap();
+    let input: [F; 2] = case.elements("in").try_into().unwrap();
     let bits = case.number("bits");
-    let mut gates = Vec::new();
-    CircuitGate::<F>::extend_xor_gadget(&mut gates, bits);
-    let cs = ConstraintSystem::create(gates).build().unwrap();
-    let witness = create_xor_witness(in1, in2, bits).unwrap();
-    assert_eq!(rows(&witness), case.witnesses[0]);
-    (cs, witness)
+    let (gates, witness) = for_bits(bits, XorCase { input, public });
+    if let Some(kimchi) = case.witnesses.first() {
+        assert_eq!(&rows(&witness), kimchi);
+    }
+    (gates, witness)
 }
 
-/// Kimchi's `test_xor`: every row's verdict is Kimchi's.
-fn test_xor<F, G>(name: &str, gates: &G) -> [Vec<F>; COLUMNS]
+/// Every row's verdict on `witness` is Kimchi's.
+fn verify_rows<F, G>(
+    case: &Case,
+    gates: Vec<CircuitGate<F>>,
+    public: usize,
+    witness: &[Vec<F>; COLUMNS],
+    kimchi: &G,
+) where
+    F: PrimeField + TwoAdicField,
+    G: Gates<F>,
+{
+    let cs = ConstraintSystem::create(gates)
+        .public(public)
+        .build()
+        .unwrap();
+    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
+        let ours = gate.verify_witness(row, witness, kimchi);
+        assert_eq!(
+            debug(&ours),
+            case.verdict(&format!("row{row}")),
+            "row {row}"
+        );
+    }
+}
+
+/// Kimchi's `test_xor`.
+fn test_xor<F, G>(name: &str, kimchi: &G) -> [Vec<F>; COLUMNS]
 where
     F: PrimeField + TwoAdicField,
     G: Gates<F>,
 {
     let case = case(name);
-    let (cs, witness) = setup::<F>(&case);
-    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
-        let ours = gate.verify_witness(row, &witness, gates);
-        assert_eq!(
-            debug(&ours),
-            case.verdict(&format!("row{row}")),
-            "{name} row {row}"
-        );
-        assert_eq!(ours, Ok(()));
-    }
+    let (gates, witness) = setup::<F>(&case, false);
+    verify_rows(&case, gates, 0, &witness, kimchi);
     witness
 }
 
@@ -62,12 +142,8 @@ fn two_to(bits: u64) -> Fp {
 #[test]
 fn test_prove_and_verify_xor() {
     let case = case("test_prove_and_verify_xor");
-    let [in1, in2]: [Fp; 2] = case.elements("in").try_into().unwrap();
-    let bits = case.number("bits");
-    let mut gates = Vec::new();
-    CircuitGate::<Fp>::extend_xor_gadget(&mut gates, bits);
-    let witness = create_xor_witness(in1, in2, bits).unwrap();
-    assert_eq!(rows(&witness), case.witnesses[0]);
+    let (gates, witness) = setup::<Fp>(&case, false);
+    gate_tests::assert_kimchi_rows(&gates, &case.gates[0]);
     let result = prove_and_verify(gates, witness, vec![]);
     assert_eq!(debug(&result), case.verdict("prove"));
 }
@@ -128,11 +204,12 @@ fn test_xor128_random() {
 #[test]
 fn test_bad_xor_decompsition() {
     let case = case("test_bad_xor_decompsition");
-    let (cs, mut witness) = setup::<Fp>(&case);
-    let gates = vesta_gates();
+    let (gates, mut witness) = setup::<Fp>(&case, false);
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let kimchi = vesta_gates();
     for col in 0..COLUMNS {
         witness[col][0] = witness[col][0] + Fp::ONE;
-        let ours = cs.gates[0].verify_witness(0, &witness, &gates);
+        let ours = cs.gates[0].verify_witness(0, &witness, &kimchi);
         assert_eq!(
             debug(&ours),
             case.verdict(&format!("col{col}")),
@@ -140,58 +217,21 @@ fn test_bad_xor_decompsition() {
         );
         witness[col][0] = witness[col][0] - Fp::ONE;
     }
-    let ours = cs.gates[0].verify_witness(0, &witness, &gates);
+    let ours = cs.gates[0].verify_witness(0, &witness, &kimchi);
     assert_eq!(debug(&ours), case.verdict("undone"));
-}
-
-/// Two public rows wired to the XOR's inputs, then the XOR of `bits` bits.
-fn public_xor(bits: usize) -> Vec<CircuitGate<Fp>> {
-    let mut gates: Vec<CircuitGate<Fp>> = (0..2)
-        .map(|row| {
-            CircuitGate::create_generic_gadget(Wire::for_row(row), GenericGateSpec::Pub, None)
-        })
-        .collect();
-    CircuitGate::<Fp>::extend_xor_gadget(&mut gates, bits);
-    gates.connect_cell_pair((0, 0), (2, 0));
-    gates.connect_cell_pair((1, 0), (2, 1));
-    gates
-}
-
-/// The two public rows holding the inputs, then the XOR's witness.
-fn public_witness(in1: Fp, in2: Fp, bits: usize) -> [Vec<Fp>; COLUMNS] {
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
-    witness[0][0] = in1;
-    witness[0][1] = in2;
-    extend_xor_witness(&mut witness, in1, in2, bits).unwrap();
-    witness
 }
 
 #[test]
 fn test_extend_xor() {
     let case = case("test_extend_xor");
-    let [in1, in2]: [Fp; 2] = case.elements("in").try_into().unwrap();
-    let bits = case.number("bits");
-    let cs = ConstraintSystem::create(public_xor(bits))
-        .public(2)
-        .build()
-        .unwrap();
-    let witness = public_witness(in1, in2, bits);
-    assert_eq!(rows(&witness), case.witnesses[0]);
-    let gates = vesta_gates();
-    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
-        let ours = gate.verify_witness(row, &witness, &gates);
-        assert_eq!(debug(&ours), case.verdict(&format!("row{row}")));
-    }
+    let (gates, witness) = setup::<Fp>(&case, true);
+    verify_rows(&case, gates, 2, &witness, &vesta_gates());
 }
 
 #[test]
 fn test_bad_xor() {
     let case = case("test_bad_xor");
-    let [in1, in2]: [Fp; 2] = case.elements("in").try_into().unwrap();
-    let bits = case.number("bits");
-    let mut gates = Vec::new();
-    CircuitGate::<Fp>::extend_xor_gadget(&mut gates, bits);
-    let mut witness = create_xor_witness(in1, in2, bits).unwrap();
+    let (gates, mut witness) = setup::<Fp>(&case, false);
     witness[2][0] = Fp::ZERO;
     for i in 1..=4 {
         witness[COLUMNS - i][0] = Fp::ZERO;
@@ -205,44 +245,32 @@ fn test_xor_finalization() {
     let case = case("test_xor_finalization");
     let two_64 = Fp::from_u64(1 << 32) * Fp::from_u64(1 << 32);
     let word = |hi: u64, lo: u64| Fp::from_u64(hi) * two_64 + Fp::from_u64(lo);
-    let in1 = word(0xDC81_1727_DAF2_2EC1, 0x5927_D6AA_275F_406B);
-    let in2 = word(0xA4F4_417A_F072_DF90, 0x16A1_EAB4_58DA_80D1);
-    let gates = public_xor(128);
-    let witness = public_witness(in1, in2, 128);
+    let input = [
+        word(0xDC81_1727_DAF2_2EC1, 0x5927_D6AA_275F_406B),
+        word(0xA4F4_417A_F072_DF90, 0x16A1_EAB4_58DA_80D1),
+    ];
+    let (gates, witness) = for_bits(
+        128,
+        XorCase {
+            input,
+            public: true,
+        },
+    );
     assert_eq!(rows(&witness), case.witnesses[0]);
-    let cs = ConstraintSystem::create(gates.clone())
-        .public(2)
-        .build()
-        .unwrap();
-    let kimchi = vesta_gates();
-    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
-        let ours = gate.verify_witness(row, &witness, &kimchi);
-        assert_eq!(debug(&ours), case.verdict(&format!("row{row}")));
-    }
+    verify_rows(&case, gates.clone(), 2, &witness, &vesta_gates());
     let public = vec![witness[0][0], witness[0][1]];
     let result = prove_and_verify(gates, witness, public);
     assert_eq!(debug(&result), case.verdict("prove"));
 }
 
-/// The XOR's last row: the zero constant, its three first cells on one
-/// copy cycle (in whatever order the derivation writes it).
+/// Not one of Kimchi's tests: the XOR's last row is the zero constant
+/// (Generic, coefficient 1), its three first cells on one copy cycle, and
+/// a public input is presented as Kimchi's Generic row of coefficient 1.
 #[test]
-fn the_last_row_is_a_zero_constant() {
-    let (_, gates) = CircuitGate::<Fp>::create_xor_gadget(0, 16);
-    let expected = CircuitGate::create_generic_gadget(
-        Wire::for_row(1),
-        GenericGateSpec::Spec(GenericSpec::Const(Fp::ZERO)),
-        None,
-    );
-    assert_eq!(gates[1].typ, expected.typ);
-    let trimmed = |c: &[Fp]| {
-        let mut c = c.to_vec();
-        while c.last() == Some(&Fp::ZERO) {
-            c.pop();
-        }
-        c
-    };
-    assert_eq!(trimmed(&gates[1].coeffs), trimmed(&expected.coeffs));
+fn the_last_row_is_a_zero_constant_and_public_rows_are_generic() {
+    let gates = kimchi_rows(&xor::<Fp, 16>(), 2);
+    assert_eq!(gates[1].typ, GateType::Generic);
+    assert_eq!(gates[1].coeffs, vec![Fp::ONE]);
     let start = Wire { row: 1, col: 0 };
     let mut cycle = vec![start];
     let mut at = gates[1].wires[0];
@@ -251,6 +279,9 @@ fn the_last_row_is_a_zero_constant() {
         at = gates[at.row].wires[at.col];
     }
     cycle.sort();
-    let expected_cycle: Vec<Wire> = Wire::for_row(1)[..3].to_vec();
-    assert_eq!(cycle, expected_cycle);
+    assert_eq!(cycle, Wire::for_row(1)[..3].to_vec());
+    let public = kimchi_rows(&PublicXor(Xor::<Fp, 16> { table: xor_table() }), 4);
+    let first = (public[0].typ, public[0].coeffs.clone());
+    assert_eq!(first, (GateType::Generic, vec![Fp::ONE]));
+    assert_eq!(public[0].wires[0], Wire { row: 2, col: 0 });
 }
