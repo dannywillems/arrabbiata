@@ -24,6 +24,8 @@
 //!   `zeta`), randomness a parameter ([`rng`]);
 //! - [`srs`]: Kimchi's SRS, hashed to the curve by Kimchi's group map, and
 //!   chunked commitments;
+//! - [`verifier`]: the verifier, replaying the transcript and checking the
+//!   opening;
 //! - [`verifier_index`]: the commitments to the fixed columns, masked as
 //!   Kimchi masks them.
 
@@ -39,4 +41,5 @@ pub mod permutation;
 pub mod prover;
 pub mod rng;
 pub mod srs;
+pub mod verifier;
 pub mod verifier_index;

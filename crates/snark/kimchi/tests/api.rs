@@ -22,6 +22,7 @@ use arrabbiata_kimchi::{
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
+    verifier::{Claim, Oracles, VerifyError, oracles, verify},
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
@@ -717,4 +718,87 @@ fn lookup_verifier_index() {
     assert!(lookup.table_ids.is_none());
     assert!(lookup.lookup_selectors[1].is_some());
     assert!(lookup.lookup_selectors[0].is_none());
+}
+
+/// A proof of two satisfied Generic rows, with its index.
+fn proved() -> (ProverIndex<Vesta>, ProverProof<Vesta>, KimchiGates<Fp>) {
+    let gates: Vec<CircuitGate<Fp>> = (0..2)
+        .map(|row| {
+            let coeffs = vec![Fp::ONE, Fp::ONE, -Fp::ONE];
+            CircuitGate::new(GateType::Generic, Wire::for_row(row), coeffs)
+        })
+        .collect();
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(8));
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|c| {
+        let value = if c < 3 {
+            Fp::from_u64(c as u64 + 1)
+        } else {
+            Fp::ZERO
+        };
+        vec![value; 2]
+    });
+    let mut rng = Arkworks(SplitMix64(19));
+    let proof = prove(&index, witness, &[], &kimchi, (&base, &scalar), &mut rng).unwrap();
+    (index, proof, kimchi)
+}
+
+#[test]
+fn verifier_oracles() {
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let o: Oracles<Vesta, _> = oracles(
+        &index.verifier_index,
+        &index.srs,
+        &proof,
+        &[],
+        &kimchi,
+        (&base, &scalar),
+    )
+    .unwrap();
+    // ft(zeta w) is the prover's; ft(zeta) the verifier recomputes.
+    assert_eq!(o.zeta_omega, o.zeta * index.cs.domain.d1.generator());
+    let claims: &[Claim<Vesta>] = &o.evaluations;
+    // public, ft, z, 6 selectors, 15 + 15 + 6 columns.
+    assert_eq!(claims.len(), 3 + 6 + 15 + 15 + 6);
+    assert_eq!(claims[1].1[1], vec![proof.ft_eval1]);
+    // No public input: the public commitment is h.
+    assert_eq!(o.public_comm.chunks, vec![index.srs.h]);
+}
+
+#[test]
+fn verifier_accepts_and_refuses() {
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let sponges = (&base, &scalar);
+    let vi = &index.verifier_index;
+    let mut rng = Arkworks(SplitMix64(23));
+    assert_eq!(
+        verify(vi, &index.srs, &proof, &[], &kimchi, sponges, &mut rng),
+        Ok(())
+    );
+    let mut bad = proof.clone();
+    bad.proof.z2 = bad.proof.z2 + Fp::ONE;
+    let error = verify(vi, &index.srs, &bad, &[], &kimchi, sponges, &mut rng).unwrap_err();
+    assert_eq!(error, VerifyError::OpeningProof);
+    assert_eq!(error.to_string(), "the opening does not verify");
+    let public = [Fp::ONE];
+    let error = verify(vi, &index.srs, &proof, &public, &kimchi, sponges, &mut rng).unwrap_err();
+    assert_eq!(error, VerifyError::IncorrectPublicInputLength);
+    let mut short = proof.clone();
+    short.evals.z.zeta.push(Fp::ZERO);
+    let error = verify(vi, &index.srs, &short, &[], &kimchi, sponges, &mut rng).unwrap_err();
+    assert_eq!(error, VerifyError::IncorrectLength);
+    let mut extra = proof;
+    extra.prev_challenges = vec![arrabbiata_ipa::RecursionChallenge {
+        chals: vec![Fp::ONE; 3],
+        comm: index.srs.h,
+    }];
+    let error = verify(vi, &index.srs, &extra, &[], &kimchi, sponges, &mut rng).unwrap_err();
+    assert_eq!(error, VerifyError::IncorrectPrevChallengesLength);
 }

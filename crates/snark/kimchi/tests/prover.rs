@@ -14,14 +14,16 @@ use arrabbiata_kimchi::{
     constraints::{CircuitGate, ConstraintSystem, GateType, Wire},
     gates::KimchiGates,
     prover::{
-        PointEvaluations, ProverIndex, evaluation_round, permutation_round, prove, quotient_round,
-        witness_round,
+        OpeningProof, PointEvaluations, ProofEvaluations, ProverIndex, ProverProof,
+        evaluation_round, permutation_round, prove, quotient_round, witness_round,
     },
     rng::{Arkworks, Sampler, SplitMix64},
     srs::{PolyComm, Srs},
+    verifier::{VerifyError, oracles, verify},
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
+use blake2::{Blake2b512, Digest};
 
 /// Kimchi's output.
 const VECTORS: &str = include_str!("vectors/kimchi_prover.txt");
@@ -282,6 +284,39 @@ fn the_evaluation_round_is_kimchis() {
         ] {
             ours.push((label.to_string(), evaluation(p)));
         }
+        // The optional selectors, and the lookup evaluations (none here).
+        for (label, typ) in [
+            ("RangeCheck0", GateType::RangeCheck0),
+            ("RangeCheck1", GateType::RangeCheck1),
+            ("ForeignFieldAdd", GateType::ForeignFieldAdd),
+            ("ForeignFieldMul", GateType::ForeignFieldMul),
+            ("Xor16", GateType::Xor16),
+            ("Rot64", GateType::Rot64),
+        ] {
+            let value = e
+                .optional_selectors
+                .iter()
+                .find(|(t, _)| *t == typ)
+                .map_or_else(|| String::from("none"), |(_, p)| evaluation(p));
+            ours.push((label.to_string(), value));
+        }
+        for label in [
+            "lookup_aggregation",
+            "lookup_table",
+            "lookup_sorted0",
+            "lookup_sorted1",
+            "lookup_sorted2",
+            "lookup_sorted3",
+            "lookup_sorted4",
+            "runtime_lookup_table",
+            "runtime_lookup_table_selector",
+            "xor_lookup_selector",
+            "lookup_gate_lookup_selector",
+            "range_check_lookup_selector",
+            "foreign_field_mul_lookup_selector",
+        ] {
+            ours.push((label.to_string(), String::from("none")));
+        }
         assert_eq!(ours.len(), expected.len(), "{name}");
         for (label, value) in &ours {
             assert_eq!(&expected[label], value, "{name} {label}");
@@ -334,5 +369,416 @@ fn the_proofs_are_kimchis() {
         // The rest of the proof is the rounds', checked above.
         let comms = lines("comm", name);
         assert_eq!(comms["t"], comm(&proof.t_comm), "{name}");
+    }
+}
+
+/// A point from its affine coordinates, or the identity for `inf`.
+fn parse_point(words: &[&str]) -> (Projective<Vesta>, usize) {
+    if words[0] == "inf" {
+        (Projective::identity(), 1)
+    } else {
+        let p = Affine::<Vesta>::new(field::<Fq>(words[0]), field::<Fq>(words[1])).unwrap();
+        (p.to_projective(), 2)
+    }
+}
+
+/// A commitment from `k x y x y ...`.
+fn parse_comm(value: &str) -> PolyComm<Vesta> {
+    let words: Vec<&str> = value.split_whitespace().collect();
+    let k: usize = words[0].parse().unwrap();
+    let mut at = 1;
+    let mut chunks = Vec::with_capacity(k);
+    for _ in 0..k {
+        let (p, used) = parse_point(&words[at..]);
+        chunks.push(p);
+        at += used;
+    }
+    PolyComm { chunks }
+}
+
+/// Evaluations from `nz z... nw w...`.
+fn parse_evaluations(value: &str) -> PointEvaluations<Fp> {
+    let words: Vec<&str> = value.split_whitespace().collect();
+    let nz: usize = words[0].parse().unwrap();
+    let zeta = words[1..=nz].iter().map(|h| element(h)).collect();
+    let nw: usize = words[nz + 1].parse().unwrap();
+    let zeta_omega = words[nz + 2..nz + 2 + nw]
+        .iter()
+        .map(|h| element(h))
+        .collect();
+    PointEvaluations { zeta, zeta_omega }
+}
+
+/// Kimchi's proof of the tool's circuit `name`, read from the vectors.
+fn kimchis_proof(name: &str) -> ProverProof<Vesta> {
+    let comms = lines("comm", name);
+    let evals = lines("eval", name);
+    let e = |label: &str| parse_evaluations(&evals[label]);
+    let optional_selectors = [
+        ("RangeCheck0", GateType::RangeCheck0),
+        ("RangeCheck1", GateType::RangeCheck1),
+        ("ForeignFieldAdd", GateType::ForeignFieldAdd),
+        ("ForeignFieldMul", GateType::ForeignFieldMul),
+        ("Xor16", GateType::Xor16),
+        ("Rot64", GateType::Rot64),
+    ]
+    .iter()
+    .filter(|(label, _)| evals[*label] != "none")
+    .map(|(label, typ)| (*typ, e(label)))
+    .collect();
+    let opening = lines("opening", name);
+    let rounds = opening.keys().filter(|k| k.starts_with("lr")).count();
+    let lr = (0..rounds)
+        .map(|i| {
+            let words: Vec<&str> = opening[&format!("lr{i}")].split_whitespace().collect();
+            let (l, used) = parse_point(&words);
+            let (r, _) = parse_point(&words[used..]);
+            (l, r)
+        })
+        .collect();
+    let point = |label: &str| {
+        let words: Vec<&str> = opening[label].split_whitespace().collect();
+        parse_point(&words).0
+    };
+    let ft_eval1 = VECTORS
+        .lines()
+        .find(|l| l.starts_with(&format!("ft_eval1 {name} ")))
+        .unwrap()
+        .split_whitespace()
+        .nth(2)
+        .unwrap();
+    ProverProof {
+        w_comm: core::array::from_fn(|i| parse_comm(&comms[&format!("w{i}")])),
+        z_comm: parse_comm(&comms["z"]),
+        t_comm: parse_comm(&comms["t"]),
+        evals: ProofEvaluations {
+            public: e("public"),
+            w: core::array::from_fn(|i| e(&format!("w{i}"))),
+            z: e("z"),
+            s: core::array::from_fn(|i| e(&format!("s{i}"))),
+            coefficients: core::array::from_fn(|i| e(&format!("coefficient{i}"))),
+            generic_selector: e("Generic"),
+            poseidon_selector: e("Poseidon"),
+            complete_add_selector: e("CompleteAdd"),
+            mul_selector: e("VarBaseMul"),
+            emul_selector: e("EndoMul"),
+            endomul_scalar_selector: e("EndoMulScalar"),
+            optional_selectors,
+        },
+        ft_eval1: element(ft_eval1),
+        proof: OpeningProof {
+            lr,
+            delta: point("delta"),
+            z1: element(&opening["z1"]),
+            z2: element(&opening["z2"]),
+            sg: point("sg"),
+        },
+        prev_challenges: prev_challenges(name),
+    }
+}
+
+/// The public inputs of the tool's circuit `name`: the first rows of column
+/// 0 of its witness.
+fn public_inputs(name: &str, count: usize) -> Vec<Fp> {
+    circuit(name).1[0][..count].to_vec()
+}
+
+#[test]
+fn kimchis_proofs_are_ours() {
+    // Parsing is faithful: Kimchi's proof read back is the proof we make.
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size, public);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let mut rng = Arkworks(SplitMix64(7));
+        let ours = prove(
+            &index,
+            witness,
+            &prev_challenges(name),
+            &gates,
+            (&base, &scalar),
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(kimchis_proof(name), ours, "{name}");
+    }
+}
+
+#[test]
+fn the_verifier_oracles_are_kimchis() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, _) = index(name, max_poly_size, public);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let proof = kimchis_proof(name);
+        let o = oracles(
+            &index.verifier_index,
+            &index.srs,
+            &proof,
+            &public_inputs(name, public),
+            &gates,
+            (&base, &scalar),
+        )
+        .unwrap();
+        let expected = lines("oracle", name);
+        for (label, value) in [
+            ("beta", o.beta),
+            ("gamma", o.gamma),
+            ("alpha", o.alpha),
+            ("zeta", o.zeta),
+            ("v", o.v),
+            ("u", o.u),
+            ("ft_eval0", o.ft_eval0),
+            ("combined_inner_product", o.combined_inner_product),
+            ("digest", o.digest),
+        ] {
+            assert_eq!(expected[label], hex(value), "{name} {label}");
+        }
+        assert_eq!(
+            lines("comm", name)["public"],
+            comm(&o.public_comm),
+            "{name} public"
+        );
+    }
+}
+
+#[test]
+fn kimchis_proofs_verify() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, _) = index(name, max_poly_size, public);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let mut rng = Arkworks(SplitMix64(1));
+        let result = verify(
+            &index.verifier_index,
+            &index.srs,
+            &kimchis_proof(name),
+            &public_inputs(name, public),
+            &gates,
+            (&base, &scalar),
+            &mut rng,
+        );
+        assert_eq!(result, Ok(()), "{name}");
+    }
+}
+
+#[test]
+fn tampered_proofs_are_refused() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let (name, max_poly_size, public) = CIRCUITS[0];
+    let (index, _) = index(name, max_poly_size, public);
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let inputs = public_inputs(name, public);
+    let check = |proof: &ProverProof<Vesta>, inputs: &[Fp]| {
+        let mut rng = Arkworks(SplitMix64(1));
+        verify(
+            &index.verifier_index,
+            &index.srs,
+            proof,
+            inputs,
+            &gates,
+            (&base, &scalar),
+            &mut rng,
+        )
+    };
+    let good = kimchis_proof(name);
+    assert_eq!(check(&good, &inputs), Ok(()));
+    let mut bad = good.clone();
+    bad.proof.z1 = bad.proof.z1 + Fp::ONE;
+    assert_eq!(check(&bad, &inputs), Err(VerifyError::OpeningProof), "z1");
+    let mut bad = good.clone();
+    bad.ft_eval1 = bad.ft_eval1 + Fp::ONE;
+    assert_eq!(
+        check(&bad, &inputs),
+        Err(VerifyError::OpeningProof),
+        "ft_eval1"
+    );
+    let mut bad = good.clone();
+    bad.evals.w[3].zeta[0] = bad.evals.w[3].zeta[0] + Fp::ONE;
+    assert_eq!(
+        check(&bad, &inputs),
+        Err(VerifyError::OpeningProof),
+        "an evaluation"
+    );
+    let mut bad = good.clone();
+    bad.w_comm[0].chunks[0] = bad.w_comm[0].chunks[0] + Projective::generator();
+    assert_eq!(
+        check(&bad, &inputs),
+        Err(VerifyError::OpeningProof),
+        "a commitment"
+    );
+    let mut bad = good.clone();
+    bad.proof.sg = bad.proof.sg + Projective::generator();
+    assert_eq!(check(&bad, &inputs), Err(VerifyError::OpeningProof), "sg");
+    // Another public input is another statement.
+    let mut other = inputs.clone();
+    other[0] = other[0] + Fp::ONE;
+    assert_eq!(
+        check(&good, &other),
+        Err(VerifyError::OpeningProof),
+        "public input"
+    );
+    assert_eq!(
+        check(&good, &inputs[1..]),
+        Err(VerifyError::IncorrectPublicInputLength)
+    );
+}
+
+/// Our proofs, in the format of the vectors, for Kimchi's verifier (the
+/// `verify_ours` tool of the Kimchi figures notes).
+const OURS: &str = include_str!("vectors/arrabbiata_proofs.txt");
+
+/// The lines of our proof of `name`.
+fn dump(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, c) in proof.w_comm.iter().enumerate() {
+        out.push(format!("comm {name} w{i} {}", comm(c)));
+    }
+    out.push(format!("comm {name} z {}", comm(&proof.z_comm)));
+    out.push(format!("comm {name} t {}", comm(&proof.t_comm)));
+    let e = &proof.evals;
+    let mut put = |label: String, p: &PointEvaluations<Fp>| {
+        out.push(format!("eval {name} {label} {}", evaluation(p)));
+    };
+    put("public".into(), &e.public);
+    for (i, w) in e.w.iter().enumerate() {
+        put(format!("w{i}"), w);
+    }
+    put("z".into(), &e.z);
+    for (i, s) in e.s.iter().enumerate() {
+        put(format!("s{i}"), s);
+    }
+    for (i, c) in e.coefficients.iter().enumerate() {
+        put(format!("coefficient{i}"), c);
+    }
+    for (label, p) in [
+        ("Generic", &e.generic_selector),
+        ("Poseidon", &e.poseidon_selector),
+        ("CompleteAdd", &e.complete_add_selector),
+        ("VarBaseMul", &e.mul_selector),
+        ("EndoMul", &e.emul_selector),
+        ("EndoMulScalar", &e.endomul_scalar_selector),
+    ] {
+        put(label.into(), p);
+    }
+    for (typ, p) in &e.optional_selectors {
+        put(format!("{typ:?}"), p);
+    }
+    out.push(format!("ft_eval1 {name} {}", hex(proof.ft_eval1)));
+    let o = &proof.proof;
+    for (i, (l, r)) in o.lr.iter().enumerate() {
+        out.push(format!("opening {name} lr{i} {} {}", point(l), point(r)));
+    }
+    out.push(format!("opening {name} delta {}", point(&o.delta)));
+    out.push(format!("opening {name} z1 {}", hex(o.z1)));
+    out.push(format!("opening {name} z2 {}", hex(o.z2)));
+    out.push(format!("opening {name} sg {}", point(&o.sg)));
+    out
+}
+
+/// Our proofs of the tool's circuits, from another stream than Kimchi's
+/// (SplitMix64(1000)), so that they are ours and not copies of Kimchi's.
+fn our_proofs() -> Vec<(&'static str, ProverProof<Vesta>)> {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    CIRCUITS
+        .iter()
+        .map(|(name, max_poly_size, public)| {
+            let (index, witness) = index(name, *max_poly_size, *public);
+            let base = KimchiSponge::new(vesta_base());
+            let scalar = KimchiSponge::new(pallas_base());
+            let mut rng = Arkworks(SplitMix64(1000));
+            let proof = prove(
+                &index,
+                witness,
+                &prev_challenges(name),
+                &gates,
+                (&base, &scalar),
+                &mut rng,
+            )
+            .unwrap();
+            (*name, proof)
+        })
+        .collect()
+}
+
+#[test]
+fn our_proofs_verify_and_are_the_committed_ones() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let mut lines = Vec::new();
+    for (name, proof) in our_proofs() {
+        let (max_poly_size, public) = CIRCUITS
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .map(|(_, m, p)| (*m, *p))
+            .unwrap();
+        let (index, _) = index(name, max_poly_size, public);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let mut rng = Arkworks(SplitMix64(2));
+        let inputs = public_inputs(name, public);
+        let result = verify(
+            &index.verifier_index,
+            &index.srs,
+            &proof,
+            &inputs,
+            &gates,
+            (&base, &scalar),
+            &mut rng,
+        );
+        assert_eq!(result, Ok(()), "{name}");
+        assert_ne!(
+            proof,
+            kimchis_proof(name),
+            "{name}: another stream, another proof"
+        );
+        lines.extend(dump(name, &proof));
+    }
+    let ours = lines.join("\n") + "\n";
+    if std::env::var_os("REGENERATE").is_some() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/vectors/arrabbiata_proofs.txt"
+        );
+        std::fs::write(path, &ours).unwrap();
+    }
+    assert_eq!(
+        OURS, ours,
+        "rerun with REGENERATE=1 after changing the prover"
+    );
+}
+
+/// What Kimchi's verifier said of our proofs (the `prover` tool run on
+/// `arrabbiata_proofs.txt`): the Blake2b512 digest of the file it read,
+/// then, per circuit, its verdict on our proof, on our proof with `z1 + 1`,
+/// and on its own.
+const KIMCHI_ON_OURS: &str = include_str!("vectors/kimchi_verifies_arrabbiata.txt");
+
+#[test]
+fn kimchi_verifies_our_proofs() {
+    // The verdicts are about the proofs we make now: the digest of the
+    // file Kimchi read is the digest of our current dump.
+    let digest: String = Blake2b512::digest(OURS.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let first = KIMCHI_ON_OURS.lines().next().unwrap();
+    assert_eq!(
+        first,
+        format!("file {digest}"),
+        "rerun the tool on the new dump"
+    );
+    for (name, _, _) in CIRCUITS {
+        for (who, verdict) in [
+            ("arrabbiata", "Ok(\"accepted\")"),
+            ("arrabbiata-tampered", "refused"),
+            ("kimchi", "Ok(\"accepted\")"),
+        ] {
+            let line = format!("verify {name} {who} {verdict}");
+            assert!(KIMCHI_ON_OURS.lines().any(|l| l == line), "{line}");
+        }
     }
 }

@@ -448,7 +448,7 @@ where
 pub const PERMUTATION_ALPHA: usize = 21;
 
 /// The gate types with constraints, in Kimchi's order.
-const CONSTRAINED: [GateType; 12] = [
+pub(crate) const CONSTRAINED: [GateType; 12] = [
     GateType::Generic,
     GateType::Poseidon,
     GateType::CompleteAdd,
@@ -720,7 +720,12 @@ const OPTIONAL: [GateType; 6] = [
 
 /// The chunks of `coefficients`, `num_chunks` of `size` (more if the
 /// polynomial is longer), evaluated at `x`.
-fn chunk_evaluations<F: Field>(coefficients: &[F], num_chunks: usize, size: usize, x: F) -> Vec<F> {
+pub(crate) fn chunk_evaluations<F: Field>(
+    coefficients: &[F],
+    num_chunks: usize,
+    size: usize,
+    x: F,
+) -> Vec<F> {
     let mut values: Vec<F> = coefficients
         .chunks(size)
         .map(|chunk| UniPoly::new(chunk.to_vec()).evaluate(x))
@@ -731,7 +736,7 @@ fn chunk_evaluations<F: Field>(coefficients: &[F], num_chunks: usize, size: usiz
 
 /// `sum_i c_i y^i`: chunk evaluations combined into the value at the point
 /// (`y` the point to the chunk size).
-fn combine<F: Field>(chunks: &[F], y: F) -> F {
+pub(crate) fn combine<F: Field>(chunks: &[F], y: F) -> F {
     chunks.iter().rev().fold(F::ZERO, |acc, c| acc * y + *c)
 }
 
@@ -972,7 +977,7 @@ where
 type Blinded<F> = (Vec<F>, Vec<F>);
 
 /// The inner product.
-fn inner<F: Field>(a: &[F], b: &[F]) -> F {
+pub(crate) fn inner<F: Field>(a: &[F], b: &[F]) -> F {
     a.iter().zip(b).fold(F::ZERO, |acc, (x, y)| acc + *x * *y)
 }
 

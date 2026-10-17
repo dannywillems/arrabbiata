@@ -1,0 +1,13 @@
+file be83b37b66e6e61ba8f479f73b889c9bbe5de72562ba34bad8ad50a4044e252ff0ccdefeeac0e9b94afac4ea6a84192b42ff3376829e9b7e19df5e0d4eb49d82
+verify generic arrabbiata Ok("accepted")
+verify generic arrabbiata-tampered refused
+verify generic kimchi Ok("accepted")
+verify chunked arrabbiata Ok("accepted")
+verify chunked arrabbiata-tampered refused
+verify chunked kimchi Ok("accepted")
+verify gadgets arrabbiata Ok("accepted")
+verify gadgets arrabbiata-tampered refused
+verify gadgets kimchi Ok("accepted")
+verify recursion arrabbiata Ok("accepted")
+verify recursion arrabbiata-tampered refused
+verify recursion kimchi Ok("accepted")
