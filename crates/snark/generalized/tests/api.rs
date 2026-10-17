@@ -4,8 +4,8 @@
 use arrabbiata_field::Field;
 use arrabbiata_frontend::vanilla::build;
 use arrabbiata_generalized_plonk::{
-    Argument, Circuit, Commitments, Error, Gate, GeneralizedPlonk, Lookup, Opened, PublicInputs,
-    Tagged, Variable,
+    Argument, Circuit, Commitments, Error, Failure, Gate, GeneralizedPlonk, Lookup, Opened,
+    PublicInputs, Tagged, Variable,
     accumulating::{
         Accumulating, AccumulatingPlonk, AccumulatingProof, Satisfiability, Values, rotations,
     },
@@ -638,6 +638,49 @@ fn circuit_circuit_is_satisfied() {
     .unwrap();
     assert!(c.is_satisfied(&[vec![F::ONE, F::ONE]], &[F::ONE]));
     assert!(!c.is_satisfied(&[vec![F::ONE, F::ZERO]], &[F::ONE]));
+}
+
+/// [`circuit_circuit_is_satisfied`]'s circuit.
+fn copied_and_bound() -> Circuit<F, 1, 1> {
+    let num_rows = 2;
+    let witness_columns = 1;
+    let sigma = vec![1, 0];
+    let public_inputs = 1;
+    let bindings = vec![(0, 0)];
+    Circuit::<F, 1, 1>::new(
+        num_rows,
+        witness_columns,
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        sigma,
+        public_inputs,
+        bindings,
+    )
+    .unwrap()
+}
+
+#[test]
+fn circuit_circuit_failure() {
+    // The broken copy at row 0, then the binding, then the shape.
+    let c = copied_and_bound();
+    assert_eq!(c.failure(&[vec![F::ONE, F::ONE]], &[F::ONE]), None);
+    assert_eq!(
+        c.failure(&[vec![F::ONE, F::ZERO]], &[F::ONE]),
+        Some(Failure::Copy { column: 0, row: 0 })
+    );
+    assert_eq!(
+        c.failure(&[vec![F::ONE, F::ONE]], &[F::ZERO]),
+        Some(Failure::Binding { input: 0 })
+    );
+    assert_eq!(c.failure(&[vec![F::ONE]], &[F::ONE]), Some(Failure::Shape));
+}
+
+#[test]
+fn circuit_failure() {
+    let gate = Failure::Gate { gate: 1, row: 2 };
+    assert_ne!(gate, Failure::Lookup { lookup: 1, row: 2 });
 }
 
 #[test]

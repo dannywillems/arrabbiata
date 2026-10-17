@@ -9,7 +9,7 @@ use alloc::{
 use core::fmt;
 
 use arrabbiata_field::Field;
-use arrabbiata_generalized_plonk::{self as generalized, Argument, Circuit, Gate, Lookup};
+use arrabbiata_generalized_plonk::{self as generalized, Argument, Circuit, Failure, Gate, Lookup};
 use arrabbiata_permutation::Permutation;
 
 use crate::{
@@ -177,6 +177,112 @@ where
     /// The public inputs, in the order they were made public (zero without
     /// an input).
     pub public: Vec<F>,
+    /// Each gate kind of the circuit, by its selector: the gadget and the
+    /// row of the gadget its gates are on.
+    pub kinds: Vec<(&'static str, isize)>,
+}
+
+/// The first requirement a witness of a compiled circuit breaks
+/// ([`Compiled::check`]), named by gadget: Kimchi's `CircuitGateError`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Violation {
+    /// The columns have the wrong sizes.
+    Shape,
+    /// The cell at `(column, row)` differs from a cell it is copied to.
+    Copy {
+        /// The witness column.
+        column: usize,
+        /// The row.
+        row: usize,
+    },
+    /// Constraint `index` (from 0, in the order asserted) of the gates of
+    /// `gadget` at its row `offset` does not hold at `row`.
+    Constraint {
+        /// The gadget.
+        gadget: &'static str,
+        /// The row of the gadget.
+        offset: isize,
+        /// The absolute row.
+        row: usize,
+        /// The index of the constraint among the gate kind's.
+        index: usize,
+    },
+    /// Read `index` (from 0) of the same gates looks up a tuple that is
+    /// not in its table.
+    Read {
+        /// The gadget.
+        gadget: &'static str,
+        /// The row of the gadget.
+        offset: isize,
+        /// The absolute row.
+        row: usize,
+        /// The index of the read among the gate kind's.
+        index: usize,
+    },
+    /// Public input `input` is not its cell.
+    Public {
+        /// The public input.
+        input: usize,
+    },
+}
+
+impl<F, const N: usize, const D: usize> Compiled<F, N, D>
+where
+    F: Field,
+{
+    /// The first requirement `columns` break with the circuit's public
+    /// inputs, rows in order and, on a row, its copies, then its
+    /// constraints, then its reads.
+    ///
+    /// # Errors
+    ///
+    /// The [`Violation`].
+    pub fn check(&self, columns: &[Vec<F>]) -> Result<(), Violation> {
+        let Some(failure) = self.circuit.failure(columns, &self.public) else {
+            return Ok(());
+        };
+        // The position of item `i` among those of the same selector.
+        let label = |selectors: &[Option<usize>], i: usize| {
+            let q = selectors[i];
+            let index = selectors[..i].iter().filter(|s| **s == q).count();
+            let (gadget, offset) = q
+                .and_then(|q| self.kinds.get(q))
+                .copied()
+                .unwrap_or(("", 0));
+            (gadget, offset, index)
+        };
+        Err(match failure {
+            Failure::Shape => Violation::Shape,
+            Failure::Copy { column, row } => Violation::Copy { column, row },
+            Failure::Binding { input } => Violation::Public { input },
+            Failure::Gate { gate, row } => {
+                let selectors: Vec<Option<usize>> =
+                    self.circuit.gates().iter().map(Gate::selector).collect();
+                let (gadget, offset, index) = label(&selectors, gate);
+                Violation::Constraint {
+                    gadget,
+                    offset,
+                    row,
+                    index,
+                }
+            }
+            Failure::Lookup { lookup, row } => {
+                let selectors: Vec<Option<usize>> = self
+                    .circuit
+                    .lookups()
+                    .iter()
+                    .map(|l| l.selector())
+                    .collect();
+                let (gadget, offset, index) = label(&selectors, lookup);
+                Violation::Read {
+                    gadget,
+                    offset,
+                    row,
+                    index,
+                }
+            }
+        })
+    }
 }
 
 /// The gates of one gadget at one row of the gadget, shared by every
@@ -578,10 +684,12 @@ where
         } else {
             circuit.with_lookups(lookups).map_err(Error::Circuit)?
         };
+        let kinds = self.kinds.iter().map(|k| (k.gadget, k.offset)).collect();
         Ok(Compiled {
             circuit,
             columns,
             public,
+            kinds,
         })
     }
 }

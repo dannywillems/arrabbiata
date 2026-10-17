@@ -17,8 +17,8 @@
 
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{
-    Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, Shape, TypedGadget, circuit,
-    evaluate, figures, gates, witness,
+    Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, Shape, TypedGadget, Violation,
+    circuit, evaluate, figures, gates, witness,
 };
 use arrabbiata_pasta::Fq as F;
 use proptest::prelude::*;
@@ -120,6 +120,13 @@ proptest! {
         let mut columns = compiled.columns.clone();
         columns[0][row] = columns[0][row] + F::from_u64(delta);
         prop_assert!(!compiled.circuit.is_satisfied(&columns, &compiled.public));
+        prop_assert!(compiled.check(&compiled.columns).is_ok());
+        let found = compiled.check(&columns);
+        prop_assert!(
+            matches!(found, Err(Violation::Constraint { .. } | Violation::Copy { .. } | Violation::Public { .. })),
+            "{:?}",
+            found
+        );
     }
 
     /// Chain is composition, Repeat is iteration.

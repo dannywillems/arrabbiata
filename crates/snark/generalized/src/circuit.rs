@@ -415,86 +415,113 @@ where
     /// satisfy the circuit: see the [module documentation](self).
     #[must_use]
     pub fn is_satisfied(&self, columns: &[Vec<F>], public: &[F]) -> bool {
+        self.failure(columns, public).is_none()
+    }
+
+    /// The first requirement `columns` and `public` break, or `None` when
+    /// they satisfy the circuit. Rows are checked in order and, on a row,
+    /// its copies, then its gates, then its lookups, each in the order of
+    /// the circuit; the bindings come last.
+    #[must_use]
+    pub fn failure(&self, columns: &[Vec<F>], public: &[F]) -> Option<Failure> {
         let n = self.num_rows;
         if columns.len() != self.witness_columns
             || columns.iter().any(|c| c.len() != n)
             || public.len() != self.public_inputs
+            || Permutation::new(self.permuted.len(), n, self.sigma.clone()).is_err()
         {
-            return false;
+            return Some(Failure::Shape);
         }
         for row in 0..n {
+            for (p, column) in self.permuted.iter().enumerate() {
+                let target = self.sigma[p * n + row];
+                let there = columns[self.permuted[target / n]][target % n];
+                if columns[*column][row] != there {
+                    return Some(Failure::Copy {
+                        column: *column,
+                        row,
+                    });
+                }
+            }
             let x = self.point(|v| match v {
                 Variable::Witness { column, rotation } => columns[*column][rotation.apply(row, n)],
                 Variable::Fixed { column, rotation } => self.fixed[*column][rotation.apply(row, n)],
                 Variable::Public(i) => public[*i],
             });
-            for gate in &self.gates {
-                let on = match gate.selector {
-                    Some(q) => !self.selectors[q][row].is_zero(),
-                    None => true,
-                };
-                if on && !gate.polynomial.eval(&x).is_zero() {
-                    return false;
+            for (gate, g) in self.gates.iter().enumerate() {
+                if self.is_on(g.selector, row) && !g.polynomial.eval(&x).is_zero() {
+                    return Some(Failure::Gate { gate, row });
+                }
+            }
+            for (lookup, l) in self.lookups.iter().enumerate() {
+                if self.is_on(l.selector(), row) && !self.lookup_holds_at(l, &x) {
+                    return Some(Failure::Lookup { lookup, row });
                 }
             }
         }
         for (j, i) in &self.bindings {
             if columns[0][*i] != public[*j] {
-                return false;
+                return Some(Failure::Binding { input: *j });
             }
         }
-        for lookup in &self.lookups {
-            if !self.lookup_holds(lookup, columns, public) {
-                return false;
-            }
-        }
-        let permuted: Vec<&[F]> = self
-            .permuted
-            .iter()
-            .map(|c| columns[*c].as_slice())
-            .collect();
-        match Permutation::new(self.permuted.len(), n, self.sigma.clone()) {
-            Ok(p) => p.is_respected_by(&permuted),
-            Err(_) => false,
-        }
+        None
     }
+
+    /// Whether selector `q` (none: always) is on at `row`.
+    fn is_on(&self, q: Option<usize>, row: usize) -> bool {
+        q.is_none_or(|q| !self.selectors[q][row].is_zero())
+    }
+}
+
+/// The first requirement a witness breaks ([`Circuit::failure`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// The columns or the public inputs have the wrong sizes.
+    Shape,
+    /// The cell at `(column, row)` differs from the cell it is copied to.
+    Copy {
+        /// The witness column.
+        column: usize,
+        /// The row.
+        row: usize,
+    },
+    /// Gate `gate` does not vanish at `row`.
+    Gate {
+        /// The index of the gate.
+        gate: usize,
+        /// The row.
+        row: usize,
+    },
+    /// The inputs of lookup `lookup` at `row` are not a row of its table.
+    Lookup {
+        /// The index of the lookup.
+        lookup: usize,
+        /// The row.
+        row: usize,
+    },
+    /// Public input `input` is not its bound cell.
+    Binding {
+        /// The public input.
+        input: usize,
+    },
 }
 
 impl<F, const N: usize, const D: usize> Circuit<F, N, D>
 where
     F: Field,
 {
-    /// Whether on every row `lookup` turns on, its inputs are a row of its
-    /// table. Quadratic in the number of rows: a specification, not a
+    /// Whether the inputs of `lookup` at the point `x` of a row are a row
+    /// of its table. Linear in the number of rows: a specification, not a
     /// prover.
-    fn lookup_holds(&self, lookup: &Lookup<F, N, D>, columns: &[Vec<F>], public: &[F]) -> bool {
-        let n = self.num_rows;
-        for row in 0..n {
-            let on = match lookup.selector() {
-                Some(q) => !self.selectors[q][row].is_zero(),
-                None => true,
-            };
-            if !on {
-                continue;
-            }
-            let x = self.point(|v| match v {
-                Variable::Witness { column, rotation } => columns[*column][rotation.apply(row, n)],
-                Variable::Fixed { column, rotation } => self.fixed[*column][rotation.apply(row, n)],
-                Variable::Public(i) => public[*i],
-            });
-            let tuple: Vec<F> = lookup.inputs().iter().map(|p| p.eval(&x)).collect();
-            let found = (0..n).any(|j| {
-                lookup
-                    .table()
-                    .iter()
-                    .zip(&tuple)
-                    .all(|(k, v)| self.fixed[*k][j] == *v)
-            });
-            if !found {
-                return false;
-            }
-        }
-        true
+    fn lookup_holds_at(&self, lookup: &Lookup<F, N, D>, x: &[F; N]) -> bool {
+        let tuple: Vec<F> = lookup.inputs().iter().map(|p| p.eval(x)).collect();
+        (0..self.num_rows).any(|j| {
+            lookup
+                .table()
+                .iter()
+                .zip(&tuple)
+                .all(|(k, v)| self.fixed[*k][j] == *v)
+        })
     }
 }
 

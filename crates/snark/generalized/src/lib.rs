@@ -35,7 +35,7 @@ pub mod protocol;
 use core::fmt;
 
 pub use crate::{
-    circuit::{Circuit, Gate, Variable},
+    circuit::{Circuit, Failure, Gate, Variable},
     lookup::{Argument, Lookup},
     protocol::{
         Commitments, GeneralizedPlonk, GeneralizedTranscript, Keys, Opened, Preprocessed, Proof,
