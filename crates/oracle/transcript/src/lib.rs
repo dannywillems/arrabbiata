@@ -25,6 +25,8 @@
 
 #![no_std]
 
+extern crate alloc;
+
 pub mod hash;
 pub mod hlist;
 pub mod typed;
@@ -113,6 +115,14 @@ pub mod tag {
     pub const PATTERN_END: u64 = 0x5045;
     /// A public input in a protocol pattern.
     pub const PATTERN_PUBLIC: u64 = 0x5050;
+    /// A typed draw (a challenge of a given kind) in a protocol pattern.
+    pub const PATTERN_SQUEEZE: u64 = 0x5053;
+    /// A draw that leaves the sponge as it was, in a protocol pattern.
+    pub const PATTERN_PEEK: u64 = 0x504b;
+    /// A repeated sub-protocol in a protocol pattern.
+    pub const PATTERN_ROUNDS: u64 = 0x5052;
+    /// A choice between two protocols in a protocol pattern.
+    pub const PATTERN_BRANCH: u64 = 0x5042;
 }
 
 /// A permutation of `F^WIDTH`, the core of a sponge.

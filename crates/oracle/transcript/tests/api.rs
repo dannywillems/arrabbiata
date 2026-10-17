@@ -7,8 +7,9 @@ use arrabbiata_transcript::{
     Absorb, Duplex, Permutation, Transcript, absorb_length, absorb_slice,
     hlist::{HCons, HList, HNil, Reverse},
     typed::{
-        Challenge, End, Label, Labeled, Message, Pattern, ProofOf, Protocol, Prover, Public, Tape,
-        Then, Verifier, prover_tape, verifier_tape,
+        Branch, Challenge, Draw, Either, End, Label, Labeled, Message, Pattern, Peek, ProofOf,
+        Protocol, Prover, Public, Rounds, Send, Squeeze, Statement, Tape, Then, Verifier, Write,
+        prover_tape, verifier_tape,
     },
 };
 
@@ -414,4 +415,155 @@ fn typed_verifier_tape() {
         type Transcript = End;
     }
     let _ = verifier_tape::<F, _, Empty>(goldilocks_sponge(0), HNil).finish();
+}
+
+/// A transcript that records what is written and counts what is drawn: the
+/// nodes below write and draw through it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Log {
+    written: Vec<u64>,
+    drawn: u64,
+}
+
+/// A value written as itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Word(u64);
+
+impl Label for Word {
+    const LABEL: u64 = 0x77;
+}
+
+impl Write<Log> for Word {
+    fn write(&self, log: &mut Log) {
+        log.written.push(self.0);
+    }
+}
+
+/// A challenge: how many were drawn before, counting this one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Count;
+
+impl Label for Count {
+    const LABEL: u64 = 0x63;
+}
+
+impl Draw<Log> for Count {
+    type Value = u64;
+
+    fn draw(log: &mut Log) -> u64 {
+        log.drawn += 1;
+        log.drawn
+    }
+}
+
+#[test]
+fn typed_write() {
+    let mut log = Log::default();
+    Word(3).write(&mut log);
+    assert_eq!(log.written, vec![3]);
+}
+
+#[test]
+fn typed_draw() {
+    let mut log = Log::default();
+    assert_eq!(Count::draw(&mut log), 1);
+    assert_eq!(Count::draw(&mut log), 2);
+}
+
+#[test]
+fn typed_statement() {
+    // A statement is not part of the proof.
+    assert_eq!(<Statement<Word, End> as Pattern>::MESSAGES, 0);
+    let tape = Tape::<F, Log, Statement<Word, End>>::undescribed(Log::default());
+    assert_eq!(tape.statement(&Word(5)).into_inner().written, vec![5]);
+}
+
+#[test]
+fn typed_send() {
+    assert_eq!(<Send<Word, End> as Pattern>::MESSAGES, 1);
+    let tape = Tape::<F, Log, Send<Word, Send<Word, End>>>::undescribed(Log::default());
+    let log = tape.send(&Word(1)).receive(&Word(2)).into_inner();
+    assert_eq!(log.written, vec![1, 2]);
+}
+
+#[test]
+fn typed_squeeze() {
+    let tape = Tape::<F, Log, Squeeze<Count, Squeeze<Count, End>>>::undescribed(Log::default());
+    let (first, tape) = tape.squeeze();
+    let (second, _) = tape.squeeze();
+    assert_eq!((first, second), (1, 2));
+}
+
+#[test]
+fn typed_peek() {
+    // A peek draws from a copy: the next draw is the same.
+    let tape = Tape::<F, Log, Peek<Count, Squeeze<Count, End>>>::undescribed(Log::default());
+    let (peeked, tape) = tape.peek();
+    let (drawn, _) = tape.squeeze();
+    assert_eq!(peeked, drawn);
+}
+
+#[test]
+fn typed_rounds() {
+    // Two rounds of a message and a challenge, then a last message.
+    type Round = Send<Word, Squeeze<Count, End>>;
+    type P = Rounds<Round, Send<Word, End>>;
+    let mut tape = Tape::<F, Log, P>::undescribed(Log::default());
+    for i in 0..2 {
+        let (x, next) = tape.round().send(&Word(i)).squeeze();
+        assert_eq!(x, i + 1);
+        tape = next;
+    }
+    let log = tape.done().send(&Word(9)).into_inner();
+    assert_eq!(log.written, vec![0, 1, 9]);
+    assert_eq!(<P as Pattern>::MESSAGES, 1);
+}
+
+#[test]
+fn typed_branch() {
+    type P = Branch<Send<Word, End>, End>;
+    let left = Tape::<F, Log, P>::undescribed(Log::default());
+    assert_eq!(left.left().send(&Word(1)).into_inner().written, vec![1]);
+    let right = Tape::<F, Log, P>::undescribed(Log::default());
+    assert!(right.right().into_inner().written.is_empty());
+    assert_eq!(<P as Pattern>::MESSAGES, 0);
+}
+
+#[test]
+fn typed_either() {
+    let taken: Either<u8, ()> = Either::Left(1);
+    assert_ne!(taken, Either::Right(()));
+}
+
+#[test]
+fn typed_tape_undescribed() {
+    // Nothing absorbed at the start: a described tape absorbs its pattern.
+    type P = Message<F, End>;
+    let plain = Tape::<F, _, P>::undescribed(goldilocks_sponge(0)).send(&F::ONE);
+    let described = Tape::<F, _, P>::start(goldilocks_sponge(0)).send(&F::ONE);
+    let mut reference = goldilocks_sponge(0);
+    reference.absorb(F::ONE);
+    let (mut a, mut b) = (plain.finish(), described.finish());
+    let expected = reference.squeeze();
+    assert_eq!(a.squeeze(), expected);
+    assert_ne!(b.squeeze(), expected);
+}
+
+#[test]
+fn typed_tape_into_inner() {
+    let tape = Tape::<F, Log, End>::undescribed(Log::default());
+    assert_eq!(tape.into_inner(), Log::default());
+}
+
+#[test]
+fn typed_new_nodes_describe() {
+    // The new nodes are part of a described pattern too: two patterns that
+    // differ only in a challenge's kind are separated.
+    type A = Squeeze<Count, End>;
+    type B = Squeeze<Word, End>;
+    let mut a = goldilocks_sponge(0);
+    let mut b = goldilocks_sponge(0);
+    <A as Pattern>::describe::<F, _>(&mut a);
+    <B as Pattern>::describe::<F, _>(&mut b);
+    assert_ne!(a.squeeze(), b.squeeze());
 }

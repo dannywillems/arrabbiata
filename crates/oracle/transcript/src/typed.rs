@@ -19,6 +19,27 @@
 //! - [`Challenge<Next>`]: the verifier sends one challenge;
 //! - [`End`]: the protocol is over.
 //!
+//! The nodes above absorb and squeeze through [`Absorb`] and
+//! [`Transcript::squeeze`]. A protocol whose sponge has more structure (a
+//! sponge that buffers the limbs of its challenges, absorbs points and
+//! scalars by its own rules, and draws challenges of several kinds) uses the
+//! nodes that write and draw through the transcript type itself:
+//!
+//! - [`Statement<M, Next>`]: both parties write a public `M` ([`Write`]);
+//! - [`Send<M, Next>`]: the prover sends `M` ([`Write`]);
+//! - [`Squeeze<K, Next>`]: one challenge of the kind `K` ([`Draw`]), so a
+//!   128-bit scalar challenge and a base-field element are different steps;
+//! - [`Peek<K, Next>`]: a draw from a copy of the transcript, which leaves
+//!   it as it was (a digest handed to another sponge);
+//! - [`Rounds<Body, Next>`]: `Body` as many times as the parties agree,
+//!   then `Next` (the rounds of an inner-product argument, as many as the
+//!   logarithm of the key's size);
+//! - [`Branch<A, B>`]: `A` or `B`, as the public statement decides (a
+//!   protocol with optional rounds).
+//!
+//! A protocol reproducing an existing transcript bit for bit starts its
+//! tape with [`Tape::undescribed`], which absorbs no description.
+//!
 //! Patterns compose sequentially with [`Then`]: `Then<P, Q>` is the pattern
 //! that runs `P`, then `Q` (type-level list concatenation, so it is
 //! associative with [`End`] as unit).
@@ -612,4 +633,344 @@ where
     P: Protocol,
 {
     Verifier::start(transcript, proof)
+}
+
+/// How a value of type `Self` is written to the transcript `T`: the
+/// absorptions of a [`Statement`] or a [`Send`] step.
+pub trait Write<T> {
+    /// Write `self` to `transcript`.
+    fn write(&self, transcript: &mut T);
+}
+
+/// A kind of challenge drawn from the transcript `T`: the squeezes of a
+/// [`Squeeze`] or a [`Peek`] step.
+pub trait Draw<T> {
+    /// The challenge.
+    type Value;
+    /// Draw one from `transcript`.
+    fn draw(transcript: &mut T) -> Self::Value;
+}
+
+/// Both parties write a public `M` (not part of the proof), then `Next`.
+#[derive(Debug)]
+pub struct Statement<M, Next>(PhantomData<(M, Next)>);
+
+/// The prover sends `M`, written by [`Write`], then `Next`.
+#[derive(Debug)]
+pub struct Send<M, Next>(PhantomData<(M, Next)>);
+
+/// One challenge of the kind `K`, drawn by [`Draw`], then `Next`.
+#[derive(Debug)]
+pub struct Squeeze<K, Next>(PhantomData<(K, Next)>);
+
+/// One challenge of the kind `K` drawn from a copy of the transcript, which
+/// is left as it was, then `Next`.
+#[derive(Debug)]
+pub struct Peek<K, Next>(PhantomData<(K, Next)>);
+
+/// `Body` (a pattern ending in [`End`]) any number of times, then `Next`.
+#[derive(Debug)]
+pub struct Rounds<Body, Next>(PhantomData<(Body, Next)>);
+
+/// `A` or `B`, as the statement decides.
+#[derive(Debug)]
+pub struct Branch<A, B>(PhantomData<(A, B)>);
+
+/// The proof of a [`Branch`]: the proof of the branch taken.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Either<A, B> {
+    /// The first branch.
+    Left(A),
+    /// The second branch.
+    Right(B),
+}
+
+impl<M, Next> Pattern for Statement<M, Next>
+where
+    M: Label,
+    Next: Pattern,
+{
+    const MESSAGES: usize = Next::MESSAGES;
+    const CHALLENGES: usize = Next::CHALLENGES;
+    type Proof = <Next as Pattern>::Proof;
+
+    fn describe<F, T>(transcript: &mut T)
+    where
+        F: Field,
+        T: Transcript<F>,
+    {
+        transcript.absorb(F::from_u64(tag::PATTERN_PUBLIC));
+        transcript.absorb(F::from_u64(M::LABEL));
+        Next::describe(transcript);
+    }
+}
+
+impl<M, Next> Pattern for Send<M, Next>
+where
+    M: Label,
+    Next: Pattern,
+{
+    const MESSAGES: usize = 1 + Next::MESSAGES;
+    const CHALLENGES: usize = Next::CHALLENGES;
+    type Proof = HCons<M, <Next as Pattern>::Proof>;
+
+    fn describe<F, T>(transcript: &mut T)
+    where
+        F: Field,
+        T: Transcript<F>,
+    {
+        transcript.absorb(F::from_u64(tag::PATTERN_MESSAGE));
+        transcript.absorb(F::from_u64(M::LABEL));
+        Next::describe(transcript);
+    }
+}
+
+impl<K, Next> Pattern for Squeeze<K, Next>
+where
+    K: Label,
+    Next: Pattern,
+{
+    const MESSAGES: usize = Next::MESSAGES;
+    const CHALLENGES: usize = 1 + Next::CHALLENGES;
+    type Proof = <Next as Pattern>::Proof;
+
+    fn describe<F, T>(transcript: &mut T)
+    where
+        F: Field,
+        T: Transcript<F>,
+    {
+        transcript.absorb(F::from_u64(tag::PATTERN_SQUEEZE));
+        transcript.absorb(F::from_u64(K::LABEL));
+        Next::describe(transcript);
+    }
+}
+
+impl<K, Next> Pattern for Peek<K, Next>
+where
+    K: Label,
+    Next: Pattern,
+{
+    const MESSAGES: usize = Next::MESSAGES;
+    const CHALLENGES: usize = 1 + Next::CHALLENGES;
+    type Proof = <Next as Pattern>::Proof;
+
+    fn describe<F, T>(transcript: &mut T)
+    where
+        F: Field,
+        T: Transcript<F>,
+    {
+        transcript.absorb(F::from_u64(tag::PATTERN_PEEK));
+        transcript.absorb(F::from_u64(K::LABEL));
+        Next::describe(transcript);
+    }
+}
+
+/// The counts of a [`Rounds`] are those of `Next`: how many rounds run is
+/// agreed at run time, so its messages are a vector of round proofs.
+impl<Body, Next> Pattern for Rounds<Body, Next>
+where
+    Body: Pattern,
+    Next: Pattern,
+{
+    const MESSAGES: usize = Next::MESSAGES;
+    const CHALLENGES: usize = Next::CHALLENGES;
+    type Proof = HCons<alloc::vec::Vec<<Body as Pattern>::Proof>, <Next as Pattern>::Proof>;
+
+    fn describe<F, T>(transcript: &mut T)
+    where
+        F: Field,
+        T: Transcript<F>,
+    {
+        transcript.absorb(F::from_u64(tag::PATTERN_ROUNDS));
+        Body::describe(transcript);
+        Next::describe(transcript);
+    }
+}
+
+/// The counts of a [`Branch`] are the smaller of its branches'.
+impl<A, B> Pattern for Branch<A, B>
+where
+    A: Pattern,
+    B: Pattern,
+{
+    const MESSAGES: usize = if A::MESSAGES < B::MESSAGES {
+        A::MESSAGES
+    } else {
+        B::MESSAGES
+    };
+    const CHALLENGES: usize = if A::CHALLENGES < B::CHALLENGES {
+        A::CHALLENGES
+    } else {
+        B::CHALLENGES
+    };
+    type Proof = HCons<Either<<A as Pattern>::Proof, <B as Pattern>::Proof>, HNil>;
+
+    fn describe<F, T>(transcript: &mut T)
+    where
+        F: Field,
+        T: Transcript<F>,
+    {
+        transcript.absorb(F::from_u64(tag::PATTERN_BRANCH));
+        A::describe(transcript);
+        B::describe(transcript);
+    }
+}
+
+impl<M, Next, Q> Concat<Q> for Statement<M, Next>
+where
+    Next: Concat<Q>,
+{
+    type Output = Statement<M, <Next as Concat<Q>>::Output>;
+}
+
+impl<M, Next, Q> Concat<Q> for Send<M, Next>
+where
+    Next: Concat<Q>,
+{
+    type Output = Send<M, <Next as Concat<Q>>::Output>;
+}
+
+impl<K, Next, Q> Concat<Q> for Squeeze<K, Next>
+where
+    Next: Concat<Q>,
+{
+    type Output = Squeeze<K, <Next as Concat<Q>>::Output>;
+}
+
+impl<K, Next, Q> Concat<Q> for Peek<K, Next>
+where
+    Next: Concat<Q>,
+{
+    type Output = Peek<K, <Next as Concat<Q>>::Output>;
+}
+
+impl<Body, Next, Q> Concat<Q> for Rounds<Body, Next>
+where
+    Next: Concat<Q>,
+{
+    type Output = Rounds<Body, <Next as Concat<Q>>::Output>;
+}
+
+impl<A, B, Q> Concat<Q> for Branch<A, B>
+where
+    A: Concat<Q>,
+    B: Concat<Q>,
+{
+    type Output = Branch<<A as Concat<Q>>::Output, <B as Concat<Q>>::Output>;
+}
+
+impl<F, T, P> Tape<F, T, P> {
+    /// Start a protocol following `P` on `transcript` without absorbing
+    /// its description: for a protocol whose transcript is fixed elsewhere
+    /// and must be reproduced bit for bit, which then has no domain
+    /// separation of its own pattern beyond what its steps absorb.
+    #[must_use]
+    pub const fn undescribed(transcript: T) -> Self {
+        Self {
+            transcript,
+            marker: PhantomData,
+        }
+    }
+
+    /// The tape at another point of a pattern, the transcript moved.
+    fn moved<Q>(self) -> Tape<F, T, Q> {
+        Tape {
+            transcript: self.transcript,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<F, T, M, Next> Tape<F, T, Statement<M, Next>>
+where
+    M: Write<T>,
+{
+    /// Write the public `value`.
+    #[must_use]
+    pub fn statement(mut self, value: &M) -> Tape<F, T, Next> {
+        value.write(&mut self.transcript);
+        self.moved()
+    }
+}
+
+impl<F, T, M, Next> Tape<F, T, Send<M, Next>>
+where
+    M: Write<T>,
+{
+    /// The prover sends `message`.
+    #[must_use]
+    pub fn send(mut self, message: &M) -> Tape<F, T, Next> {
+        message.write(&mut self.transcript);
+        self.moved()
+    }
+
+    /// The verifier reads `message`: the same absorption as [`Self::send`].
+    #[must_use]
+    pub fn receive(self, message: &M) -> Tape<F, T, Next> {
+        self.send(message)
+    }
+}
+
+impl<F, T, K, Next> Tape<F, T, Squeeze<K, Next>>
+where
+    K: Draw<T>,
+{
+    /// Draw the challenge.
+    #[must_use]
+    pub fn squeeze(mut self) -> (K::Value, Tape<F, T, Next>) {
+        let value = K::draw(&mut self.transcript);
+        (value, self.moved())
+    }
+}
+
+impl<F, T, K, Next> Tape<F, T, Peek<K, Next>>
+where
+    T: Clone,
+    K: Draw<T>,
+{
+    /// Draw the challenge from a copy, leaving the transcript as it was.
+    #[must_use]
+    pub fn peek(self) -> (K::Value, Tape<F, T, Next>) {
+        let value = K::draw(&mut self.transcript.clone());
+        (value, self.moved())
+    }
+}
+
+impl<F, T, Body, Next> Tape<F, T, Rounds<Body, Next>>
+where
+    Body: Concat<Rounds<Body, Next>>,
+{
+    /// One more round: the tape at `Body`, then back at these rounds.
+    #[must_use]
+    pub fn round(self) -> Tape<F, T, Then<Body, Rounds<Body, Next>>> {
+        self.moved()
+    }
+
+    /// No more round.
+    #[must_use]
+    pub fn done(self) -> Tape<F, T, Next> {
+        self.moved()
+    }
+}
+
+impl<F, T, A, B> Tape<F, T, Branch<A, B>> {
+    /// Take the first branch.
+    #[must_use]
+    pub fn left(self) -> Tape<F, T, A> {
+        self.moved()
+    }
+
+    /// Take the second branch.
+    #[must_use]
+    pub fn right(self) -> Tape<F, T, B> {
+        self.moved()
+    }
+}
+
+impl<F, T> Tape<F, T, End> {
+    /// The protocol is over: the transcript, whatever its kind.
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.transcript
+    }
 }
