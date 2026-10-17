@@ -7,7 +7,7 @@
 
 use std::{
     cmp::Ordering,
-    ops::{Add, Deref, Index, Mul, Rem, Sub},
+    ops::{Add, Deref, Div, Index, Mul, Rem, Sub},
 };
 
 use arrabbiata_field::{Field, PrimeField};
@@ -19,8 +19,16 @@ use arrabbiata_kimchi_gadgets::foreign_field::Nat;
 pub const MAX_FOREIGN_FIELD_MODULUS_BITS: u32 = 259;
 
 /// num-bigint's `BigUint`, on our `Nat`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct BigUint(pub Nat);
+
+impl PartialEq for BigUint {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.compare(&other.0) == Ordering::Equal
+    }
+}
+
+impl Eq for BigUint {}
 
 impl Deref for BigUint {
     type Target = Nat;
@@ -199,6 +207,20 @@ pub trait KimchiField: PrimeField {
     fn from_kimchi<T: IntoField>(x: T) -> Self {
         x.into_field()
     }
+    /// The canonical integer of the element.
+    fn to_biguint(&self) -> BigUint {
+        let words: Vec<u64> = (0..Self::LIMBS).map(|i| self.limb(i)).collect();
+        BigUint(Nat(words))
+    }
+    /// `2^k`.
+    fn two_pow(k: u64) -> Self {
+        Self::from_u64(2).pow(k)
+    }
+    /// The element of little-endian bytes, `None` from the modulus up.
+    fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let x = BigUint::from_bytes_be(&bytes.iter().rev().copied().collect::<Vec<u8>>());
+        (x < Self::modulus_biguint()).then(|| x.0.to_field())
+    }
 }
 impl<F: PrimeField> KimchiField for F {}
 
@@ -264,5 +286,161 @@ impl<F, const B: usize, const N: usize> Index<usize> for ForeignElement<F, B, N>
     type Output = F;
     fn index(&self, i: usize) -> &F {
         &self.limbs[i]
+    }
+}
+
+// The operators num-bigint has on references, and the helpers of
+// o1-utils' `BigUintForeignFieldHelpers` and `*ArrayCompose` that Kimchi's
+// foreign field multiplication tests call.
+
+impl Mul<&BigUint> for &BigUint {
+    type Output = BigUint;
+    fn mul(self, other: &BigUint) -> BigUint {
+        BigUint(self.0.mul(&other.0))
+    }
+}
+
+impl Mul<BigUint> for &BigUint {
+    type Output = BigUint;
+    fn mul(self, other: BigUint) -> BigUint {
+        self * &other
+    }
+}
+
+impl Rem<&BigUint> for BigUint {
+    type Output = BigUint;
+    fn rem(self, m: &BigUint) -> BigUint {
+        BigUint(self.0.divrem(&m.0).1)
+    }
+}
+
+impl Sub<BigUint> for &BigUint {
+    type Output = BigUint;
+    fn sub(self, other: BigUint) -> BigUint {
+        BigUint(self.0.sub(&other.0))
+    }
+}
+
+impl Div for BigUint {
+    type Output = BigUint;
+    fn div(self, d: BigUint) -> BigUint {
+        BigUint(self.0.divrem(&d.0).0)
+    }
+}
+
+impl Div<&BigUint> for BigUint {
+    type Output = BigUint;
+    fn div(self, d: &BigUint) -> BigUint {
+        BigUint(self.0.divrem(&d.0).0)
+    }
+}
+
+impl Div<BigUint> for &BigUint {
+    type Output = BigUint;
+    fn div(self, d: BigUint) -> BigUint {
+        BigUint(self.0.divrem(&d.0).0)
+    }
+}
+
+impl Two for BigUint {
+    fn two() -> Self {
+        Self::from(2)
+    }
+}
+
+impl BigUint {
+    /// The integer square root, bit by bit from the top.
+    pub fn sqrt(&self) -> Self {
+        let mut root = Self::zero();
+        for bit in (0..160u32).rev() {
+            let candidate = root.clone() + Self::one().pow_two(bit);
+            if candidate.clone() * candidate.clone() <= *self {
+                root = candidate;
+            }
+        }
+        root
+    }
+
+    /// `self 2^k`.
+    fn pow_two(&self, k: u32) -> Self {
+        Self(self.0.shl(k))
+    }
+
+    /// `2^88`.
+    pub fn two_to_limb() -> Self {
+        Self::one().pow_two(88)
+    }
+
+    /// The three 88-bit limbs, least significant first.
+    pub fn to_limbs(&self) -> [Self; 3] {
+        self.0.limbs().map(|l| Self(Nat::from_u128(l)))
+    }
+
+    /// The three limbs in `F`.
+    pub fn to_field_limbs<F: PrimeField>(&self) -> [F; 3] {
+        self.0.limbs().map(|l| Nat::from_u128(l).to_field())
+    }
+
+    /// The compact limbs `(lo + 2^88 mi, hi)` in `F`.
+    pub fn to_compact_field_limbs<F: PrimeField>(&self) -> [F; 2] {
+        let [lo, mi, hi] = self.to_field_limbs::<F>();
+        [lo + mi * F::two_pow(88), hi]
+    }
+}
+
+impl PartialOrd<BigUint> for &BigUint {
+    fn partial_cmp(&self, other: &BigUint) -> Option<Ordering> {
+        Some(self.0.compare(&other.0))
+    }
+}
+
+impl PartialEq<BigUint> for &BigUint {
+    fn eq(&self, other: &BigUint) -> bool {
+        **self == *other
+    }
+}
+
+/// o1-utils' `compose`, of limbs into the number.
+pub trait Compose {
+    fn compose(&self) -> BigUint;
+}
+
+impl Compose for [BigUint; 3] {
+    fn compose(&self) -> BigUint {
+        let limbs: Vec<u128> = self.iter().map(|l| l.0.limbs()[0]).collect();
+        BigUint(Nat::from_limbs(&limbs))
+    }
+}
+
+impl<F: PrimeField> Compose for [F; 2] {
+    /// Of the compact limbs `(lo + 2^88 mi, hi)`.
+    fn compose(&self) -> BigUint {
+        self[0].to_biguint() + self[1].to_biguint().pow_two(176)
+    }
+}
+
+impl<F: PrimeField> Compose for [F; 3] {
+    fn compose(&self) -> BigUint {
+        let limbs: Vec<u128> = self.iter().map(|l| l.to_biguint().0.limbs()[0]).collect();
+        BigUint(Nat::from_limbs(&limbs))
+    }
+}
+
+impl IntoField for u32 {
+    fn into_field<F: PrimeField>(self) -> F {
+        F::from_u64(u64::from(self))
+    }
+}
+
+impl IntoField for u64 {
+    fn into_field<F: PrimeField>(self) -> F {
+        F::from_u64(self)
+    }
+}
+
+impl IntoField for i32 {
+    fn into_field<F: PrimeField>(self) -> F {
+        let magnitude = F::from_u64(u64::from(self.unsigned_abs()));
+        if self < 0 { -magnitude } else { magnitude }
     }
 }
