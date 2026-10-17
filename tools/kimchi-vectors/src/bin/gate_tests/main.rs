@@ -15,6 +15,7 @@
 mod and;
 mod common;
 mod ec;
+mod ffadd;
 mod endomul;
 mod endomul_scalar;
 mod generic;
@@ -38,4 +39,5 @@ fn main() {
     varbasemul::run();
     ec::run();
     poseidon::run();
+    ffadd::run();
 }
