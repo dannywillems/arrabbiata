@@ -12,7 +12,7 @@
 //!   the hash only.
 
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Cell, Env, Layout, Of, Scalar, TypedGadget, circuit, witness};
+use arrabbiata_gadget::{Cell, Env, Layout, Of, Scalar, TypedGadget, circuit, compile, witness};
 use arrabbiata_generalized_plonk::{max_coefficients, prove, setup, verify};
 use arrabbiata_ipa::Ipa;
 use arrabbiata_pasta::{Fq as F, Pallas};
@@ -176,4 +176,24 @@ fn the_circuit_does_not_depend_on_the_witness() {
         let (with, _) = witness::<F, _, VARIABLES, DEGREE>(&gadget, LAYOUT, &preimage).unwrap();
         assert_eq!(with.circuit, without);
     }
+}
+
+#[test]
+fn compile_is_the_symbolic_run() {
+    // The circuit and the kind of each selector, from the gadget alone: the
+    // gate kinds a witness run names, and no witness.
+    let gadget = hash();
+    let compiled = compile::<F, _, VARIABLES, DEGREE>(&gadget, LAYOUT).unwrap();
+    assert_eq!(
+        compiled.circuit,
+        circuit::<F, _, VARIABLES, DEGREE>(&gadget, LAYOUT).unwrap()
+    );
+    let (with, _) = witness::<F, _, VARIABLES, DEGREE>(&gadget, LAYOUT, &F::ONE).unwrap();
+    assert_eq!(compiled.kinds, with.kinds);
+    assert!(
+        compiled
+            .columns
+            .iter()
+            .all(|column| column.iter().all(|x| *x == F::ZERO))
+    );
 }

@@ -177,6 +177,41 @@ where
     }
 }
 
+/// `gadget` with its input first written in `cells`, one cell per scalar
+/// of the input in order: a gadget that copies its input reads cells, and
+/// this is how a circuit's own inputs become cells where it reads them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed<G> {
+    /// The gadget.
+    pub gadget: G,
+    /// Where each scalar of its input goes.
+    pub cells: alloc::vec::Vec<Cell>,
+}
+
+impl<F, G> TypedGadget<F> for Placed<G>
+where
+    F: Field,
+    G: TypedGadget<F>,
+{
+    type Input = G::Input;
+    type Output = G::Output;
+    const NAME: &'static str = "placed";
+    const ROWS: usize = G::ROWS;
+
+    fn synthesize<E>(&self, env: &mut E, input: Of<Self::Input, E::Var>) -> Of<Self::Output, E::Var>
+    where
+        E: Env<F>,
+    {
+        let scalars = <G::Input as Shape>::flatten(&input);
+        let placed: alloc::vec::Vec<E::Var> = scalars
+            .iter()
+            .zip(&self.cells)
+            .map(|(x, at)| env.advice(*at, [x], |[v]| v))
+            .collect();
+        env.call(&self.gadget, <G::Input as Shape>::unflatten(&placed))
+    }
+}
+
 /// `gadget`, `N` times, each on the previous output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Repeat<G, const N: usize> {

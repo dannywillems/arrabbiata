@@ -17,8 +17,8 @@
 
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{
-    Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, Shape, TypedGadget, Unit,
-    Violation, assign, circuit, evaluate, figures, gates, witness,
+    Array, Cell, Chain, Env, Error, Layout, Of, Placed, Repeat, Scalar, Shape, TypedGadget, Unit,
+    Violation, assign, circuit, compile, evaluate, figures, gates, witness,
 };
 use arrabbiata_pasta::Fq as F;
 use proptest::prelude::*;
@@ -106,10 +106,27 @@ proptest! {
         let (compiled, output) = witness::<F, _, N, D>(&gadget, LAYOUT, &x).unwrap();
         prop_assert!(compiled.circuit.is_satisfied(&compiled.columns, &compiled.public));
         prop_assert_eq!(&compiled.circuit, &circuit::<F, _, N, D>(&gadget, LAYOUT).unwrap());
+        // The symbolic run alone: the same circuit and gate kinds, no witness.
+        let symbolic = compile::<F, _, N, D>(&gadget, LAYOUT).unwrap();
+        prop_assert_eq!(&symbolic.circuit, &compiled.circuit);
+        prop_assert_eq!(&symbolic.kinds, &compiled.kinds);
         let expected = square_plus(square_plus(square_plus(x, c[0]), c[1]), c[2]);
         prop_assert_eq!(output, expected);
         prop_assert_eq!(evaluate(&gadget, LAYOUT, &x).unwrap(), expected);
         prop_assert_eq!(compiled.public, vec![expected]);
+    }
+
+    /// `Placed` writes the input where it is told and computes the inner
+    /// gadget's function: placing at `(0, 0)` then running `SquarePlus` is
+    /// the program's first row, and the cell holds the input.
+    #[test]
+    fn placed_writes_the_input_then_runs(x in arb_f(), c in arb_f()) {
+        let placed = Placed { gadget: SquarePlus { c }, cells: vec![Cell::new(0, 0)] };
+        let (compiled, y) = witness::<F, _, N, D>(&placed, LAYOUT, &x).unwrap();
+        prop_assert_eq!(y, square_plus(x, c));
+        prop_assert_eq!(compiled.columns[0][0], x);
+        prop_assert_eq!(compiled.columns[0][1], y);
+        prop_assert!(compiled.circuit.is_satisfied(&compiled.columns, &compiled.public));
     }
 
     /// `assign` is `witness` on a witness that holds, and the gadget's own

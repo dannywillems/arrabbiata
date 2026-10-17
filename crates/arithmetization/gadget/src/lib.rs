@@ -51,9 +51,9 @@ pub mod shape;
 pub use crate::{
     builder::{
         Builder, Compiled, Error, Figures, GateConstraints, GateFigures, Layout, Rom, Violation,
-        Witnessed, assign, circuit, evaluate, figures, gates, witness,
+        Witnessed, assign, circuit, compile, evaluate, figures, gates, witness,
     },
-    env::{Cell, Chain, Env, Repeat, TypedGadget},
+    env::{Cell, Chain, Env, Placed, Repeat, TypedGadget},
     expr::Wire,
     shape::{Array, Of, Scalar, Shape, Unit},
 };

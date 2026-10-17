@@ -965,6 +965,29 @@ where
     builder.finish().map(|c| c.circuit)
 }
 
+/// The compiled circuit of `gadget`, without a witness: [`circuit`] with the
+/// gadget kind of each selector, the symbolic interpretation of the gadget
+/// alone (its witness columns empty). Because a gadget's layout never
+/// depends on a value, this is the circuit [`witness`] compiles on every
+/// input.
+///
+/// # Errors
+///
+/// An [`Error`] naming the gadget at fault.
+pub fn compile<F, G, const N: usize, const D: usize>(
+    gadget: &G,
+    layout: Layout,
+) -> Result<Compiled<F, N, D>, Error>
+where
+    F: Field,
+    G: TypedGadget<F>,
+{
+    let mut builder = Builder::new(layout, false);
+    let input = inputs::<F, G::Input>(None);
+    let _ = builder.call(gadget, input);
+    builder.finish()
+}
+
 /// A compiled circuit with its witness, and the gadget's output.
 pub type Witnessed<F, G, const N: usize, const D: usize> =
     (Compiled<F, N, D>, Of<<G as TypedGadget<F>>::Output, F>);
