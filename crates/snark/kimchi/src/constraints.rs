@@ -372,6 +372,26 @@ pub trait Connect {
     ///
     /// If a row is out of range or a column is not below [`PERMUTS`].
     fn connect_cell_pair(&mut self, a: (usize, usize), b: (usize, usize));
+
+    /// Kimchi's `connect_64bit`, meant to wire the cells 1 and 2 of
+    /// `start_row`, the two high limbs of a RangeCheck0 row, to
+    /// `(zero_row, 0)`.
+    ///
+    /// It does not: of its three swaps, the third joins two cells already on
+    /// one cycle, which splits the cycle, and `(start_row, 1)` is left
+    /// wired to itself. Only `(start_row, 2)` reaches the zero cell, so the
+    /// row's value is bounded by `2^76`, not `2^64`. Kept as Kimchi has it
+    /// (proof-systems `9227444890`), since this constructor is a port; the
+    /// first two swaps alone would wire all three cells together.
+    ///
+    /// # Panics
+    ///
+    /// If a row is out of range.
+    fn connect_64bit(&mut self, zero_row: usize, start_row: usize) {
+        self.connect_cell_pair((start_row, 1), (start_row, 2));
+        self.connect_cell_pair((start_row, 2), (zero_row, 0));
+        self.connect_cell_pair((zero_row, 0), (start_row, 1));
+    }
 }
 
 impl<F> Connect for [CircuitGate<F>] {

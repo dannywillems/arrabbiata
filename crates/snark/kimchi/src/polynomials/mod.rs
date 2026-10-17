@@ -4,6 +4,7 @@
 //! `arrabbiata-kimchi-gadgets` on Kimchi's rows.
 
 pub mod generic;
+pub mod rot;
 pub mod xor;
 
 use alloc::vec::Vec;

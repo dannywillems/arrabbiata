@@ -25,6 +25,7 @@ use arrabbiata_kimchi::{
     polynomials::{
         self as gadgets,
         generic::GenericGateSpec,
+        rot::{RotMode, extend_rot},
         xor::{create_xor_witness, extend_xor_witness, num_xors},
     },
     prover::{
@@ -1363,4 +1364,64 @@ fn polynomials_xor_extend_xor_witness() {
     let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
     extend_xor_witness(&mut witness, Fp::ONE, Fp::ONE, 16).unwrap();
     assert_eq!(witness[0].len(), 3);
+}
+
+#[test]
+fn polynomials_rot_create_rot64() {
+    // Rot64 with 2^rot, then two RangeCheck0 rows with coefficient 0.
+    let gates = CircuitGate::<Fp>::create_rot64(1, 3);
+    assert_eq!(gates[0].typ, GateType::Rot64);
+    assert_eq!(gates[0].coeffs, vec![Fp::from_u64(8)]);
+    assert_eq!(gates[2].typ, GateType::RangeCheck0);
+    assert_eq!(gates[2].wires, Wire::for_row(3));
+}
+
+#[test]
+fn polynomials_rot_create_rot() {
+    // A right rotation by 3 is a left one by 61.
+    let (next, gates) = CircuitGate::<Fp>::create_rot(0, 3, RotMode::Right);
+    assert_eq!(next, 3);
+    assert_eq!(gates[0].coeffs, vec![Fp::from_u64(2).pow(61)]);
+}
+
+#[test]
+fn polynomials_rot_extend_rot() {
+    // The excess on the Rot64 row is wired to the second range check.
+    let mut gates = vec![CircuitGate::<Fp>::new(
+        GateType::Zero,
+        Wire::for_row(0),
+        vec![],
+    )];
+    let next = CircuitGate::extend_rot(&mut gates, 5, RotMode::Left, 0);
+    assert_eq!(next, 4);
+    assert_eq!(gates[1].wires[2], Wire { row: 3, col: 0 });
+}
+
+#[test]
+fn constraints_connect_connect_64bit() {
+    // Kimchi's three swaps: the third joins two cells already on one
+    // cycle and splits it, so (1, 1) is left alone and only (1, 2) is
+    // wired to (0, 0) (see kimchi_rot::connect_64bit_forgery).
+    let mut gates: Vec<CircuitGate<Fp>> = (0..2)
+        .map(|row| CircuitGate::new(GateType::Zero, Wire::for_row(row), vec![]))
+        .collect();
+    gates.connect_64bit(0, 1);
+    assert_eq!(gates[1].wires[1], Wire { row: 1, col: 1 });
+    assert_eq!(gates[1].wires[2], Wire { row: 0, col: 0 });
+    assert_eq!(gates[0].wires[0], Wire { row: 1, col: 2 });
+}
+
+#[test]
+fn polynomials_rot_extend_rot_witness() {
+    // Three rows; the rotated word in column 1 of the first.
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
+    extend_rot(&mut witness, 0x8000_0000_0000_0001, 1, RotMode::Left).unwrap();
+    assert_eq!(witness[0].len(), 4);
+    assert_eq!(witness[1][1], Fp::from_u64(3));
+    assert!(extend_rot(&mut witness, 1, 65, RotMode::Left).is_err());
+}
+
+#[test]
+fn polynomials_rot_rot_mode() {
+    assert_ne!(RotMode::Left, RotMode::Right);
 }

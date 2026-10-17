@@ -7,10 +7,10 @@
 #![allow(dead_code)]
 
 use arrabbiata_curve::glv::Glv;
-use arrabbiata_field::PrimeField;
+use arrabbiata_field::{PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_kimchi::{
     constraints::{COLUMNS, CircuitGate, ConstraintSystem},
-    gates::KimchiGates,
+    gates::{Gates, KimchiGates},
     prover::{ProverIndex, prove},
     rng::{Arkworks, SplitMix64},
     srs::Srs,
@@ -18,6 +18,7 @@ use arrabbiata_kimchi::{
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
+use arrabbiata_transcript::Transcript;
 
 /// Kimchi's runs.
 const VECTORS: &str = include_str!("../vectors/kimchi_gate_tests.txt");
@@ -141,47 +142,74 @@ pub fn pallas_gates() -> KimchiGates<Fq> {
     KimchiGates::new(&vesta_base(), Vesta::beta()).unwrap()
 }
 
-/// Kimchi's `TestFramework::prove_and_verify` on Vesta: the constraint
-/// system of `gates` with `public` public inputs, the witness checked
-/// against it, a proof, and its verification, each failure as Kimchi's
-/// framework reports it.
-pub fn prove_and_verify(
-    gates: Vec<CircuitGate<Fp>>,
-    witness: [Vec<Fp>; COLUMNS],
-    public: Vec<Fp>,
-) -> Result<(), String> {
-    let kimchi = vesta_gates();
+/// Kimchi's `TestFramework::prove_and_verify` on the curve `C`: the
+/// constraint system of `gates` with `public` public inputs, the witness
+/// checked against it, a proof, and its verification, each failure as
+/// Kimchi's framework reports it.
+pub fn prove_and_verify_on<C, G, S, T>(
+    kimchi: &G,
+    (base, scalar): (&S, &T),
+    gates: Vec<CircuitGate<C::Scalar>>,
+    witness: [Vec<C::Scalar>; COLUMNS],
+    public: Vec<C::Scalar>,
+) -> Result<(), String>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    C::Scalar: TwoAdicField,
+    G: Gates<C::Scalar>,
+    S: Transcript<C::Base> + Clone,
+    T: Transcript<C::Scalar> + Clone,
+{
     let cs = ConstraintSystem::create(gates)
         .public(public.len())
         .build()
         .map_err(|e| format!("{e:?}"))?;
-    cs.verify_witness(&witness, &public, &kimchi)
+    cs.verify_witness(&witness, &public, kimchi)
         .map_err(|e| format!("{e:?}"))?;
     let depth = cs.domain.d1.size();
-    let index: ProverIndex<Vesta> = ProverIndex::create(cs, Srs::create(depth));
-    let base = KimchiSponge::new(vesta_base());
-    let scalar = KimchiSponge::new(pallas_base());
+    let index: ProverIndex<C> = ProverIndex::create(cs, Srs::create(depth));
     let mut rng = Arkworks(SplitMix64(250));
-    let proof = prove(
-        &index,
-        witness,
-        &[],
-        &[],
-        &kimchi,
-        (&base, &scalar),
-        &mut rng,
-    )
-    .map_err(|e| e.to_string())?;
+    let proof = prove(&index, witness, &[], &[], kimchi, (base, scalar), &mut rng)
+        .map_err(|e| e.to_string())?;
     verify(
         &index.verifier_index,
         &index.srs,
         &proof,
         &public,
-        &kimchi,
-        (&base, &scalar),
+        kimchi,
+        (base, scalar),
         &mut rng,
     )
     .map_err(|e| e.to_string())
+}
+
+/// [`prove_and_verify_on`] Vesta.
+pub fn prove_and_verify(
+    gates: Vec<CircuitGate<Fp>>,
+    witness: [Vec<Fp>; COLUMNS],
+    public: Vec<Fp>,
+) -> Result<(), String> {
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    prove_and_verify_on::<Vesta, _, _, _>(&vesta_gates(), (&base, &scalar), gates, witness, public)
+}
+
+/// [`prove_and_verify_on`] Pallas.
+pub fn prove_and_verify_pallas(
+    gates: Vec<CircuitGate<Fq>>,
+    witness: [Vec<Fq>; COLUMNS],
+    public: Vec<Fq>,
+) -> Result<(), String> {
+    let base = KimchiSponge::new(pallas_base());
+    let scalar = KimchiSponge::new(vesta_base());
+    prove_and_verify_on::<Pallas, _, _, _>(
+        &pallas_gates(),
+        (&base, &scalar),
+        gates,
+        witness,
+        public,
+    )
 }
 
 /// The `Debug` of a result, as the vectors print verdicts.
