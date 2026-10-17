@@ -3,8 +3,8 @@
 
 use arrabbiata_field::{Field, Goldilocks as F, Goldilocks};
 use arrabbiata_poly::{
-    Algebra, Assignment, Domain, Expr, FixedColumn, Polynomials, Rotation, Scalars, UniPoly,
-    Variable, WitnessColumn, evaluate, evaluate_graded, evaluate_homogeneous,
+    Algebra, Assignment, Chunking, Domain, Expr, FixedColumn, Polynomials, Rotation, Scalars,
+    UniPoly, Variable, WitnessColumn, combine, evaluate, evaluate_graded, evaluate_homogeneous,
 };
 
 #[test]
@@ -611,4 +611,68 @@ fn ring_polynomials() {
 #[test]
 fn ring_polynomials_new() {
     let _ring = Polynomials::<F>::new();
+}
+
+/// `1 + 2 X + 3 X^2 + 4 X^3 + 5 X^4`.
+fn five() -> UniPoly<F> {
+    UniPoly::new((1..=5).map(F::from_u64).collect())
+}
+
+#[test]
+fn chunk_chunking_new() {
+    // A chunk of no coefficient, or no chunk, is no chunking.
+    assert!(Chunking::new(2, 3).is_some());
+    assert!(Chunking::new(0, 3).is_none());
+    assert!(Chunking::new(2, 0).is_none());
+}
+
+#[test]
+fn chunk_chunking_size_count_capacity() {
+    let chunking = Chunking::new(2, 3).unwrap();
+    assert_eq!(chunking.size(), 2);
+    assert_eq!(chunking.count(), 3);
+    assert_eq!(chunking.capacity(), 6);
+}
+
+#[test]
+fn chunk_chunking_split() {
+    // Five coefficients in three chunks of two: the last padded with zero.
+    let chunks = Chunking::new(2, 3).unwrap().split(&five()).unwrap();
+    let two = |a: u64, b: u64| UniPoly::new(vec![F::from_u64(a), F::from_u64(b)]);
+    assert_eq!(chunks, vec![two(1, 2), two(3, 4), two(5, 0)]);
+    assert!(Chunking::new(2, 2).unwrap().split(&five()).is_none());
+}
+
+#[test]
+fn chunk_chunking_evaluate() {
+    // At 10: the chunks 1 + 2 X, 3 + 4 X, 5 give 21, 43, 5.
+    let values = Chunking::new(2, 3)
+        .unwrap()
+        .evaluate(&five(), F::from_u64(10))
+        .unwrap();
+    assert_eq!(values, [21, 43, 5].map(F::from_u64).to_vec());
+}
+
+#[test]
+fn chunk_chunking_linearize() {
+    // At y = 10: (1 + 2 X) + 10 (3 + 4 X) + 100 (5) = 531 + 42 X.
+    let linear = Chunking::new(2, 3)
+        .unwrap()
+        .linearize(&five(), F::from_u64(10))
+        .unwrap();
+    assert_eq!(
+        linear,
+        UniPoly::new(vec![F::from_u64(531), F::from_u64(42)])
+    );
+}
+
+#[test]
+fn chunk_combine() {
+    // 21 + 43 100 + 5 100^2 is the value at 10, with y = 10^2.
+    let values = [21, 43, 5].map(F::from_u64);
+    assert_eq!(
+        combine(&values, F::from_u64(100)),
+        Some(five().evaluate(F::from_u64(10)))
+    );
+    assert_eq!(combine::<F, F>(&[], F::ONE), None);
 }

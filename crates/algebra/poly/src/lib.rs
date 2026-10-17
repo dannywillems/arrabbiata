@@ -13,12 +13,14 @@
 
 extern crate alloc;
 
+pub mod chunk;
 pub mod column;
 pub mod domain;
 pub mod eval;
 pub mod expr;
 pub mod ring;
 
+pub use chunk::{Chunking, combine};
 pub use column::{FixedColumn, Rotation, Variable, WitnessColumn};
 pub use domain::Domain;
 pub use eval::{Assignment, evaluate, evaluate_graded, evaluate_homogeneous};
