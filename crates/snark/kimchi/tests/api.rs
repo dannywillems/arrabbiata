@@ -10,7 +10,7 @@ use arrabbiata_kimchi::{
     },
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
-    prover::{self, ProverIndex, WitnessRound, witness_round},
+    prover::{self, PermutationRound, ProverIndex, WitnessRound, permutation_round, witness_round},
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
     verifier_index::VerifierIndex,
@@ -400,4 +400,29 @@ fn witness_round_state() {
     let blinded = round.w_comm[3].chunks[0];
     assert_ne!(blinded, index.srs.h * round.blinders[3][0]);
     assert_ne!(round.beta, round.gamma);
+}
+
+#[test]
+fn permutation_round_state() {
+    // Two Generic rows with cell (0, 0) copied to (1, 0).
+    let mut gates = two_generic();
+    gates.connect_cell_pair((0, 0), (1, 0));
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(8));
+    let sponge = KimchiSponge::new(vesta_base());
+    let equal: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ONE; 2]);
+    let mut rng = Arkworks(SplitMix64(5));
+    let first = witness_round(&index, equal, &sponge, &mut rng).unwrap();
+    let round: PermutationRound<Vesta, _> = permutation_round(&index, first, &mut rng).unwrap();
+    // z starts at 1 and closes at row n - zk_rows = 5.
+    assert_eq!(round.z[0], Fp::ONE);
+    assert_eq!(round.z[5], Fp::ONE);
+    assert_eq!(round.z_blinders.len(), 1);
+    assert_eq!(round.alpha, round.alpha_chal.to_field(Vesta::lambda()));
+    // Breaking the copy breaks the product.
+    let mut broken: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ONE; 2]);
+    broken[0][1] = Fp::ZERO;
+    let first = witness_round(&index, broken, &sponge, &mut rng).unwrap();
+    let error = permutation_round(&index, first, &mut rng).unwrap_err();
+    assert_eq!(error, prover::Error::PermutationFinalValue);
 }

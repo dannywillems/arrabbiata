@@ -11,7 +11,7 @@ use arrabbiata_curve::Projective;
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_kimchi::{
     constraints::{CircuitGate, ConstraintSystem, GateType, Wire},
-    prover::{ProverIndex, witness_round},
+    prover::{ProverIndex, permutation_round, witness_round},
     rng::{Arkworks, Sampler, SplitMix64},
     srs::{PolyComm, Srs},
 };
@@ -154,5 +154,20 @@ fn the_witness_round_is_kimchis() {
         let oracles = lines("oracle", name);
         assert_eq!(oracles["beta"], hex(round.beta), "{name} beta");
         assert_eq!(oracles["gamma"], hex(round.gamma), "{name} gamma");
+    }
+}
+
+#[test]
+fn the_permutation_round_is_kimchis() {
+    for (name, max_poly_size) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size);
+        let sponge = KimchiSponge::new(vesta_base());
+        let mut rng = Arkworks(SplitMix64(7));
+        let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+        let round = permutation_round(&index, first, &mut rng).unwrap();
+        assert_eq!(lines("comm", name)["z"], comm(&round.z_comm), "{name} z");
+        let oracles = lines("oracle", name);
+        assert_eq!(oracles["alpha_chal"], hex(round.alpha_chal.0), "{name}");
+        assert_eq!(oracles["alpha"], hex(round.alpha), "{name} alpha");
     }
 }

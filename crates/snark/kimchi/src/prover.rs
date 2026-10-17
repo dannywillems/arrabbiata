@@ -17,6 +17,17 @@
 //!    and the fifteen commitments are absorbed;
 //! 5. `beta` and `gamma` are squeezed, 128-bit challenges.
 //!
+//! [`permutation_round`], the second:
+//!
+//! 1. the aggregation `z` on `d1`: `z_0 = 1` and
+//!    `z_(j+1) = z_j prod_i (w_i + beta shift_i w^j + gamma) / prod_i (w_i +
+//!    beta sigma_i + gamma)` at row `j`, over the 7 permuted columns, except that `z` is random at
+//!    rows `n - zk_rows + 1` and `n - zk_rows + 2` (drawn in that order);
+//!    the product closes, `z(w^(n - zk_rows)) = 1`, exactly when the
+//!    witness respects the copies;
+//! 2. `z` committed and hidden, one blinder per chunk, and absorbed;
+//! 3. `alpha`, the endomorphism image of a 128-bit challenge.
+//!
 //! The randomness is the [`Sampler`] passed in; with [`crate::rng::Arkworks`]
 //! over the same stream as Kimchi's RNG, the round gives Kimchi's values.
 //! Lookups are not supported yet: a circuit with Lookup, RangeCheck, Rot64,
@@ -25,13 +36,14 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use arrabbiata_curve::Curve;
+use arrabbiata_curve::{Curve, glv::Glv};
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_transcript::Transcript;
 
 use crate::{
     constraints::{COLUMNS, ConstraintSystem, zk_rows_strict_lower_bound},
-    oracle::FqSponge,
+    oracle::{FqSponge, ScalarChallenge},
+    permutation::PERMUTS,
     rng::Sampler,
     srs::{PolyComm, Srs},
     verifier_index::VerifierIndex,
@@ -53,6 +65,8 @@ pub enum Error {
     },
     /// The circuit uses lookups, not supported yet.
     LookupsUnsupported,
+    /// The permutation product does not close: the witness breaks a copy.
+    PermutationFinalValue,
 }
 
 impl fmt::Display for Error {
@@ -66,6 +80,12 @@ impl fmt::Display for Error {
                 write!(f, "{found} zero-knowledge rows, {needed} needed")
             }
             Self::LookupsUnsupported => write!(f, "lookups are not supported yet"),
+            Self::PermutationFinalValue => {
+                write!(
+                    f,
+                    "the permutation product does not close: a copy is broken"
+                )
+            }
         }
     }
 }
@@ -200,29 +220,13 @@ where
     for (slot, p) in negated.iter_mut().zip(&public) {
         *slot = -*p;
     }
-    let commit = |column: &[C::Scalar]| {
-        let polynomial = match cs.domain.d1.interpolate(column) {
-            Some(p) => p,
-            None => unreachable!("every column has one value per row"),
-        };
-        index.srs.commit_non_hiding(polynomial.coefficients(), n)
-    };
-    let public_comm = index.srs.mask_fixed(commit(&negated));
+    let public_comm = index.srs.mask_fixed(commit_column(index, &negated));
     fq_sponge.absorb_g(&public_comm.chunks);
 
     let blinders: [Vec<C::Scalar>; COLUMNS] =
         core::array::from_fn(|_| (0..num_chunks).map(|_| rng.sample()).collect());
-    let w_comm: [PolyComm<C>; COLUMNS] = core::array::from_fn(|i| {
-        let c = commit(&witness[i]);
-        PolyComm {
-            chunks: c
-                .chunks
-                .into_iter()
-                .zip(&blinders[i])
-                .map(|(chunk, blinder)| chunk + index.srs.h * *blinder)
-                .collect(),
-        }
-    });
+    let w_comm: [PolyComm<C>; COLUMNS] =
+        core::array::from_fn(|i| hide(index, commit_column(index, &witness[i]), &blinders[i]));
     for c in &w_comm {
         fq_sponge.absorb_g(&c.chunks);
     }
@@ -237,5 +241,122 @@ where
         fq_sponge,
         beta,
         gamma,
+    })
+}
+
+/// The commitment to the evaluations `column` on `d1`, chunked.
+fn commit_column<C>(index: &ProverIndex<C>, column: &[C::Scalar]) -> PolyComm<C>
+where
+    C: Curve,
+    C::Scalar: TwoAdicField,
+{
+    let d1 = index.cs.domain.d1;
+    let polynomial = match d1.interpolate(column) {
+        Some(p) => p,
+        None => unreachable!("every column has one value per row"),
+    };
+    index
+        .srs
+        .commit_non_hiding(polynomial.coefficients(), d1.size())
+}
+
+/// `commitment` hidden by `h`, one blinder per chunk.
+fn hide<C>(index: &ProverIndex<C>, commitment: PolyComm<C>, blinders: &[C::Scalar]) -> PolyComm<C>
+where
+    C: Curve,
+{
+    PolyComm {
+        chunks: commitment
+            .chunks
+            .into_iter()
+            .zip(blinders)
+            .map(|(chunk, blinder)| chunk + index.srs.h * *blinder)
+            .collect(),
+    }
+}
+
+/// The state after the permutation round.
+#[derive(Clone, Debug)]
+pub struct PermutationRound<C, S>
+where
+    C: Curve,
+{
+    /// The state before it.
+    pub previous: WitnessRound<C, S>,
+    /// The aggregation `z` on `d1`.
+    pub z: Vec<C::Scalar>,
+    /// The blinders of its commitment, one per chunk.
+    pub z_blinders: Vec<C::Scalar>,
+    /// The commitment to `z`.
+    pub z_comm: PolyComm<C>,
+    /// The base-field sponge after `alpha`.
+    pub fq_sponge: FqSponge<C, S>,
+    /// The 128-bit challenge `alpha` comes from.
+    pub alpha_chal: ScalarChallenge<C::Scalar>,
+    /// The constraint combiner.
+    pub alpha: C::Scalar,
+}
+
+/// The permutation round (see the module documentation).
+///
+/// # Errors
+///
+/// [`Error::PermutationFinalValue`] when the product does not close.
+pub fn permutation_round<C, S, R>(
+    index: &ProverIndex<C>,
+    previous: WitnessRound<C, S>,
+    rng: &mut R,
+) -> Result<PermutationRound<C, S>, Error>
+where
+    C: Glv,
+    C::Base: PrimeField,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    R: Sampler<C::Scalar>,
+{
+    let cs = &index.cs;
+    let d1 = cs.domain.d1;
+    let n = d1.size();
+    let zk_rows = cs.zk_rows;
+    let (beta, gamma) = (previous.beta, previous.gamma);
+    let w = &previous.witness;
+    let sigmas = cs.sigmas();
+    let mut z = alloc::vec![C::Scalar::ONE; n];
+    let mut row_label = C::Scalar::ONE;
+    for j in 0..n - 1 {
+        let random = j == n - zk_rows || j == n - zk_rows + 1;
+        if random {
+            z[j + 1] = rng.sample();
+        } else {
+            let mut numerator = C::Scalar::ONE;
+            let mut denominator = C::Scalar::ONE;
+            for i in 0..PERMUTS {
+                numerator = numerator * (w[i][j] + beta * cs.shift[i] * row_label + gamma);
+                denominator = denominator * (w[i][j] + beta * sigmas[i][j] + gamma);
+            }
+            // Kimchi inverts by batch inversion, which leaves a zero as zero.
+            let inverse = denominator.inverse().unwrap_or(C::Scalar::ZERO);
+            z[j + 1] = z[j] * numerator * inverse;
+        }
+        row_label = row_label * d1.generator();
+    }
+    if z[n - zk_rows] != C::Scalar::ONE {
+        return Err(Error::PermutationFinalValue);
+    }
+    let num_chunks = index.num_chunks();
+    let z_blinders: Vec<C::Scalar> = (0..num_chunks).map(|_| rng.sample()).collect();
+    let z_comm = hide(index, commit_column(index, &z), &z_blinders);
+    let mut fq_sponge = previous.fq_sponge.clone();
+    fq_sponge.absorb_g(&z_comm.chunks);
+    let alpha_chal = ScalarChallenge(fq_sponge.challenge());
+    let alpha = alpha_chal.to_field(C::lambda());
+    Ok(PermutationRound {
+        previous,
+        z,
+        z_blinders,
+        z_comm,
+        fq_sponge,
+        alpha_chal,
+        alpha,
     })
 }
