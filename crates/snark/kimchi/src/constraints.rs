@@ -15,7 +15,9 @@
 //! 3. the domain `d1` of size `n`, and `d2`, `d4`, `d8` (whose generators
 //!    square into one another);
 //! 4. the padding: Zero gates with identity wiring up to `n` rows;
-//! 5. the shifts ([`crate::permutation::shifts`]).
+//! 5. the shifts ([`crate::permutation::shifts`]);
+//! 6. the lookup index ([`crate::lookup::LookupIndex`]) when the gates look
+//!    something up.
 //!
 //! The columns are given as evaluations on `d1`
 //! ([`ConstraintSystem::sigmas`], [`ConstraintSystem::selector`],
@@ -29,7 +31,10 @@ use core::fmt;
 use arrabbiata_field::{PrimeField, TwoAdicField};
 use arrabbiata_poly::domain::Domain;
 
-use crate::permutation::{PERMUTS, shifts};
+use crate::{
+    lookup::{LookupError, LookupIndex},
+    permutation::{PERMUTS, shifts},
+};
 
 /// The number of witness columns.
 pub const COLUMNS: usize = 15;
@@ -244,6 +249,8 @@ pub enum Error {
         /// The rows needed.
         rows: usize,
     },
+    /// The lookup tables are inconsistent.
+    Lookup(LookupError),
 }
 
 impl fmt::Display for Error {
@@ -263,6 +270,7 @@ impl fmt::Display for Error {
                 )
             }
             Self::DomainTooLarge { rows } => write!(f, "no domain of {rows} rows in the field"),
+            Self::Lookup(e) => write!(f, "lookup: {e}"),
         }
     }
 }
@@ -416,6 +424,14 @@ where
             (first_padding..n)
                 .map(|row| CircuitGate::new(GateType::Zero, Wire::for_row(row), vec![])),
         );
+        let lookup = LookupIndex::create(
+            &gates,
+            &self.lookup_tables,
+            self.runtime_tables.as_deref(),
+            n,
+            zk_rows,
+        )
+        .map_err(Error::Lookup)?;
         Ok(ConstraintSystem {
             public: self.public,
             prev_challenges: self.prev_challenges,
@@ -426,6 +442,7 @@ where
             lookup_tables: self.lookup_tables,
             runtime_tables: self.runtime_tables,
             max_poly_size: self.max_poly_size,
+            lookup,
             used,
         })
     }
@@ -452,6 +469,8 @@ pub struct ConstraintSystem<F> {
     pub runtime_tables: Option<Vec<RuntimeTableCfg<F>>>,
     /// The rows of a commitment chunk.
     pub max_poly_size: Option<usize>,
+    /// The lookup index, when the circuit looks something up.
+    pub lookup: Option<LookupIndex<F>>,
     used: Vec<GateType>,
 }
 

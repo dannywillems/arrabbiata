@@ -9,6 +9,10 @@ use arrabbiata_kimchi::{
         XOR_TABLE_SIZE, zk_rows_strict_lower_bound,
     },
     gates::{Gates, KimchiGates},
+    lookup::{
+        JointLookup, LookupError, LookupIndex, LookupInfo, LookupPattern, LookupTableId, PATTERNS,
+        RANGE_CHECK_TABLE_ID, XOR_TABLE_ID, id_to_field, range_check_table, xor_table,
+    },
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
     prover::{
@@ -18,7 +22,7 @@ use arrabbiata_kimchi::{
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
-    verifier_index::VerifierIndex,
+    verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
@@ -630,4 +634,87 @@ fn prove_runs_every_round() {
     assert_eq!(d.prev_challenges, previous.to_vec());
     assert_eq!(d.w_comm, a.w_comm);
     assert_ne!(d.proof, a.proof);
+}
+
+#[test]
+fn lookup_patterns() {
+    assert_eq!(PATTERNS[0], LookupPattern::Xor);
+    assert_eq!(
+        LookupPattern::from_gate(GateType::RangeCheck1, true),
+        Some(LookupPattern::RangeCheck)
+    );
+    assert_eq!(LookupPattern::from_gate(GateType::Xor16, true), None);
+    assert_eq!(LookupPattern::Xor.table_id(), Some(XOR_TABLE_ID));
+    assert_eq!(LookupPattern::Lookup.table_id(), None);
+    assert_eq!(LookupPattern::Lookup.max_lookups_per_row(), 3);
+    assert_eq!(LookupPattern::Xor.max_joint_size(), 3);
+    let xor: Vec<JointLookup> = LookupPattern::Xor.lookups();
+    assert_eq!(xor[1].entry, vec![4, 8, 12]);
+    assert_eq!(xor[1].table_id, LookupTableId::Constant(XOR_TABLE_ID));
+    let lookup = LookupPattern::Lookup.lookups();
+    assert_eq!(lookup[2].table_id, LookupTableId::WitnessColumn(0));
+}
+
+#[test]
+fn builtin_tables() {
+    let xor = xor_table::<Fp>();
+    assert_eq!(xor.data[0].len(), 256);
+    // Reversed: the last row is the zero row, the first (15, 15, 0).
+    assert_eq!(xor.data[2][255], Fp::ZERO);
+    assert_eq!(xor.data[0][0], Fp::from_u64(15));
+    let range = range_check_table::<Fp>();
+    assert_eq!(range.id, RANGE_CHECK_TABLE_ID);
+    assert_eq!(range.data[0][4095], Fp::from_u64(4095));
+    assert_eq!(id_to_field::<Fp>(-3), -Fp::from_u64(3));
+}
+
+#[test]
+fn lookup_info_and_index() {
+    let gates: Vec<CircuitGate<Fp>> = (0..3)
+        .map(|row| CircuitGate::new(GateType::Lookup, Wire::for_row(row), vec![]))
+        .collect();
+    let info = LookupInfo::from_gates(&gates, false).unwrap();
+    assert_eq!(info.patterns, vec![LookupPattern::Lookup]);
+    assert!(info.joint_lookup_used());
+    assert_eq!(info.by_row(&gates)[1].len(), 3);
+    assert!(LookupInfo::from_gates(&two_generic(), false).is_none());
+    // A table of id 2: no zero row needed; its ids are a column.
+    let table = LookupTable {
+        id: 2,
+        data: vec![vec![Fp::ONE, Fp::from_u64(2)]],
+    };
+    let index = LookupIndex::create(&gates, std::slice::from_ref(&table), None, 16, 3)
+        .unwrap()
+        .unwrap();
+    assert_eq!(index.table.len(), 2);
+    assert_eq!(index.table_ids.as_ref().unwrap()[0], Fp::from_u64(2));
+    assert_eq!(index.selector(LookupPattern::Lookup).unwrap()[2], Fp::ONE);
+    assert!(index.selector(LookupPattern::Xor).is_none());
+    let colliding = LookupIndex::create(&gates, &[table.clone(), table], None, 16, 3);
+    assert_eq!(colliding.unwrap_err(), LookupError::LookupTableIdCollision);
+    let bad_zero = LookupTable {
+        id: 0,
+        data: vec![vec![Fp::ONE]],
+    };
+    let error = LookupIndex::create(&gates, &[bad_zero], None, 16, 3).unwrap_err();
+    assert_eq!(error, LookupError::TableIdZeroMustHaveZeroEntry);
+    assert_eq!(
+        error.to_string(),
+        "the table with id 0 must have a row of zeros"
+    );
+}
+
+#[test]
+fn lookup_verifier_index() {
+    let gates: Vec<CircuitGate<Fp>> = (0..3)
+        .map(|row| CircuitGate::new(GateType::Lookup, Wire::for_row(row), vec![]))
+        .collect();
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let srs = Srs::<Vesta>::create(cs.domain.d1.size());
+    let index = VerifierIndex::create(&cs, &srs);
+    let lookup: &LookupVerifierIndex<Vesta> = index.lookup_index.as_ref().unwrap();
+    // Only the dummy zero row: no table of nonzero id, so no id column.
+    assert!(lookup.table_ids.is_none());
+    assert!(lookup.lookup_selectors[1].is_some());
+    assert!(lookup.lookup_selectors[0].is_none());
 }

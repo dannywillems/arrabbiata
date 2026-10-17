@@ -15,6 +15,8 @@
 //!   permutation, selector and coefficient columns;
 //! - [`gates`]: the constraints of each gate type, a parameter of the
 //!   prover, Kimchi's from the gadget crate;
+//! - [`lookup`]: the lookup patterns, the built-in tables and the lookup
+//!   index;
 //! - [`permutation`]: the shifts of the copy argument, sampled as Kimchi
 //!   samples them (Blake2b512 of a counter, the first non-residues not in
 //!   the domain);
@@ -31,6 +33,7 @@ extern crate alloc;
 
 pub mod constraints;
 pub mod gates;
+pub mod lookup;
 pub mod oracle;
 pub mod permutation;
 pub mod prover;

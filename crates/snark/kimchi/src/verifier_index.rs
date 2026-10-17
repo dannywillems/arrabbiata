@@ -11,8 +11,11 @@
 //! columns and the optional selectors are not. The optional selectors are
 //! present only when the circuit uses their gate.
 //!
-//! The lookup part of the index (Kimchi's `LookupVerifierIndex`) comes with
-//! the lookups.
+//! The lookup part ([`LookupVerifierIndex`]) commits the joint table's
+//! columns and the table ids masked by `h`, and the pattern selectors and
+//! the runtime selector unmasked.
+
+use alloc::vec::Vec;
 
 use arrabbiata_curve::Curve;
 use arrabbiata_field::{PrimeField, TwoAdicField};
@@ -20,6 +23,7 @@ use arrabbiata_transcript::Transcript;
 
 use crate::{
     constraints::{COLUMNS, ConstraintSystem, GateType},
+    lookup::{LookupInfo, LookupPattern},
     oracle::FqSponge,
     permutation::PERMUTS,
     srs::{PolyComm, Srs},
@@ -71,6 +75,29 @@ where
     pub xor_comm: Option<PolyComm<C>>,
     /// The Rot64 selector, if used.
     pub rot_comm: Option<PolyComm<C>>,
+    /// The lookup part, when the circuit looks something up.
+    pub lookup_index: Option<LookupVerifierIndex<C>>,
+}
+
+/// The lookup part of a verifier index (Kimchi's `LookupVerifierIndex`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LookupVerifierIndex<C>
+where
+    C: Curve,
+{
+    /// The patterns.
+    pub lookup_info: LookupInfo,
+    /// Whether some lookup reads more than one column.
+    pub joint_lookup_used: bool,
+    /// The joint table's columns, masked.
+    pub lookup_table: Vec<PolyComm<C>>,
+    /// The table ids, masked, when some table has a nonzero id.
+    pub table_ids: Option<PolyComm<C>>,
+    /// The runtime selector, with runtime tables.
+    pub runtime_tables_selector: Option<PolyComm<C>>,
+    /// The selector of each pattern, in Kimchi's order (Xor, Lookup,
+    /// RangeCheck, ForeignFieldMul), `None` when unused.
+    pub lookup_selectors: [Option<PolyComm<C>>; 4],
 }
 
 impl<C> VerifierIndex<C>
@@ -121,6 +148,15 @@ where
             foreign_field_mul_comm: optional(GateType::ForeignFieldMul),
             xor_comm: optional(GateType::Xor16),
             rot_comm: optional(GateType::Rot64),
+            lookup_index: cs.lookup.as_ref().map(|l| LookupVerifierIndex {
+                lookup_info: l.info.clone(),
+                joint_lookup_used: l.info.joint_lookup_used(),
+                lookup_table: l.table.iter().map(|c| srs.mask_fixed(commit(c))).collect(),
+                table_ids: l.table_ids.as_ref().map(|c| srs.mask_fixed(commit(c))),
+                runtime_tables_selector: l.runtime_selector.as_ref().map(|c| commit(c)),
+                lookup_selectors: crate::lookup::PATTERNS
+                    .map(|p: LookupPattern| l.selector(p).map(&commit)),
+            }),
         }
     }
 }
@@ -170,6 +206,20 @@ where
         .flatten()
         {
             absorb(c);
+        }
+        if let Some(l) = &self.lookup_index {
+            for c in &l.lookup_table {
+                absorb(c);
+            }
+            for c in [&l.table_ids, &l.runtime_tables_selector]
+                .into_iter()
+                .flatten()
+            {
+                absorb(c);
+            }
+            for c in l.lookup_selectors.iter().flatten() {
+                absorb(c);
+            }
         }
         fq.digest_fq()
     }

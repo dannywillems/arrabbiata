@@ -1,6 +1,7 @@
 //! Kimchi's SRS and verifier index against Kimchi: for the four circuits
 //! of the figures tools, on Vesta, the first and last SRS points and `h`,
-//! the parameters of the index, and every chunk of every commitment
+//! the parameters of the index, every chunk of every commitment (the
+//! lookup part included), and the digest
 //! (`vectors/kimchi_verifier_index.txt`, from the `verifier_index` tool).
 
 mod common;
@@ -14,6 +15,7 @@ use arrabbiata_kimchi::{
     verifier_index::VerifierIndex,
 };
 use arrabbiata_pasta::Vesta;
+use arrabbiata_poseidon::kimchi::{KimchiSponge, vesta_base};
 use common::circuits;
 
 /// Kimchi's output.
@@ -89,6 +91,37 @@ fn ours(name: &str, index: &VerifierIndex<Vesta>, srs: &Srs<Vesta>) -> BTreeMap<
     put("ForeignFieldMul", index.foreign_field_mul_comm.as_ref());
     put("Xor16", index.xor_comm.as_ref());
     put("Rot64", index.rot_comm.as_ref());
+    match &index.lookup_index {
+        None => {
+            lines.insert(format!("lookup {name} none"), String::new());
+        }
+        Some(l) => {
+            let info = &l.lookup_info;
+            lines.insert(
+                format!("lookup {name} info"),
+                format!(
+                    "{} {} {}",
+                    info.max_per_row, info.max_joint_size, l.joint_lookup_used
+                ),
+            );
+            for (i, c) in l.lookup_table.iter().enumerate() {
+                lines.insert(format!("comm {name} lookup_table{i}"), comm(Some(c)));
+            }
+            let mut put = |label: &str, c: Option<&PolyComm<Vesta>>| {
+                lines.insert(format!("comm {name} {label}"), comm(c));
+            };
+            put("table_ids", l.table_ids.as_ref());
+            put("runtime_selector", l.runtime_tables_selector.as_ref());
+            for (label, c) in ["xor", "lookup", "range_check", "ffmul"]
+                .iter()
+                .zip(&l.lookup_selectors)
+            {
+                put(&format!("selector_{label}"), c.as_ref());
+            }
+        }
+    }
+    let digest = index.digest(KimchiSponge::new(vesta_base()));
+    lines.insert(format!("digest {name}"), hex(digest));
     lines
 }
 
@@ -98,7 +131,11 @@ fn expected() -> BTreeMap<String, String> {
         .lines()
         .map(|line| {
             let words: Vec<&str> = line.split_whitespace().collect();
-            let key = if words[0] == "comm" { 3 } else { 2 };
+            let key = if words[0] == "comm" || words[0] == "lookup" {
+                3
+            } else {
+                2
+            };
             (words[..key].join(" "), words[key..].join(" "))
         })
         .collect()
@@ -107,7 +144,7 @@ fn expected() -> BTreeMap<String, String> {
 #[test]
 fn the_verifier_indexes_are_kimchis() {
     let expected = expected();
-    assert_eq!(expected.len(), 144);
+    assert_eq!(expected.len(), 170);
     let mut found = BTreeMap::new();
     for (name, cs) in circuits() {
         // The tools take the SRS as large as the domain, except with chunks.
