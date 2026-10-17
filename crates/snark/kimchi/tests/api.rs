@@ -36,6 +36,10 @@ use arrabbiata_kimchi::{
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
+    transcript::{
+        self, AfterGamma, Base, Beta, Challenge, Digest, DigestOf, FqTape, Message, Piop, Scalar,
+        VerifierIndexDigest,
+    },
     verifier::{Claim, Oracles, VerifyError, oracles, succinct, verify},
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
@@ -43,6 +47,7 @@ use arrabbiata_kimchi_gadgets::{generic::GenericSpec, zero::Zero};
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 use arrabbiata_reduction::{Reduction, Relation};
+use arrabbiata_transcript::typed::Label;
 
 #[test]
 fn challenge_limbs() {
@@ -416,7 +421,7 @@ fn witness_round_state() {
     let mut rng = Arkworks(SplitMix64(3));
     let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
     witness[0][0] = Fp::ONE;
-    let round: WitnessRound<Vesta, _> =
+    let (round, _): (WitnessRound<Vesta>, _) =
         witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
     assert_eq!(round.public, vec![Fp::ONE]);
     // Padded to 8 rows, the last three random, the others zero.
@@ -439,8 +444,9 @@ fn permutation_round_state() {
     let sponge = KimchiSponge::new(vesta_base());
     let equal: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ONE; 2]);
     let mut rng = Arkworks(SplitMix64(5));
-    let first = witness_round(&index, equal, &[], &[], &sponge, &mut rng).unwrap();
-    let round: PermutationRound<Vesta, _> = permutation_round(&index, first, &mut rng).unwrap();
+    let (first, tape) = witness_round(&index, equal, &[], &[], &sponge, &mut rng).unwrap();
+    let (round, _): (PermutationRound<Vesta>, _) =
+        permutation_round(&index, first, tape, &mut rng).unwrap();
     // z starts at 1 and closes at row n - zk_rows = 5.
     assert_eq!(round.z[0], Fp::ONE);
     assert_eq!(round.z[5], Fp::ONE);
@@ -449,8 +455,8 @@ fn permutation_round_state() {
     // Breaking the copy breaks the product.
     let mut broken: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ONE; 2]);
     broken[0][1] = Fp::ZERO;
-    let first = witness_round(&index, broken, &[], &[], &sponge, &mut rng).unwrap();
-    let error = permutation_round(&index, first, &mut rng).unwrap_err();
+    let (first, tape) = witness_round(&index, broken, &[], &[], &sponge, &mut rng).unwrap();
+    let error = permutation_round(&index, first, tape, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::PermutationFinalValue);
 }
 
@@ -499,9 +505,10 @@ fn quotient_round_state() {
         vec![value; 2]
     });
     let mut rng = Arkworks(SplitMix64(9));
-    let first = witness_round(&index, good.clone(), &[], &[], &sponge, &mut rng).unwrap();
-    let second = permutation_round(&index, first, &mut rng).unwrap();
-    let round: QuotientRound<Vesta, _> = quotient_round(&index, second, &kimchi, &mut rng).unwrap();
+    let (first, tape) = witness_round(&index, good.clone(), &[], &[], &sponge, &mut rng).unwrap();
+    let (second, tape) = permutation_round(&index, first, tape, &mut rng).unwrap();
+    let round: QuotientRound<Vesta, _> =
+        quotient_round(&index, second, tape, &kimchi, &mut rng).unwrap();
     // 7 chunks of 8 rows, each hidden by its blinder.
     assert_eq!(round.t_comm.chunks.len(), 7);
     assert_eq!(round.t_blinders.len(), 7);
@@ -510,9 +517,9 @@ fn quotient_round_state() {
     // A broken addition leaves a remainder.
     let mut bad = good;
     bad[2][1] = Fp::from_u64(4);
-    let first = witness_round(&index, bad, &[], &[], &sponge, &mut rng).unwrap();
-    let second = permutation_round(&index, first, &mut rng).unwrap();
-    let error = quotient_round(&index, second, &kimchi, &mut rng).unwrap_err();
+    let (first, tape) = witness_round(&index, bad, &[], &[], &sponge, &mut rng).unwrap();
+    let (second, tape) = permutation_round(&index, first, tape, &mut rng).unwrap();
+    let error = quotient_round(&index, second, tape, &kimchi, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::QuotientRemainder);
     assert_eq!(
         error.to_string(),
@@ -545,9 +552,9 @@ fn evaluated() -> (
         vec![value; 2]
     });
     let mut rng = Arkworks(SplitMix64(11));
-    let first = witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
-    let second = permutation_round(&index, first, &mut rng).unwrap();
-    let third = quotient_round(&index, second, &kimchi, &mut rng).unwrap();
+    let (first, tape) = witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
+    let (second, tape) = permutation_round(&index, first, tape, &mut rng).unwrap();
+    let third = quotient_round(&index, second, tape, &kimchi, &mut rng).unwrap();
     let round = evaluation_round(&index, third, &scalar_sponge);
     (index, round)
 }
@@ -1010,13 +1017,13 @@ fn lookup_proofs() {
     let base = KimchiSponge::new(vesta_base());
     let scalar = KimchiSponge::new(pallas_base());
     let mut rng = Arkworks(SplitMix64(29));
-    let first = witness_round(&index, witness.clone(), &[], &[], &base, &mut rng).unwrap();
+    let (first, tape) = witness_round(&index, witness.clone(), &[], &[], &base, &mut rng).unwrap();
     let round: &LookupRound<Vesta> = first.lookup.as_ref().unwrap();
     // One lookup reads two columns: the joint combiner is squeezed.
     assert_ne!(round.joint_combiner_chal.0, Fp::ZERO);
     let column: &Hidden<Vesta> = &round.sorted[0];
     assert_eq!(column.blinders.len(), 1);
-    let second = permutation_round(&index, first, &mut rng).unwrap();
+    let (second, _) = permutation_round(&index, first, tape, &mut rng).unwrap();
     assert!(second.aggregation.is_some());
     let mut rng = Arkworks(SplitMix64(29));
     let proof = prove(
@@ -1424,4 +1431,114 @@ fn polynomials_rot_extend_rot_witness() {
 #[test]
 fn polynomials_rot_rot_mode() {
     assert_ne!(RotMode::Left, RotMode::Right);
+}
+
+/// A commitment of one chunk.
+fn one_chunk(k: u64) -> PolyComm<Vesta> {
+    PolyComm {
+        chunks: vec![Projective::<Vesta>::generator() * Fp::from_u64(k)],
+    }
+}
+
+#[test]
+fn transcript_piop() {
+    // Without lookups, the tape absorbs and squeezes what Kimchi's sponge
+    // does, in Kimchi's order.
+    let digest = Fq::from_u64(7);
+    let w_comm: [PolyComm<Vesta>; COLUMNS] = core::array::from_fn(|i| one_chunk(i as u64 + 1));
+    let tape: FqTape<Vesta, _, Piop<Vesta>> = transcript::piop(KimchiSponge::new(vesta_base()));
+    let tape = tape
+        .statement(&Message::new(Base(digest)))
+        .statement(&Message::new(vec![]))
+        .statement(&Message::new(one_chunk(20)))
+        .send(&Message::new(w_comm.clone()));
+    let (beta, tape) = tape.left().squeeze();
+    let (gamma, tape) = tape.squeeze();
+    let tape = tape.send(&Message::new(one_chunk(21)));
+    let (alpha, tape) = tape.squeeze();
+    let tape = tape.send(&Message::new(one_chunk(22)));
+    let (zeta, tape) = tape.squeeze();
+    let (fq_digest, tape) = tape.peek();
+    let mut sponge = FqSponge::<Vesta, _>::new(KimchiSponge::new(vesta_base()));
+    sponge.absorb_fq(&[digest]);
+    sponge.absorb_g(&one_chunk(20).chunks);
+    for c in &w_comm {
+        sponge.absorb_g(&c.chunks);
+    }
+    assert_eq!(beta, sponge.challenge());
+    assert_eq!(gamma, sponge.challenge());
+    sponge.absorb_g(&one_chunk(21).chunks);
+    assert_eq!(alpha, sponge.challenge());
+    sponge.absorb_g(&one_chunk(22).chunks);
+    assert_eq!(zeta, sponge.challenge());
+    assert_eq!(fq_digest, sponge.clone().digest());
+    // The peek left the sponge as it was.
+    let mut after = tape.into_inner();
+    assert_eq!(after.challenge_fq(), sponge.challenge_fq());
+}
+
+#[test]
+fn transcript_evaluation() {
+    // The two digests, ft(zeta w) and the evaluations, then v and u.
+    let (_, proof, _) = proved();
+    let tape = transcript::evaluation::<Fp, _>(KimchiSponge::new(pallas_base()))
+        .statement(&Message::new(Scalar(Fp::ONE)))
+        .statement(&Message::new(Scalar(Fp::from_u64(2))))
+        .send(&Message::new(Scalar(proof.ft_eval1)))
+        .send(&Message::new(proof.evals.clone()));
+    let (v, tape) = tape.squeeze();
+    let (u, _) = tape.squeeze();
+    let mut sponge = FrSponge::<Fp, _>::new(KimchiSponge::new(pallas_base()));
+    sponge.absorb(Fp::ONE);
+    sponge.absorb(Fp::from_u64(2));
+    sponge.absorb(proof.ft_eval1);
+    sponge.absorb_multiple(&proof.evals.public.zeta);
+    sponge.absorb_multiple(&proof.evals.public.zeta_omega);
+    for e in proof.evals.absorbed() {
+        sponge.absorb_multiple(&e.zeta);
+        sponge.absorb_multiple(&e.zeta_omega);
+    }
+    assert_eq!(v, sponge.challenge());
+    assert_eq!(u, sponge.challenge());
+}
+
+#[test]
+fn transcript_previous_challenges_digest() {
+    // The digest of a sponge that absorbed the challenges, in order.
+    let chals = vec![vec![Fp::ONE, Fp::from_u64(2)], vec![Fp::from_u64(3)]];
+    let digest = transcript::previous_challenges_digest(KimchiSponge::new(pallas_base()), chals);
+    let mut sponge = FrSponge::<Fp, _>::new(KimchiSponge::new(pallas_base()));
+    sponge.absorb_multiple(&[Fp::ONE, Fp::from_u64(2)]);
+    sponge.absorb_multiple(&[Fp::from_u64(3)]);
+    assert_eq!(digest, sponge.digest());
+}
+
+#[test]
+fn transcript_message() {
+    let m: Message<Base<Fq>, VerifierIndexDigest> = Message::new(Base(Fq::ONE));
+    assert_eq!(m.0, Base(Fq::ONE));
+    assert_eq!(
+        <Message<Base<Fq>, VerifierIndexDigest> as Label>::LABEL,
+        <VerifierIndexDigest as Label>::LABEL
+    );
+}
+
+#[test]
+fn transcript_challenge_and_digest_kinds() {
+    // Each challenge and digest is named by its step.
+    assert_eq!(<Challenge<Beta> as Label>::LABEL, <Beta as Label>::LABEL);
+    assert_eq!(<DigestOf<Digest> as Label>::LABEL, <Digest as Label>::LABEL);
+    assert_ne!(<Beta as Label>::LABEL, <Digest as Label>::LABEL);
+}
+
+#[test]
+fn transcript_after_gamma() {
+    // The witness round hands on the tape at z, without lookups.
+    let cs = ConstraintSystem::create(two_generic()).build().unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(8));
+    let sponge = KimchiSponge::new(vesta_base());
+    let witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
+    let mut rng = Arkworks(SplitMix64(3));
+    let (_, tape) = witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
+    assert!(matches!(tape, AfterGamma::WithoutLookup(_)));
 }

@@ -47,5 +47,6 @@ pub mod polynomials;
 pub mod prover;
 pub mod rng;
 pub mod srs;
+pub mod transcript;
 pub mod verifier;
 pub mod verifier_index;

@@ -276,7 +276,7 @@ fn the_witness_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let round = witness_round(
+        let (round, _) = witness_round(
             &index,
             witness,
             &runtime_tables(name),
@@ -327,7 +327,7 @@ fn the_permutation_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first = witness_round(
+        let (first, tape) = witness_round(
             &index,
             witness,
             &runtime_tables(name),
@@ -336,7 +336,7 @@ fn the_permutation_round_is_kimchis() {
             &mut rng,
         )
         .unwrap();
-        let round = permutation_round(&index, first, &mut rng).unwrap();
+        let (round, _) = permutation_round(&index, first, tape, &mut rng).unwrap();
         let comms = lines("comm", name);
         assert_eq!(comms["z"], comm(&round.z_comm), "{name} z");
         match &round.aggregation {
@@ -356,7 +356,7 @@ fn the_quotient_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first = witness_round(
+        let (first, tape) = witness_round(
             &index,
             witness,
             &runtime_tables(name),
@@ -365,8 +365,8 @@ fn the_quotient_round_is_kimchis() {
             &mut rng,
         )
         .unwrap();
-        let second = permutation_round(&index, first, &mut rng).unwrap();
-        let round = quotient_round(&index, second, &gates, &mut rng).unwrap();
+        let (second, tape) = permutation_round(&index, first, tape, &mut rng).unwrap();
+        let round = quotient_round(&index, second, tape, &gates, &mut rng).unwrap();
         assert_eq!(lines("comm", name)["t"], comm(&round.t_comm), "{name} t");
         let oracles = lines("oracle", name);
         assert_eq!(oracles["zeta_chal"], hex(round.zeta_chal.0), "{name}");
@@ -391,7 +391,7 @@ fn the_evaluation_round_is_kimchis() {
         let sponge = KimchiSponge::new(vesta_base());
         let scalar_sponge = KimchiSponge::new(pallas_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first = witness_round(
+        let (first, tape) = witness_round(
             &index,
             witness,
             &runtime_tables(name),
@@ -400,8 +400,8 @@ fn the_evaluation_round_is_kimchis() {
             &mut rng,
         )
         .unwrap();
-        let second = permutation_round(&index, first, &mut rng).unwrap();
-        let third = quotient_round(&index, second, &gates, &mut rng).unwrap();
+        let (second, tape) = permutation_round(&index, first, tape, &mut rng).unwrap();
+        let third = quotient_round(&index, second, tape, &gates, &mut rng).unwrap();
         let round = evaluation_round(&index, third, &scalar_sponge);
         let expected = lines("eval", name);
         let e = &round.evals;

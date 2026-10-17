@@ -45,7 +45,7 @@ use crate::{
     gates::Gates,
     ipa::kimchi_ipa,
     lookup::{LookupPoint, constraint_count, constraints as lookup_constraints},
-    oracle::{FqSponge, FrSponge, ScalarChallenge},
+    oracle::{FqSponge, ScalarChallenge},
     permutation::PERMUTS,
     prover::{
         CONSTRAINED, LOOKUP_ALPHA, PERMUTATION_ALPHA, PointEvaluations, ProverProof, combine,
@@ -53,6 +53,7 @@ use crate::{
     },
     rng::Sampler,
     srs::{PolyComm, Srs},
+    transcript::{self, Base, Message, Scalar},
     verifier_index::VerifierIndex,
 };
 
@@ -269,69 +270,72 @@ where
         srs.mask_fixed(srs.commit_non_hiding(coefficients.coefficients(), n))
     };
 
-    let mut fq_sponge = FqSponge::<C, S>::new(base_sponge.clone());
-    fq_sponge.absorb_fq(&[index.digest(base_sponge.clone())]);
-    for previous in &proof.prev_challenges {
-        fq_sponge.absorb_g(&[previous.comm]);
-    }
-    fq_sponge.absorb_g(&public_comm.chunks);
-    for c in &proof.w_comm {
-        fq_sponge.absorb_g(&c.chunks);
-    }
-    let joint_combiner = match lookup {
-        None => None,
+    // The base-field sponge's part of the PIOP, step by step as the type
+    // `transcript::Piop` says.
+    let previous: Vec<Projective<C>> = proof.prev_challenges.iter().map(|p| p.comm).collect();
+    let tape = transcript::piop::<C, S>(base_sponge.clone())
+        .statement(&Message::new(Base(index.digest(base_sponge.clone()))))
+        .statement(&Message::new(previous))
+        .statement(&Message::new(public_comm.clone()))
+        .receive(&Message::new(proof.w_comm.clone()));
+    let (joint_combiner, beta, gamma, tape) = match lookup {
+        None => {
+            let (beta, tape) = tape.left().squeeze();
+            let (gamma, tape) = tape.squeeze();
+            (None, beta, gamma, tape)
+        }
         Some((li, comms, _)) => {
-            if let Some(r) = &comms.runtime {
-                fq_sponge.absorb_g(&r.chunks);
-            }
-            let raw = if li.joint_lookup_used {
-                fq_sponge.challenge()
+            let tape = tape.right();
+            let tape = match &comms.runtime {
+                Some(r) => tape.left().receive(&Message::new(r.clone())),
+                None => tape.right(),
+            };
+            let (raw, tape) = if li.joint_lookup_used {
+                tape.left().squeeze()
             } else {
-                C::Scalar::ZERO
+                (C::Scalar::ZERO, tape.right())
             };
             let jc = ScalarChallenge(raw).to_field(C::lambda());
-            for c in &comms.sorted {
-                fq_sponge.absorb_g(&c.chunks);
-            }
-            Some(jc)
+            let tape = tape.receive(&Message::new(comms.sorted.clone()));
+            let (beta, tape) = tape.squeeze();
+            let (gamma, tape) = tape.squeeze();
+            let tape = tape.receive(&Message::new(comms.aggreg.clone()));
+            (Some(jc), beta, gamma, tape)
         }
     };
-    let beta = fq_sponge.challenge();
-    let gamma = fq_sponge.challenge();
-    if let Some((_, comms, _)) = lookup {
-        fq_sponge.absorb_g(&comms.aggreg.chunks);
-    }
-    fq_sponge.absorb_g(&proof.z_comm.chunks);
-    let alpha_chal = ScalarChallenge(fq_sponge.challenge());
+    let tape = tape.receive(&Message::new(proof.z_comm.clone()));
+    let (alpha_raw, tape) = tape.squeeze();
+    let alpha_chal = ScalarChallenge(alpha_raw);
     let alpha = alpha_chal.to_field(C::lambda());
-    fq_sponge.absorb_g(&proof.t_comm.chunks);
-    let zeta_chal = ScalarChallenge(fq_sponge.challenge());
+    let tape = tape.receive(&Message::new(proof.t_comm.clone()));
+    let (zeta_raw, tape) = tape.squeeze();
+    let zeta_chal = ScalarChallenge(zeta_raw);
     let zeta = zeta_chal.to_field(C::lambda());
+    let (digest, tape) = tape.peek();
+    let fq_sponge = tape.into_inner();
 
-    let digest = fq_sponge.clone().digest();
-    let mut fr_sponge = FrSponge::<C::Scalar, T>::new(scalar_sponge.clone());
-    fr_sponge.absorb(digest);
-    let mut challenges = FrSponge::<C::Scalar, T>::new(scalar_sponge.clone());
-    for previous in &proof.prev_challenges {
-        challenges.absorb_multiple(&previous.chals);
-    }
-    fr_sponge.absorb(challenges.digest());
+    // The scalar-field sponge's part, as `transcript::Evaluation` says.
+    let chals: Vec<Vec<C::Scalar>> = proof
+        .prev_challenges
+        .iter()
+        .map(|p| p.chals.clone())
+        .collect();
+    let prev_digest = transcript::previous_challenges_digest(scalar_sponge.clone(), chals);
+    let tape = transcript::evaluation::<C::Scalar, T>(scalar_sponge.clone())
+        .statement(&Message::new(Scalar(digest)))
+        .statement(&Message::new(Scalar(prev_digest)))
+        .receive(&Message::new(Scalar(proof.ft_eval1)))
+        .receive(&Message::new(e.clone()));
+    let (v_chal, tape) = tape.squeeze();
+    let v = v_chal.to_field(C::lambda());
+    let (u_chal, tape) = tape.squeeze();
+    let u = u_chal.to_field(C::lambda());
+    let _ = tape.into_inner();
 
     let zeta1 = zeta.pow(n as u64);
     let zetaw = zeta * d1.generator();
     let zeta_m = zeta.pow(m as u64);
     let zetaw_m = zetaw.pow(m as u64);
-    fr_sponge.absorb(proof.ft_eval1);
-    fr_sponge.absorb_multiple(&e.public.zeta);
-    fr_sponge.absorb_multiple(&e.public.zeta_omega);
-    for p in e.absorbed() {
-        fr_sponge.absorb_multiple(&p.zeta);
-        fr_sponge.absorb_multiple(&p.zeta_omega);
-    }
-    let v_chal = fr_sponge.challenge();
-    let v = v_chal.to_field(C::lambda());
-    let u_chal = fr_sponge.challenge();
-    let u = u_chal.to_field(C::lambda());
 
     // The evaluations, chunks combined.
     let at = |p: &PointEvaluations<C::Scalar>| {

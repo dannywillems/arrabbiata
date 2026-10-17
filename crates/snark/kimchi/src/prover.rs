@@ -137,6 +137,9 @@ use crate::{
     permutation::PERMUTS,
     rng::Sampler,
     srs::{GroupMap, PolyComm, Srs},
+    transcript::{
+        self, AfterAlpha, AfterGamma, Base, FqTape, Lookups, Message, Scalar, WithLookup,
+    },
     verifier_index::VerifierIndex,
 };
 
@@ -229,7 +232,7 @@ where
 
 /// The state after the witness round.
 #[derive(Clone, Debug)]
-pub struct WitnessRound<C, S>
+pub struct WitnessRound<C>
 where
     C: Curve,
 {
@@ -247,8 +250,6 @@ where
     pub w_comm: [PolyComm<C>; COLUMNS],
     /// The lookup part, when the circuit looks something up.
     pub lookup: Option<LookupRound<C>>,
-    /// The base-field sponge after `gamma`.
-    pub fq_sponge: FqSponge<C, S>,
     /// The first permutation challenge.
     pub beta: C::Scalar,
     /// The second permutation challenge.
@@ -323,6 +324,12 @@ where
     }
 }
 
+/// The lookup round and the base-field sponge's tape at `beta`.
+type LookupStep<C, S> = (LookupRound<C>, FqTape<C, S, WithLookup<C>>);
+
+/// The permutation round and the base-field sponge's tape at `t`.
+pub type PermutationStep<C, S> = (PermutationRound<C>, FqTape<C, S, AfterAlpha<C>>);
+
 /// The lookup steps of the witness round, after the witness commitments:
 /// the runtime table (its zero-knowledge rows random from the last row up,
 /// committed, absorbed), the joint combiner (squeezed when some lookup
@@ -333,9 +340,9 @@ fn lookup_round<C, S, R>(
     lookup: &LookupIndex<C::Scalar>,
     witness: &[Vec<C::Scalar>],
     runtime_tables: &[RuntimeTable<C::Scalar>],
-    fq_sponge: &mut FqSponge<C, S>,
+    tape: FqTape<C, S, Lookups<C>>,
     rng: &mut R,
-) -> Result<LookupRound<C>, Error>
+) -> Result<LookupStep<C, S>, Error>
 where
     C: Glv,
     C::Base: PrimeField,
@@ -353,16 +360,18 @@ where
         for value in values.iter_mut().rev().take(zk_rows) {
             *value = rng.sample();
         }
-        let column = hidden(index, values, rng);
-        fq_sponge.absorb_g(&column.comm.chunks);
-        Some(column)
+        Some(hidden(index, values, rng))
     } else {
         None
     };
-    let raw = if lookup.info.joint_lookup_used() {
-        fq_sponge.challenge()
+    let tape = match &runtime {
+        Some(column) => tape.left().send(&Message::new(column.comm.clone())),
+        None => tape.right(),
+    };
+    let (raw, tape) = if lookup.info.joint_lookup_used() {
+        tape.left().squeeze()
     } else {
-        C::Scalar::ZERO
+        (C::Scalar::ZERO, tape.right())
     };
     let joint_combiner_chal = ScalarChallenge(raw);
     let joint_combiner = joint_combiner_chal.to_field(C::lambda());
@@ -392,17 +401,17 @@ where
         .map(|c| zk_patch(c, n, zk_rows, rng))
         .collect();
     let sorted: Vec<Hidden<C>> = patched.into_iter().map(|c| hidden(index, c, rng)).collect();
-    for column in &sorted {
-        fq_sponge.absorb_g(&column.comm.chunks);
-    }
-    Ok(LookupRound {
+    let comms: Vec<PolyComm<C>> = sorted.iter().map(|c| c.comm.clone()).collect();
+    let tape = tape.send(&Message::new(comms));
+    let round = LookupRound {
         runtime,
         joint_combiner_chal,
         joint_combiner,
         table_id_combiner,
         joint_table,
         sorted,
-    })
+    };
+    Ok((round, tape))
 }
 
 /// The witness round (see the module documentation). `sponge` is a fresh
@@ -421,7 +430,7 @@ pub fn witness_round<C, S, R>(
     prev_challenges: &[RecursionChallenge<C>],
     sponge: &S,
     rng: &mut R,
-) -> Result<WitnessRound<C, S>, Error>
+) -> Result<(WitnessRound<C>, AfterGamma<C, S>), Error>
 where
     C: Glv,
     C::Base: PrimeField,
@@ -455,12 +464,11 @@ where
         }
     }
 
-    let mut fq_sponge = FqSponge::<C, S>::new(sponge.clone());
     let digest = index.verifier_index.digest(sponge.clone());
-    fq_sponge.absorb_fq(&[digest]);
-    for previous in prev_challenges {
-        fq_sponge.absorb_g(&[previous.comm]);
-    }
+    let previous: Vec<Projective<C>> = prev_challenges.iter().map(|p| p.comm).collect();
+    let tape = transcript::piop::<C, S>(sponge.clone())
+        .statement(&Message::new(Base(digest)))
+        .statement(&Message::new(previous));
 
     let public: Vec<C::Scalar> = witness[0][..cs.public].to_vec();
     let mut negated = alloc::vec![C::Scalar::ZERO; n];
@@ -468,29 +476,28 @@ where
         *slot = -*p;
     }
     let public_comm = index.srs.mask_fixed(commit_column(index, &negated));
-    fq_sponge.absorb_g(&public_comm.chunks);
+    let tape = tape.statement(&Message::new(public_comm.clone()));
 
     let blinders: [Vec<C::Scalar>; COLUMNS] =
         core::array::from_fn(|_| (0..num_chunks).map(|_| rng.sample()).collect());
     let w_comm: [PolyComm<C>; COLUMNS] =
         core::array::from_fn(|i| hide(index, commit_column(index, &witness[i]), &blinders[i]));
-    for c in &w_comm {
-        fq_sponge.absorb_g(&c.chunks);
-    }
-    let lookup = match &cs.lookup {
-        None => None,
-        Some(l) => Some(lookup_round(
-            index,
-            l,
-            &witness,
-            runtime_tables,
-            &mut fq_sponge,
-            rng,
-        )?),
+    let tape = tape.send(&Message::new(w_comm.clone()));
+    let (lookup, beta, gamma, tape) = match &cs.lookup {
+        None => {
+            let (beta, tape) = tape.left().squeeze();
+            let (gamma, tape) = tape.squeeze();
+            (None, beta, gamma, AfterGamma::WithoutLookup(tape))
+        }
+        Some(l) => {
+            let tape = tape.right();
+            let (round, tape) = lookup_round(index, l, &witness, runtime_tables, tape, rng)?;
+            let (beta, tape) = tape.squeeze();
+            let (gamma, tape) = tape.squeeze();
+            (Some(round), beta, gamma, AfterGamma::WithLookup(tape))
+        }
     };
-    let beta = fq_sponge.challenge();
-    let gamma = fq_sponge.challenge();
-    Ok(WitnessRound {
+    let round = WitnessRound {
         witness,
         public,
         prev_challenges: prev_challenges.to_vec(),
@@ -498,10 +505,10 @@ where
         blinders,
         w_comm,
         lookup,
-        fq_sponge,
         beta,
         gamma,
-    })
+    };
+    Ok((round, tape))
 }
 
 /// The commitment to the evaluations `column` on `d1`, chunked.
@@ -537,12 +544,12 @@ where
 
 /// The state after the permutation round.
 #[derive(Clone, Debug)]
-pub struct PermutationRound<C, S>
+pub struct PermutationRound<C>
 where
     C: Curve,
 {
     /// The state before it.
-    pub previous: WitnessRound<C, S>,
+    pub previous: WitnessRound<C>,
     /// With lookups, their aggregation, committed before `z`.
     pub aggregation: Option<Hidden<C>>,
     /// The aggregation `z` on `d1`.
@@ -551,8 +558,6 @@ where
     pub z_blinders: Vec<C::Scalar>,
     /// The commitment to `z`.
     pub z_comm: PolyComm<C>,
-    /// The base-field sponge after `alpha`.
-    pub fq_sponge: FqSponge<C, S>,
     /// The 128-bit challenge `alpha` comes from.
     pub alpha_chal: ScalarChallenge<C::Scalar>,
     /// The constraint combiner.
@@ -566,9 +571,10 @@ where
 /// [`Error::PermutationFinalValue`] when the product does not close.
 pub fn permutation_round<C, S, R>(
     index: &ProverIndex<C>,
-    previous: WitnessRound<C, S>,
+    previous: WitnessRound<C>,
+    tape: AfterGamma<C, S>,
     rng: &mut R,
-) -> Result<PermutationRound<C, S>, Error>
+) -> Result<PermutationStep<C, S>, Error>
 where
     C: Glv,
     C::Base: PrimeField,
@@ -582,7 +588,6 @@ where
     let zk_rows = cs.zk_rows;
     let (beta, gamma) = (previous.beta, previous.gamma);
     let w = &previous.witness;
-    let mut fq_sponge = previous.fq_sponge.clone();
     let aggregation = match (&cs.lookup, &previous.lookup) {
         (Some(l), Some(round)) => {
             let sorted: Vec<Vec<C::Scalar>> =
@@ -597,11 +602,16 @@ where
                 C::Scalar::ZERO,
                 zk_rows,
             );
-            let column = hidden(index, zk_patch(values, n, zk_rows, rng), rng);
-            fq_sponge.absorb_g(&column.comm.chunks);
-            Some(column)
+            Some(hidden(index, zk_patch(values, n, zk_rows, rng), rng))
         }
         _ => None,
+    };
+    let tape = match (tape, &aggregation) {
+        (AfterGamma::WithoutLookup(tape), None) => tape,
+        (AfterGamma::WithLookup(tape), Some(column)) => {
+            tape.send(&Message::new(column.comm.clone()))
+        }
+        _ => unreachable!("the witness round's tape has lookups iff the index has"),
     };
     let sigmas = cs.sigmas();
     let mut z = alloc::vec![C::Scalar::ONE; n];
@@ -629,19 +639,20 @@ where
     let num_chunks = index.num_chunks();
     let z_blinders: Vec<C::Scalar> = (0..num_chunks).map(|_| rng.sample()).collect();
     let z_comm = hide(index, commit_column(index, &z), &z_blinders);
-    fq_sponge.absorb_g(&z_comm.chunks);
-    let alpha_chal = ScalarChallenge(fq_sponge.challenge());
+    let tape = tape.send(&Message::new(z_comm.clone()));
+    let (raw, tape) = tape.squeeze();
+    let alpha_chal = ScalarChallenge(raw);
     let alpha = alpha_chal.to_field(C::lambda());
-    Ok(PermutationRound {
+    let round = PermutationRound {
         previous,
         aggregation,
         z,
         z_blinders,
         z_comm,
-        fq_sponge,
         alpha_chal,
         alpha,
-    })
+    };
+    Ok((round, tape))
 }
 
 /// The first power of `alpha` of the permutation: the gates use the first
@@ -700,15 +711,18 @@ where
     C: Curve,
 {
     /// The state before it.
-    pub previous: PermutationRound<C, S>,
+    pub previous: PermutationRound<C>,
     /// The quotient's coefficients, at most `7 n`.
     pub t: UniPoly<C::Scalar>,
     /// The blinders of its commitment, one per chunk.
     pub t_blinders: Vec<C::Scalar>,
     /// The commitment to `t`, in `7 num_chunks` chunks.
     pub t_comm: PolyComm<C>,
-    /// The base-field sponge after `zeta`.
+    /// The base-field sponge after `zeta`, at the end of the PIOP: the
+    /// opening goes on with it.
     pub fq_sponge: FqSponge<C, S>,
+    /// Its digest, which the scalar-field sponge absorbs first.
+    pub digest: C::Scalar,
     /// The 128-bit challenge `zeta` comes from.
     pub zeta_chal: ScalarChallenge<C::Scalar>,
     /// The evaluation point.
@@ -728,7 +742,8 @@ where
 /// builds `d8`, so it has one).
 pub fn quotient_round<C, S, R, G>(
     index: &ProverIndex<C>,
-    previous: PermutationRound<C, S>,
+    previous: PermutationRound<C>,
+    tape: FqTape<C, S, AfterAlpha<C>>,
     gates: &G,
     rng: &mut R,
 ) -> Result<QuotientRound<C, S>, Error>
@@ -892,16 +907,19 @@ where
         index.srs.commit_non_hiding(t.coefficients(), 7 * n),
         &t_blinders,
     );
-    let mut fq_sponge = previous.fq_sponge.clone();
-    fq_sponge.absorb_g(&t_comm.chunks);
-    let zeta_chal = ScalarChallenge(fq_sponge.challenge());
+    let tape = tape.send(&Message::new(t_comm.clone()));
+    let (raw, tape) = tape.squeeze();
+    let zeta_chal = ScalarChallenge(raw);
     let zeta = zeta_chal.to_field(C::lambda());
+    let (digest, tape) = tape.peek();
+    let fq_sponge = tape.into_inner();
     Ok(QuotientRound {
         previous,
         t,
         t_blinders,
         t_comm,
         fq_sponge,
+        digest,
         zeta_chal,
         zeta,
     })
@@ -1180,25 +1198,23 @@ where
     let blinding_ft = -(zeta_n_minus_1 * blinding_t);
     let ft_eval1 = ft.evaluate(zeta_omega);
 
-    let mut fr_sponge = FrSponge::<C::Scalar, T>::new(scalar_sponge.clone());
-    fr_sponge.absorb(previous.fq_sponge.clone().digest());
-    let mut challenges = FrSponge::<C::Scalar, T>::new(scalar_sponge.clone());
-    for previous in &first.prev_challenges {
-        challenges.absorb_multiple(&previous.chals);
-    }
-    let prev_challenge_digest = challenges.digest();
-    fr_sponge.absorb(prev_challenge_digest);
-    fr_sponge.absorb(ft_eval1);
-    fr_sponge.absorb_multiple(&evals.public.zeta);
-    fr_sponge.absorb_multiple(&evals.public.zeta_omega);
-    for e in evals.absorbed() {
-        fr_sponge.absorb_multiple(&e.zeta);
-        fr_sponge.absorb_multiple(&e.zeta_omega);
-    }
-    let v_chal = fr_sponge.challenge();
+    let chals: Vec<Vec<C::Scalar>> = first
+        .prev_challenges
+        .iter()
+        .map(|p| p.chals.clone())
+        .collect();
+    let prev_challenge_digest =
+        transcript::previous_challenges_digest(scalar_sponge.clone(), chals);
+    let tape = transcript::evaluation::<C::Scalar, T>(scalar_sponge.clone())
+        .statement(&Message::new(Scalar(previous.digest)))
+        .statement(&Message::new(Scalar(prev_challenge_digest)))
+        .send(&Message::new(Scalar(ft_eval1)))
+        .send(&Message::new(evals.clone()));
+    let (v_chal, tape) = tape.squeeze();
     let v = v_chal.to_field(C::lambda());
-    let u_chal = fr_sponge.challenge();
+    let (u_chal, tape) = tape.squeeze();
     let u = u_chal.to_field(C::lambda());
+    let fr_sponge = tape.into_inner();
     EvaluationRound {
         previous,
         zeta_omega,
@@ -1485,8 +1501,9 @@ where
         base_sponge,
         rng,
     )?;
-    let second = permutation_round(index, first, rng)?;
-    let third = quotient_round(index, second, gates, rng)?;
+    let (first, tape) = first;
+    let (second, tape) = permutation_round(index, first, tape, rng)?;
+    let third = quotient_round(index, second, tape, gates, rng)?;
     let fourth = evaluation_round(index, third, scalar_sponge);
     let group_map = GroupMap::setup();
     Ok(opening_round(index, &fourth, &group_map, rng))
