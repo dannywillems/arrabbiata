@@ -117,6 +117,24 @@ pub fn field<F: PrimeField>(hex: &str) -> F {
     F::from_limbs(&limbs).unwrap()
 }
 
+/// A field element from hex digits read as little-endian bytes, as
+/// o1-utils' `FieldHelpers::from_hex` reads them.
+pub fn from_hex_le<F: PrimeField>(hex: &str) -> F {
+    let bytes: Vec<u8> = (0..hex.len() / 2)
+        .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+        .collect();
+    let limbs: Vec<u64> = bytes
+        .chunks(8)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0u64, |acc, (i, b)| acc | (u64::from(*b) << (8 * i)))
+        })
+        .collect();
+    F::from_limbs(&limbs).unwrap()
+}
+
 /// 64 hex digits, big-endian.
 pub fn hex<F: PrimeField>(x: F) -> String {
     (0..F::LIMBS)

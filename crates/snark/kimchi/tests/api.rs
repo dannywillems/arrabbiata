@@ -23,8 +23,13 @@ use arrabbiata_kimchi::{
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
     polynomials::{
-        self as gadgets,
+        self as gadgets, bit_length,
         generic::GenericGateSpec,
+        range_check::{
+            create as create_range_check_witness, create_multi, create_multi_compact,
+            create_multi_compact_limbs, create_multi_limbs, extend as extend_range_check_witness,
+            extend_multi, extend_multi_compact, extend_multi_compact_limbs, extend_multi_limbs,
+        },
         rot::{RotMode, extend_rot},
         xor::{create_xor_witness, extend_xor_witness, num_xors},
     },
@@ -1541,4 +1546,76 @@ fn transcript_after_gamma() {
     let mut rng = Arkworks(SplitMix64(3));
     let (_, tape) = witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
     assert!(matches!(tape, AfterGamma::WithoutLookup(_)));
+}
+
+#[test]
+fn polynomials_bit_length() {
+    assert_eq!(bit_length(Fp::ZERO), 0);
+    assert_eq!(bit_length(Fp::from_u64(1 << 40)), 41);
+}
+
+#[test]
+fn polynomials_range_check_create_multi_range_check() {
+    // RC0, RC0, RC1, Zero; the high limbs wired to the Zero row's 3-6.
+    let (next, gates) = CircuitGate::<Fp>::create_multi_range_check(2);
+    assert_eq!(next, 6);
+    let types: Vec<GateType> = gates.iter().map(|g| g.typ).collect();
+    let expected = [
+        GateType::RangeCheck0,
+        GateType::RangeCheck0,
+        GateType::RangeCheck1,
+        GateType::Zero,
+    ];
+    assert_eq!(types, expected);
+    assert_eq!(gates[1].coeffs, vec![Fp::ZERO]);
+}
+
+#[test]
+fn polynomials_range_check_create_compact_multi_range_check() {
+    let (_, gates) = CircuitGate::<Fp>::create_compact_multi_range_check(0);
+    assert_eq!(gates[1].coeffs, vec![Fp::ONE]);
+}
+
+#[test]
+fn polynomials_range_check_extend_multi_range_check() {
+    let mut gates = Vec::new();
+    let mut row = 0;
+    CircuitGate::<Fp>::extend_multi_range_check(&mut gates, &mut row);
+    CircuitGate::<Fp>::extend_compact_multi_range_check(&mut gates, &mut row);
+    assert_eq!((row, gates.len()), (8, 8));
+}
+
+#[test]
+fn polynomials_range_check_create_range_check() {
+    let mut gates = Vec::new();
+    let mut row = 0;
+    CircuitGate::<Fp>::extend_range_check(&mut gates, &mut row);
+    let (next, single) = CircuitGate::<Fp>::create_range_check(1);
+    assert_eq!((row, next), (1, 2));
+    assert_eq!(single[0].typ, GateType::RangeCheck0);
+}
+
+#[test]
+fn polynomials_range_check_witnesses() {
+    // Four rows for the multi checks, one for the single; the values in
+    // column 0 as Kimchi lays them out (compact: v2, v0, v1).
+    let (v0, v1, v2) = (Fp::from_u64(3), Fp::from_u64(5), Fp::from_u64(7));
+    let multi = create_multi(v0, v1, v2).unwrap();
+    assert_eq!([multi[0][0], multi[0][1], multi[0][2]], [v0, v1, v2]);
+    assert_eq!(create_multi_limbs(&[v0, v1, v2]).unwrap(), multi);
+    let two_88 = Fp::from_u64(1 << 44) * Fp::from_u64(1 << 44);
+    let compact = create_multi_compact(v0 + two_88 * v1, v2).unwrap();
+    assert_eq!([compact[0][0], compact[0][1], compact[0][2]], [v2, v0, v1]);
+    assert_eq!(
+        create_multi_compact_limbs(&[v0 + two_88 * v1, v2]).unwrap(),
+        compact
+    );
+    assert_eq!(create_range_check_witness(v0).unwrap()[0], vec![v0]);
+    let mut w: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| Vec::new());
+    extend_multi(&mut w, v0, v1, v2).unwrap();
+    extend_multi_limbs(&mut w, &[v0, v1, v2]).unwrap();
+    extend_multi_compact(&mut w, v0, v2).unwrap();
+    extend_multi_compact_limbs(&mut w, &[v0, v2]).unwrap();
+    extend_range_check_witness(&mut w, v0).unwrap();
+    assert_eq!(w[0].len(), 17);
 }

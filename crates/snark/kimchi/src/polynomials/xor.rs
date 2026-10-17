@@ -12,7 +12,7 @@ use arrabbiata_kimchi_gadgets::{
 
 use crate::{
     constraints::{COLUMNS, CircuitGate, Connect, GateType, Wire},
-    polynomials::{columns, generic::GenericGateSpec},
+    polynomials::{bit_length, columns, generic::GenericGateSpec},
 };
 
 /// The Xor16 rows of a XOR of `bits` bits.
@@ -96,13 +96,18 @@ fn words<F: PrimeField, const B: usize>(input: [F; 2]) -> Result<[Vec<F>; COLUMN
 ///
 /// # Errors
 ///
-/// The gadget's [`Error`] when an input is wider than `bits` (Kimchi
-/// panics), or when `bits` is above 128.
+/// [`Error::Rows`] when an input is wider than `bits` (Kimchi panics), or
+/// when `bits` is above 128.
 pub fn create_xor_witness<F: PrimeField>(
     input1: F,
     input2: F,
     bits: usize,
 ) -> Result<[Vec<F>; COLUMNS], Error> {
+    if bits < bit_length(input1) || bits < bit_length(input2) {
+        return Err(Error::Rows {
+            gadget: "kimchi-xor",
+        });
+    }
     let input = [input1, input2];
     match num_xors(bits) {
         0 | 1 => words::<F, 16>(input),
