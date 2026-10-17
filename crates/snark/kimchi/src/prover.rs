@@ -15,10 +15,20 @@
 //! 4. each column is committed, hidden by `h` with one random blinder per
 //!    chunk (all fifteen columns' blinders drawn before any commitment),
 //!    and the fifteen commitments are absorbed;
-//! 5. `beta` and `gamma` are squeezed, 128-bit challenges.
+//! 5. with lookups ([`LookupRound`]): with runtime tables, their column
+//!    (random on the zero-knowledge rows, from the last up) committed,
+//!    hidden and absorbed; the joint combiner `jc` (the endomorphism image
+//!    of a challenge when some lookup reads several columns, of zero
+//!    otherwise) and the table-id combiner (`jc^max_joint_size` when some
+//!    table has a nonzero id); the joint table; the sorted columns
+//!    ([`crate::lookup::sorted`]), each random on its zero-knowledge rows,
+//!    committed, hidden and absorbed;
+//! 6. `beta` and `gamma` are squeezed, 128-bit challenges.
 //!
 //! [`permutation_round`], the second:
 //!
+//! 0. with lookups, their aggregation ([`crate::lookup::aggregation`]),
+//!    random on its zero-knowledge rows, committed, hidden, absorbed;
 //! 1. the aggregation `z` on `d1`: `z_0 = 1` and
 //!    `z_(j+1) = z_j prod_i (w_i + beta shift_i w^j + gamma) / prod_i (w_i +
 //!    beta sigma_i + gamma)` at row `j`, over the 7 permuted columns, except that `z` is random at
@@ -98,8 +108,14 @@
 //!
 //! The randomness is the [`Sampler`] passed in; with [`crate::rng::Arkworks`]
 //! over the same stream as Kimchi's RNG, the round gives Kimchi's values.
-//! Lookups are not supported yet: a circuit with Lookup, RangeCheck, Rot64,
-//! Xor16 or ForeignFieldMul rows, or with tables, is refused.
+//!
+//! With lookups, the quotient adds Kimchi's lookup constraints
+//! ([`crate::lookup::constraints`]) from `alpha^24` ([`LOOKUP_ALPHA`]); the
+//! evaluations add the aggregation, the joint table, the sorted columns,
+//! the runtime table and selector and the pattern selectors; the opening
+//! adds them in that order, the joint table blinded by the combination of
+//! its parts' blinders (1 for each fixed column and for the ids, the
+//! runtime table's own).
 
 use alloc::vec::Vec;
 use core::fmt;
@@ -113,6 +129,7 @@ use arrabbiata_transcript::Transcript;
 use crate::{
     constraints::{COLUMNS, ConstraintSystem, GateType, zk_rows_strict_lower_bound},
     gates::Gates,
+    lookup::{LookupError, LookupIndex, LookupPattern, LookupPoint, RuntimeTable},
     oracle::{FqSponge, FrSponge, ScalarChallenge, compare_moduli},
     permutation::PERMUTS,
     rng::Sampler,
@@ -134,8 +151,9 @@ pub enum Error {
         /// The rows there are.
         found: usize,
     },
-    /// The circuit uses lookups, not supported yet.
-    LookupsUnsupported,
+    /// A lookup fails: a value in no table, or runtime tables other than
+    /// the configured ones.
+    Lookup(LookupError),
     /// The permutation product does not close: the witness breaks a copy.
     PermutationFinalValue,
     /// `f` is not divisible by the vanishing polynomial: the witness breaks
@@ -153,7 +171,7 @@ impl fmt::Display for Error {
             Self::NotZeroKnowledge { needed, found } => {
                 write!(f, "{found} zero-knowledge rows, {needed} needed")
             }
-            Self::LookupsUnsupported => write!(f, "lookups are not supported yet"),
+            Self::Lookup(e) => write!(f, "lookup: {e}"),
             Self::PermutationFinalValue => {
                 write!(
                     f,
@@ -224,12 +242,164 @@ where
     pub blinders: [Vec<C::Scalar>; COLUMNS],
     /// The witness commitments.
     pub w_comm: [PolyComm<C>; COLUMNS],
+    /// The lookup part, when the circuit looks something up.
+    pub lookup: Option<LookupRound<C>>,
     /// The base-field sponge after `gamma`.
     pub fq_sponge: FqSponge<C, S>,
     /// The first permutation challenge.
     pub beta: C::Scalar,
     /// The second permutation challenge.
     pub gamma: C::Scalar,
+}
+
+/// A column committed with hiding: its values on `d1`, its blinders (one
+/// per chunk) and its commitment.
+#[derive(Clone, Debug)]
+pub struct Hidden<C>
+where
+    C: Curve,
+{
+    /// The values on `d1`.
+    pub values: Vec<C::Scalar>,
+    /// The blinders.
+    pub blinders: Vec<C::Scalar>,
+    /// The commitment.
+    pub comm: PolyComm<C>,
+}
+
+/// The lookup part of the witness round: the runtime table, the combiners,
+/// the joint table and the sorted columns.
+#[derive(Clone, Debug)]
+pub struct LookupRound<C>
+where
+    C: Curve,
+{
+    /// With runtime tables, their contribution to the second column, its
+    /// zero-knowledge rows random.
+    pub runtime: Option<Hidden<C>>,
+    /// The 128-bit challenge the joint combiner comes from (zero when no
+    /// lookup reads more than one column).
+    pub joint_combiner_chal: ScalarChallenge<C::Scalar>,
+    /// The joint combiner.
+    pub joint_combiner: C::Scalar,
+    /// The weight of the table ids: `jc^max_joint_size` when some table has
+    /// a nonzero id, zero otherwise.
+    pub table_id_combiner: C::Scalar,
+    /// The joint table on `d1`.
+    pub joint_table: Vec<C::Scalar>,
+    /// The sorted columns, their zero-knowledge rows random.
+    pub sorted: Vec<Hidden<C>>,
+}
+
+/// A column's zero-knowledge rows random (Kimchi's `zk_patch`): zeros up to
+/// row `n - zk_rows`, then `zk_rows` random values in order.
+fn zk_patch<F: Field, R: Sampler<F>>(
+    mut values: Vec<F>,
+    n: usize,
+    zk_rows: usize,
+    rng: &mut R,
+) -> Vec<F> {
+    values.resize(n - zk_rows, F::ZERO);
+    values.extend((0..zk_rows).map(|_| rng.sample()));
+    values
+}
+
+/// `values` committed and hidden, blinders drawn after.
+fn hidden<C, R>(index: &ProverIndex<C>, values: Vec<C::Scalar>, rng: &mut R) -> Hidden<C>
+where
+    C: Curve,
+    C::Scalar: TwoAdicField,
+    R: Sampler<C::Scalar>,
+{
+    let blinders: Vec<C::Scalar> = (0..index.num_chunks()).map(|_| rng.sample()).collect();
+    let comm = hide(index, commit_column(index, &values), &blinders);
+    Hidden {
+        values,
+        blinders,
+        comm,
+    }
+}
+
+/// The lookup steps of the witness round, after the witness commitments:
+/// the runtime table (its zero-knowledge rows random from the last row up,
+/// committed, absorbed), the joint combiner (squeezed when some lookup
+/// reads more than one column), the joint table, and the sorted columns
+/// (their zero-knowledge rows random, committed, absorbed).
+fn lookup_round<C, S, R>(
+    index: &ProverIndex<C>,
+    lookup: &LookupIndex<C::Scalar>,
+    witness: &[Vec<C::Scalar>],
+    runtime_tables: &[RuntimeTable<C::Scalar>],
+    fq_sponge: &mut FqSponge<C, S>,
+    rng: &mut R,
+) -> Result<LookupRound<C>, Error>
+where
+    C: Glv,
+    C::Base: PrimeField,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    R: Sampler<C::Scalar>,
+{
+    let cs = &index.cs;
+    let n = cs.domain.d1.size();
+    let zk_rows = cs.zk_rows;
+    let runtime = if lookup.runtime_selector.is_some() {
+        let mut values = lookup
+            .runtime_contribution(runtime_tables, n)
+            .map_err(Error::Lookup)?;
+        for value in values.iter_mut().rev().take(zk_rows) {
+            *value = rng.sample();
+        }
+        let column = hidden(index, values, rng);
+        fq_sponge.absorb_g(&column.comm.chunks);
+        Some(column)
+    } else {
+        None
+    };
+    let raw = if lookup.info.joint_lookup_used() {
+        fq_sponge.challenge()
+    } else {
+        C::Scalar::ZERO
+    };
+    let joint_combiner_chal = ScalarChallenge(raw);
+    let joint_combiner = joint_combiner_chal.to_field(C::lambda());
+    let table_id_combiner = if lookup.table_ids.is_some() {
+        joint_combiner.pow(lookup.info.max_joint_size as u64)
+    } else {
+        C::Scalar::ZERO
+    };
+    let joint_table = lookup.joint_table(
+        joint_combiner,
+        table_id_combiner,
+        runtime.as_ref().map(|r| r.values.as_slice()),
+    );
+    let columns = crate::lookup::sorted(
+        &lookup.info,
+        &cs.gates,
+        witness,
+        &joint_table,
+        joint_combiner,
+        table_id_combiner,
+        C::Scalar::ZERO,
+        zk_rows,
+    )
+    .map_err(Error::Lookup)?;
+    let patched: Vec<Vec<C::Scalar>> = columns
+        .into_iter()
+        .map(|c| zk_patch(c, n, zk_rows, rng))
+        .collect();
+    let sorted: Vec<Hidden<C>> = patched.into_iter().map(|c| hidden(index, c, rng)).collect();
+    for column in &sorted {
+        fq_sponge.absorb_g(&column.comm.chunks);
+    }
+    Ok(LookupRound {
+        runtime,
+        joint_combiner_chal,
+        joint_combiner,
+        table_id_combiner,
+        joint_table,
+        sorted,
+    })
 }
 
 /// The witness round (see the module documentation). `sponge` is a fresh
@@ -239,31 +409,24 @@ where
 ///
 /// [`Error::WitnessCsInconsistent`] for columns of different lengths,
 /// [`Error::NoRoomForZkInWitness`], [`Error::NotZeroKnowledge`], and
-/// [`Error::LookupsUnsupported`].
+/// [`Error::Lookup`] for a lookup of a value in no table or runtime tables
+/// other than the configured ones.
 pub fn witness_round<C, S, R>(
     index: &ProverIndex<C>,
     witness: [Vec<C::Scalar>; COLUMNS],
+    runtime_tables: &[RuntimeTable<C::Scalar>],
     prev_challenges: &[RecursionChallenge<C>],
     sponge: &S,
     rng: &mut R,
 ) -> Result<WitnessRound<C, S>, Error>
 where
-    C: Curve,
+    C: Glv,
     C::Base: PrimeField,
     C::Scalar: TwoAdicField,
     S: Transcript<C::Base> + Clone,
     R: Sampler<C::Scalar>,
 {
     let cs = &index.cs;
-    if !cs.lookup_tables.is_empty()
-        || cs.runtime_tables.is_some()
-        || cs
-            .gates
-            .iter()
-            .any(|g| g.typ.table().is_some() || g.typ == crate::constraints::GateType::Lookup)
-    {
-        return Err(Error::LookupsUnsupported);
-    }
     let n = cs.domain.d1.size();
     let num_chunks = index.num_chunks();
     let limit = zk_rows_strict_lower_bound(num_chunks);
@@ -311,6 +474,17 @@ where
     for c in &w_comm {
         fq_sponge.absorb_g(&c.chunks);
     }
+    let lookup = match &cs.lookup {
+        None => None,
+        Some(l) => Some(lookup_round(
+            index,
+            l,
+            &witness,
+            runtime_tables,
+            &mut fq_sponge,
+            rng,
+        )?),
+    };
     let beta = fq_sponge.challenge();
     let gamma = fq_sponge.challenge();
     Ok(WitnessRound {
@@ -320,6 +494,7 @@ where
         public_comm,
         blinders,
         w_comm,
+        lookup,
         fq_sponge,
         beta,
         gamma,
@@ -365,6 +540,8 @@ where
 {
     /// The state before it.
     pub previous: WitnessRound<C, S>,
+    /// With lookups, their aggregation, committed before `z`.
+    pub aggregation: Option<Hidden<C>>,
     /// The aggregation `z` on `d1`.
     pub z: Vec<C::Scalar>,
     /// The blinders of its commitment, one per chunk.
@@ -402,6 +579,27 @@ where
     let zk_rows = cs.zk_rows;
     let (beta, gamma) = (previous.beta, previous.gamma);
     let w = &previous.witness;
+    let mut fq_sponge = previous.fq_sponge.clone();
+    let aggregation = match (&cs.lookup, &previous.lookup) {
+        (Some(l), Some(round)) => {
+            let sorted: Vec<Vec<C::Scalar>> =
+                round.sorted.iter().map(|c| c.values.clone()).collect();
+            let values = crate::lookup::aggregation(
+                &l.info,
+                &cs.gates,
+                w,
+                &round.joint_table,
+                &sorted,
+                (beta, gamma, round.joint_combiner, round.table_id_combiner),
+                C::Scalar::ZERO,
+                zk_rows,
+            );
+            let column = hidden(index, zk_patch(values, n, zk_rows, rng), rng);
+            fq_sponge.absorb_g(&column.comm.chunks);
+            Some(column)
+        }
+        _ => None,
+    };
     let sigmas = cs.sigmas();
     let mut z = alloc::vec![C::Scalar::ONE; n];
     let mut row_label = C::Scalar::ONE;
@@ -428,12 +626,12 @@ where
     let num_chunks = index.num_chunks();
     let z_blinders: Vec<C::Scalar> = (0..num_chunks).map(|_| rng.sample()).collect();
     let z_comm = hide(index, commit_column(index, &z), &z_blinders);
-    let mut fq_sponge = previous.fq_sponge.clone();
     fq_sponge.absorb_g(&z_comm.chunks);
     let alpha_chal = ScalarChallenge(fq_sponge.challenge());
     let alpha = alpha_chal.to_field(C::lambda());
     Ok(PermutationRound {
         previous,
+        aggregation,
         z,
         z_blinders,
         z_comm,
@@ -446,6 +644,19 @@ where
 /// The first power of `alpha` of the permutation: the gates use the first
 /// 21, VarBaseMul's number of constraints.
 pub const PERMUTATION_ALPHA: usize = 21;
+
+/// The first power of `alpha` of the lookup constraints, after the
+/// permutation's three.
+pub const LOOKUP_ALPHA: usize = PERMUTATION_ALPHA + 3;
+
+/// `(x^n - 1) / (x - a)` for `a` an `n`-th root of unity (Kimchi's
+/// unnormalized Lagrange basis), `n a^(n - 1)` at `x = a`.
+pub(crate) fn unnormalized_lagrange<F: Field>(x: F, a: F, n: usize) -> F {
+    match (x - a).inverse() {
+        Some(inverse) => (x.pow(n as u64) - F::ONE) * inverse,
+        None => F::from_u64(n as u64) * a.pow(n as u64 - 1),
+    }
+}
 
 /// The gate types with constraints, in Kimchi's order.
 pub(crate) const CONSTRAINED: [GateType; 12] = [
@@ -547,10 +758,39 @@ where
         .filter(|typ| cs.uses(**typ))
         .map(|typ| (*typ, extend(&cs.selector(*typ))))
         .collect();
-    let mut alphas = alloc::vec![C::Scalar::ONE; PERMUTATION_ALPHA + 3];
+    let lookup_constraints = cs
+        .lookup
+        .as_ref()
+        .map_or(0, |l| crate::lookup::constraint_count(&l.info));
+    let mut alphas = alloc::vec![C::Scalar::ONE; LOOKUP_ALPHA + lookup_constraints];
     for k in 1..alphas.len() {
         alphas[k] = alphas[k - 1] * alpha;
     }
+    // The lookup columns on d8.
+    let lookup8 = match (&cs.lookup, &first.lookup, &previous.aggregation) {
+        (Some(l), Some(round), Some(aggregation)) => Some((
+            l,
+            round,
+            round
+                .sorted
+                .iter()
+                .map(|c| extend(&c.values))
+                .collect::<Vec<_>>(),
+            extend(&aggregation.values),
+            extend(&round.joint_table),
+            l.selectors
+                .iter()
+                .map(|(p, sel)| (*p, extend(sel)))
+                .collect::<Vec<_>>(),
+            match (&round.runtime, &l.runtime_selector) {
+                (Some(r), Some(sel)) => Some((extend(&r.values), extend(sel))),
+                _ => None,
+            },
+        )),
+        _ => None,
+    };
+    let lookup_roots: Vec<C::Scalar> = (n - zk_rows - 1..n).map(|i| d1.element(i)).collect();
+    let last_lookup_row = d1.element(n - zk_rows - 1);
     // M's roots: rows n - zk_rows, n - zk_rows + 1 and n - 1.
     let roots = [
         d1.element(n - zk_rows),
@@ -580,6 +820,27 @@ where
         }
         let vanishing = (x - roots[0]) * (x - roots[1]) * (x - roots[2]);
         value = value + alphas[PERMUTATION_ALPHA] * (shifted - permuted) * vanishing;
+        if let Some((l, round, sorted8, aggregation8, joint8, selectors8, runtime8)) = &lookup8 {
+            let next = (k + 8) % big;
+            let point = LookupPoint {
+                witness: w8.iter().map(|c| c[k]).collect(),
+                sorted: sorted8.iter().map(|c| (c[k], c[next])).collect(),
+                aggregation: (aggregation8[k], aggregation8[next]),
+                table: (joint8[k], joint8[next]),
+                selectors: selectors8.iter().map(|(p, c)| (*p, c[k])).collect(),
+                runtime: runtime8.as_ref().map(|(t, sel)| (t[k], sel[k])),
+                vanishing: lookup_roots
+                    .iter()
+                    .fold(C::Scalar::ONE, |acc, r| acc * (x - *r)),
+                first: unnormalized_lagrange(x, C::Scalar::ONE, n),
+                last: unnormalized_lagrange(x, last_lookup_row, n),
+            };
+            let values =
+                crate::lookup::constraints(&l.info, &point, beta, gamma, round.joint_combiner);
+            for (i, c) in values.iter().enumerate() {
+                value = value + alphas[LOOKUP_ALPHA + i] * *c;
+            }
+        }
         f8[k] = value;
         x = x * d8.generator();
     }
@@ -652,8 +913,24 @@ pub struct PointEvaluations<F> {
     pub zeta_omega: Vec<F>,
 }
 
-/// The evaluations a proof carries (Kimchi's `ProofEvaluations`, without
-/// lookups).
+/// The lookup evaluations a proof carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LookupEvaluations<F> {
+    /// The aggregation.
+    pub aggregation: PointEvaluations<F>,
+    /// The joint table.
+    pub table: PointEvaluations<F>,
+    /// The sorted columns.
+    pub sorted: Vec<PointEvaluations<F>>,
+    /// With runtime tables, the runtime table.
+    pub runtime_table: Option<PointEvaluations<F>>,
+    /// With runtime tables, the runtime selector.
+    pub runtime_selector: Option<PointEvaluations<F>>,
+    /// The selector of each pattern used, in Kimchi's order.
+    pub selectors: Vec<(LookupPattern, PointEvaluations<F>)>,
+}
+
+/// The evaluations a proof carries (Kimchi's `ProofEvaluations`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProofEvaluations<F> {
     /// The public polynomial.
@@ -681,6 +958,8 @@ pub struct ProofEvaluations<F> {
     /// The optional selectors present, in Kimchi's order (RangeCheck0,
     /// RangeCheck1, ForeignFieldAdd, ForeignFieldMul, Xor16, Rot64).
     pub optional_selectors: Vec<(GateType, PointEvaluations<F>)>,
+    /// The lookup evaluations, when the circuit looks something up.
+    pub lookup: Option<LookupEvaluations<F>>,
 }
 
 impl<F> ProofEvaluations<F>
@@ -704,6 +983,17 @@ where
         points.extend(self.coefficients.iter());
         points.extend(self.s.iter());
         points.extend(self.optional_selectors.iter().map(|(_, e)| e));
+        if let Some(l) = &self.lookup {
+            points.push(&l.aggregation);
+            points.push(&l.table);
+            points.extend(l.sorted.iter());
+            points.extend(
+                [&l.runtime_table, &l.runtime_selector]
+                    .into_iter()
+                    .flatten(),
+            );
+            points.extend(l.selectors.iter().map(|(_, e)| e));
+        }
         points
     }
 }
@@ -842,6 +1132,17 @@ where
             .filter(|typ| cs.uses(**typ))
             .map(|typ| (*typ, column(&cs.selector(*typ))))
             .collect(),
+        lookup: match (&cs.lookup, &first.lookup, &permutation.aggregation) {
+            (Some(l), Some(round), Some(aggregation)) => Some(LookupEvaluations {
+                aggregation: column(&aggregation.values),
+                table: column(&round.joint_table),
+                sorted: round.sorted.iter().map(|c| column(&c.values)).collect(),
+                runtime_table: round.runtime.as_ref().map(|r| column(&r.values)),
+                runtime_selector: l.runtime_selector.as_ref().map(|c| column(c)),
+                selectors: l.selectors.iter().map(|(p, c)| (*p, column(c))).collect(),
+            }),
+            _ => None,
+        },
     };
 
     let zeta_m = zeta.pow(m as u64);
@@ -929,7 +1230,21 @@ where
     pub sg: Projective<C>,
 }
 
-/// A Kimchi proof (without lookups).
+/// The lookup commitments of a proof.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LookupCommitments<C>
+where
+    C: Curve,
+{
+    /// The sorted columns.
+    pub sorted: Vec<PolyComm<C>>,
+    /// The aggregation.
+    pub aggreg: PolyComm<C>,
+    /// With runtime tables, the runtime table.
+    pub runtime: Option<PolyComm<C>>,
+}
+
+/// A Kimchi proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProverProof<C>
 where
@@ -941,6 +1256,8 @@ where
     pub z_comm: PolyComm<C>,
     /// The quotient's commitment.
     pub t_comm: PolyComm<C>,
+    /// The lookup commitments, when the circuit looks something up.
+    pub lookup: Option<LookupCommitments<C>>,
     /// The evaluations.
     pub evals: ProofEvaluations<C::Scalar>,
     /// `ft(zeta w)`.
@@ -1059,6 +1376,41 @@ where
     for (typ, _) in &previous.evals.optional_selectors {
         polynomials.push((interpolate(&cs.selector(*typ)), zeros.clone()));
     }
+    if let (Some(l), Some(round), Some(aggregation)) =
+        (&cs.lookup, &first.lookup, &permutation.aggregation)
+    {
+        for column in &round.sorted {
+            polynomials.push((interpolate(&column.values), column.blinders.clone()));
+        }
+        polynomials.push((
+            interpolate(&aggregation.values),
+            aggregation.blinders.clone(),
+        ));
+        // The joint table's blinder: each fixed column's 1 by its power of
+        // jc, the ids' 1 by the id combiner, the runtime blinders by jc.
+        let jc = round.joint_combiner;
+        let width = l.table.len();
+        let fixed = if width == 0 {
+            C::Scalar::ZERO
+        } else {
+            (1..width).fold(C::Scalar::ONE, |acc, _| C::Scalar::ONE + jc * acc)
+        };
+        let base = fixed + round.table_id_combiner;
+        let table_blinders = match &round.runtime {
+            Some(r) => r.blinders.iter().map(|b| jc * *b + base).collect(),
+            None => alloc::vec![base; num_chunks],
+        };
+        polynomials.push((interpolate(&round.joint_table), table_blinders));
+        if let Some(r) = &round.runtime {
+            polynomials.push((interpolate(&r.values), r.blinders.clone()));
+        }
+        if let Some(selector) = &l.runtime_selector {
+            polynomials.push((interpolate(selector), zeros.clone()));
+        }
+        for (_, selector) in &l.selectors {
+            polynomials.push((interpolate(selector), zeros.clone()));
+        }
+    }
 
     let mut a = alloc::vec![C::Scalar::ZERO; m];
     let mut blinding = C::Scalar::ZERO;
@@ -1148,6 +1500,14 @@ where
         w_comm: first.w_comm.clone(),
         z_comm: permutation.z_comm.clone(),
         t_comm: quotient.t_comm.clone(),
+        lookup: match (&first.lookup, &permutation.aggregation) {
+            (Some(round), Some(aggregation)) => Some(LookupCommitments {
+                sorted: round.sorted.iter().map(|c| c.comm.clone()).collect(),
+                aggreg: aggregation.comm.clone(),
+                runtime: round.runtime.as_ref().map(|r| r.comm.clone()),
+            }),
+            _ => None,
+        },
         evals: previous.evals.clone(),
         ft_eval1: previous.ft_eval1,
         proof: OpeningProof {
@@ -1171,6 +1531,7 @@ where
 pub fn prove<C, S, T, R, G>(
     index: &ProverIndex<C>,
     witness: [Vec<C::Scalar>; COLUMNS],
+    runtime_tables: &[RuntimeTable<C::Scalar>],
     prev_challenges: &[RecursionChallenge<C>],
     gates: &G,
     sponges: (&S, &T),
@@ -1186,7 +1547,14 @@ where
     G: Gates<C::Scalar>,
 {
     let (base_sponge, scalar_sponge) = sponges;
-    let first = witness_round(index, witness, prev_challenges, base_sponge, rng)?;
+    let first = witness_round(
+        index,
+        witness,
+        runtime_tables,
+        prev_challenges,
+        base_sponge,
+        rng,
+    )?;
     let second = permutation_round(index, first, rng)?;
     let third = quotient_round(index, second, gates, rng)?;
     let fourth = evaluation_round(index, third, scalar_sponge);

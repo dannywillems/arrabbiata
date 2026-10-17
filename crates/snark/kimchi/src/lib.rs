@@ -20,8 +20,8 @@
 //! - [`permutation`]: the shifts of the copy argument, sampled as Kimchi
 //!   samples them (Blake2b512 of a counter, the first non-residues not in
 //!   the domain);
-//! - [`prover`]: the prover, round by round (so far up to the quotient and
-//!   `zeta`), randomness a parameter ([`rng`]);
+//! - [`prover`]: the prover, round by round, lookups and previous
+//!   accumulators included, randomness a parameter ([`rng`]);
 //! - [`srs`]: Kimchi's SRS, hashed to the curve by Kimchi's group map, and
 //!   chunked commitments;
 //! - [`verifier`]: the verifier, replaying the transcript and checking the

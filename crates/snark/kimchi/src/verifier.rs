@@ -1,16 +1,21 @@
 //! Kimchi's verifier (`kimchi/src/verifier.rs`: `oracles`, `to_batch`, and
-//! `SRS::verify` of `poly-commitment`), for proofs without lookups.
+//! `SRS::verify` of `poly-commitment`).
 //!
 //! [`oracles`] replays the transcript: the base sponge over the index
 //! digest, the previous accumulators, the public commitment (computed from
-//! the public inputs, `h` alone when there are none), the witness, `z` and
+//! the public inputs, `h` alone when there are none), the witness
+//! commitments, with lookups the runtime table, the joint combiner, the
+//! sorted columns and (after `gamma`) the lookup aggregation, the `z` and
 //! `t` commitments, then the scalar sponge over the evaluations; it gives
 //! the challenges, `ft(zeta)` and the combined inner product. `ft(zeta)`
 //! (Kimchi's `ft_eval0`) is the permutation identity at `zeta`, minus the
 //! public polynomial, plus the two boundary terms, minus every gate's
 //! constraints at the evaluations (the constant term of Kimchi's
 //! linearization: every column but the last sigma is evaluated, so it is
-//! all of them).
+//! all of them), and minus the lookup constraints at the evaluations. The
+//! joint table's commitment is the table columns' combined by powers of the
+//! joint combiner, plus the ids' by `jc^max_joint_size`, plus the runtime
+//! table's by `jc` (Kimchi's `combine_table`).
 //!
 //! [`verify`] then checks the opening, as `SRS::verify` does for a batch
 //! of one: with the round challenges `u_j` replayed, `s` the coefficients
@@ -38,10 +43,12 @@ use arrabbiata_transcript::Transcript;
 use crate::{
     constraints::GateType,
     gates::Gates,
+    lookup::{LookupPoint, constraint_count, constraints as lookup_constraints},
     oracle::{FqSponge, FrSponge, ScalarChallenge},
     permutation::PERMUTS,
     prover::{
-        CONSTRAINED, PERMUTATION_ALPHA, PointEvaluations, ProverProof, combine, shift_scalar,
+        CONSTRAINED, LOOKUP_ALPHA, PERMUTATION_ALPHA, PointEvaluations, ProverProof, combine,
+        shift_scalar, unnormalized_lagrange,
     },
     rng::Sampler,
     srs::{GroupMap, PolyComm, Srs},
@@ -58,8 +65,9 @@ pub enum VerifyError {
     IncorrectPublicInputLength,
     /// A commitment or an evaluation with the wrong number of chunks.
     IncorrectLength,
-    /// The index has lookups, not supported yet.
-    LookupsUnsupported,
+    /// The proof lacks the lookup commitments or evaluations the index
+    /// needs, or has some it does not.
+    LookupMismatch,
     /// The opening has another number of rounds than the SRS.
     IncorrectRounds,
     /// The opening equation does not hold.
@@ -74,7 +82,7 @@ impl fmt::Display for VerifyError {
             }
             Self::IncorrectPublicInputLength => write!(f, "wrong number of public inputs"),
             Self::IncorrectLength => write!(f, "a commitment or evaluation of the wrong size"),
-            Self::LookupsUnsupported => write!(f, "lookups are not supported yet"),
+            Self::LookupMismatch => write!(f, "lookup parts missing or unexpected"),
             Self::IncorrectRounds => write!(f, "the opening has the wrong number of rounds"),
             Self::OpeningProof => write!(f, "the opening does not verify"),
         }
@@ -177,9 +185,24 @@ where
     G: Gates<C::Scalar>,
 {
     let (base_sponge, scalar_sponge) = sponges;
-    if index.lookup_index.is_some() {
-        return Err(VerifyError::LookupsUnsupported);
-    }
+    let lookup = match (&index.lookup_index, &proof.lookup, &proof.evals.lookup) {
+        (None, None, None) => None,
+        (Some(li), Some(comms), Some(evals)) => {
+            let runtime = comms.runtime.is_some()
+                && evals.runtime_table.is_some()
+                && evals.runtime_selector.is_some();
+            let runtime_ok = li.runtime_tables_selector.is_some() == runtime;
+            let sorted_ok = comms.sorted.len() == li.lookup_info.max_per_row + 1
+                && evals.sorted.len() == comms.sorted.len();
+            let selectors_ok =
+                li.lookup_selectors.iter().flatten().count() == evals.selectors.len();
+            if !(runtime_ok && sorted_ok && selectors_ok) {
+                return Err(VerifyError::LookupMismatch);
+            }
+            Some((li, comms, evals))
+        }
+        _ => return Err(VerifyError::LookupMismatch),
+    };
     if proof.prev_challenges.len() != index.prev_challenges {
         return Err(VerifyError::IncorrectPrevChallengesLength);
     }
@@ -207,7 +230,18 @@ where
             &e.emul_selector,
             &e.endomul_scalar_selector,
         ])
-        .chain(e.optional_selectors.iter().map(|(_, p)| p));
+        .chain(e.optional_selectors.iter().map(|(_, p)| p))
+        .chain(e.lookup.iter().flat_map(|l| {
+            [&l.aggregation, &l.table]
+                .into_iter()
+                .chain(l.sorted.iter())
+                .chain(
+                    [&l.runtime_table, &l.runtime_selector]
+                        .into_iter()
+                        .flatten(),
+                )
+                .chain(l.selectors.iter().map(|(_, p)| p))
+        }));
     for p in all_evaluations {
         if p.zeta.len() != num_chunks || p.zeta_omega.len() != num_chunks {
             return Err(VerifyError::IncorrectLength);
@@ -243,8 +277,29 @@ where
     for c in &proof.w_comm {
         fq_sponge.absorb_g(&c.chunks);
     }
+    let joint_combiner = match lookup {
+        None => None,
+        Some((li, comms, _)) => {
+            if let Some(r) = &comms.runtime {
+                fq_sponge.absorb_g(&r.chunks);
+            }
+            let raw = if li.joint_lookup_used {
+                fq_sponge.challenge()
+            } else {
+                C::Scalar::ZERO
+            };
+            let jc = ScalarChallenge(raw).to_field(C::lambda());
+            for c in &comms.sorted {
+                fq_sponge.absorb_g(&c.chunks);
+            }
+            Some(jc)
+        }
+    };
     let beta = fq_sponge.challenge();
     let gamma = fq_sponge.challenge();
+    if let Some((_, comms, _)) = lookup {
+        fq_sponge.absorb_g(&comms.aggreg.chunks);
+    }
     fq_sponge.absorb_g(&proof.z_comm.chunks);
     let alpha_chal = ScalarChallenge(fq_sponge.challenge());
     let alpha = alpha_chal.to_field(C::lambda());
@@ -281,7 +336,8 @@ where
     let at = |p: &PointEvaluations<C::Scalar>| {
         (combine(&p.zeta, zeta_m), combine(&p.zeta_omega, zetaw_m))
     };
-    let mut alphas = [C::Scalar::ONE; PERMUTATION_ALPHA + 3];
+    let lookup_count = lookup.map_or(0, |(li, _, _)| constraint_count(&li.lookup_info));
+    let mut alphas = vec![C::Scalar::ONE; LOOKUP_ALPHA + lookup_count];
     for k in 1..alphas.len() {
         alphas[k] = alphas[k - 1] * alpha;
     }
@@ -340,6 +396,28 @@ where
             .enumerate()
             .fold(C::Scalar::ZERO, |acc, (i, c)| acc + alphas[i] * *c);
         ft_eval0 = ft_eval0 - at(s).0 * combined;
+    }
+    // The lookup constraints at the evaluations.
+    if let (Some((li, _, l)), Some(jc)) = (lookup, joint_combiner) {
+        let point = LookupPoint {
+            witness: e.w.iter().map(|p| at(p).0).collect(),
+            sorted: l.sorted.iter().map(at).collect(),
+            aggregation: at(&l.aggregation),
+            table: at(&l.table),
+            selectors: l.selectors.iter().map(|(p, v)| (*p, at(v).0)).collect(),
+            runtime: match (&l.runtime_table, &l.runtime_selector) {
+                (Some(t), Some(sel)) => Some((at(t).0, at(sel).0)),
+                _ => None,
+            },
+            vanishing: (n - zk_rows - 1..n)
+                .fold(C::Scalar::ONE, |acc, i| acc * (zeta - d1.element(i))),
+            first: unnormalized_lagrange(zeta, C::Scalar::ONE, n),
+            last: unnormalized_lagrange(zeta, d1.element(n - zk_rows - 1), n),
+        };
+        let values = lookup_constraints(&li.lookup_info, &point, beta, gamma, jc);
+        for (i, c) in values.iter().enumerate() {
+            ft_eval0 = ft_eval0 - alphas[LOOKUP_ALPHA + i] * *c;
+        }
     }
 
     // ft's commitment: lin(scalar sigma_6) - (zeta^n - 1) lin(t).
@@ -404,6 +482,50 @@ where
     ] {
         if let Some(c) = comm {
             let p = selector(typ).ok_or(VerifyError::IncorrectLength)?;
+            evaluations.push((c.clone(), pair(p)));
+        }
+    }
+    if let (Some((li, comms, l)), Some(jc)) = (lookup, joint_combiner) {
+        for (c, p) in comms.sorted.iter().zip(&l.sorted) {
+            evaluations.push((c.clone(), pair(p)));
+        }
+        evaluations.push((comms.aggreg.clone(), pair(&l.aggregation)));
+        // Kimchi's combine_table: columns by powers of jc, the ids by
+        // jc^max_joint_size, the runtime table as the second column.
+        let tid = jc.pow(li.lookup_info.max_joint_size as u64);
+        let chunks = li
+            .lookup_table
+            .first()
+            .map_or(num_chunks, |c| c.chunks.len());
+        let table = PolyComm {
+            chunks: (0..chunks)
+                .map(|k| {
+                    let mut acc = Projective::<C>::identity();
+                    let mut power = C::Scalar::ONE;
+                    for column in &li.lookup_table {
+                        acc = acc + column.chunks[k] * power;
+                        power = power * jc;
+                    }
+                    if let Some(ids) = &li.table_ids {
+                        acc = acc + ids.chunks[k] * tid;
+                    }
+                    if let Some(r) = &comms.runtime {
+                        acc = acc + r.chunks[k] * jc;
+                    }
+                    acc
+                })
+                .collect(),
+        };
+        evaluations.push((table, pair(&l.table)));
+        if let (Some(c), Some(p)) = (&comms.runtime, &l.runtime_table) {
+            evaluations.push((c.clone(), pair(p)));
+        }
+        if let (Some(c), Some(p)) = (&li.runtime_tables_selector, &l.runtime_selector) {
+            evaluations.push((c.clone(), pair(p)));
+        }
+        let mut selectors = l.selectors.iter();
+        for c in li.lookup_selectors.iter().flatten() {
+            let (_, p) = selectors.next().ok_or(VerifyError::LookupMismatch)?;
             evaluations.push((c.clone(), pair(p)));
         }
     }

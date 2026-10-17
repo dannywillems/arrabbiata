@@ -11,11 +11,13 @@ use arrabbiata_curve::{Affine, Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_ipa::RecursionChallenge;
 use arrabbiata_kimchi::{
-    constraints::{CircuitGate, ConstraintSystem, GateType, Wire},
+    constraints::{CircuitGate, ConstraintSystem, GateType, LookupTable, RuntimeTableCfg, Wire},
     gates::KimchiGates,
+    lookup::{LookupPattern, RuntimeTable},
     prover::{
-        OpeningProof, PointEvaluations, ProofEvaluations, ProverIndex, ProverProof,
-        evaluation_round, permutation_round, prove, quotient_round, witness_round,
+        LookupCommitments, LookupEvaluations, OpeningProof, PointEvaluations, ProofEvaluations,
+        ProverIndex, ProverProof, evaluation_round, permutation_round, prove, quotient_round,
+        witness_round,
     },
     rng::{Arkworks, Sampler, SplitMix64},
     srs::{PolyComm, Srs},
@@ -32,13 +34,77 @@ const VECTORS: &str = include_str!("vectors/kimchi_prover.txt");
 /// generic test circuit unchunked and in chunks of 16 rows, one block of
 /// each gate without lookups (Poseidon, CompleteAdd, VarBaseMul, EndoMul,
 /// EndoMulScalar), and the generic circuit carrying one previous
-/// accumulator (as Kimchi's `test_recursion`).
-const CIRCUITS: [(&str, Option<usize>, usize); 4] = [
+/// accumulator (as Kimchi's `test_recursion`); then four circuits with
+/// lookups: a 64-bit Xor, a multi-range check, Lookup gates over two fixed
+/// tables, and over two runtime tables.
+const CIRCUITS: [(&str, Option<usize>, usize); 8] = [
     ("generic", None, 5),
     ("chunked", Some(16), 5),
     ("gadgets", None, 0),
     ("recursion", None, 5),
+    ("xor", None, 0),
+    ("range_check", None, 0),
+    ("lookup", None, 0),
+    ("runtime", None, 0),
 ];
+
+/// Values from `k x1 ... xk`.
+fn values_of(words: &[&str]) -> Vec<Fp> {
+    let k: usize = words[0].parse().unwrap();
+    words[1..=k].iter().map(|h| element(h)).collect()
+}
+
+/// The fixed tables of the tool's circuit `name`.
+fn tables(name: &str) -> Vec<LookupTable<Fp>> {
+    let mut tables: Vec<LookupTable<Fp>> = Vec::new();
+    for line in VECTORS.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words[0] != "table" || words[1] != name {
+            continue;
+        }
+        let id: i32 = words[2].parse().unwrap();
+        let column = values_of(&words[4..]);
+        match tables.iter_mut().find(|t| t.id == id) {
+            Some(t) => t.data.push(column),
+            None => tables.push(LookupTable {
+                id,
+                data: vec![column],
+            }),
+        }
+    }
+    tables
+}
+
+/// The runtime table configuration of the tool's circuit `name`.
+fn runtime_cfgs(name: &str) -> Option<Vec<RuntimeTableCfg<Fp>>> {
+    let cfgs: Vec<RuntimeTableCfg<Fp>> = VECTORS
+        .lines()
+        .filter(|l| l.starts_with(&format!("runtime_cfg {name} ")))
+        .map(|l| {
+            let words: Vec<&str> = l.split_whitespace().collect();
+            RuntimeTableCfg {
+                id: words[2].parse().unwrap(),
+                first_column: values_of(&words[3..]),
+            }
+        })
+        .collect();
+    (!cfgs.is_empty()).then_some(cfgs)
+}
+
+/// The runtime tables' data of the tool's circuit `name`.
+fn runtime_tables(name: &str) -> Vec<RuntimeTable<Fp>> {
+    VECTORS
+        .lines()
+        .filter(|l| l.starts_with(&format!("runtime_data {name} ")))
+        .map(|l| {
+            let words: Vec<&str> = l.split_whitespace().collect();
+            RuntimeTable {
+                id: words[2].parse().unwrap(),
+                data: values_of(&words[3..]),
+            }
+        })
+        .collect()
+}
 
 fn hex<F: PrimeField>(x: F) -> String {
     (0..F::LIMBS)
@@ -110,6 +176,13 @@ fn gate_type(name: &str) -> GateType {
         "VarBaseMul" => GateType::VarBaseMul,
         "EndoMul" => GateType::EndoMul,
         "EndoMulScalar" => GateType::EndoMulScalar,
+        "Lookup" => GateType::Lookup,
+        "RangeCheck0" => GateType::RangeCheck0,
+        "RangeCheck1" => GateType::RangeCheck1,
+        "ForeignFieldAdd" => GateType::ForeignFieldAdd,
+        "ForeignFieldMul" => GateType::ForeignFieldMul,
+        "Xor16" => GateType::Xor16,
+        "Rot64" => GateType::Rot64,
         other => panic!("gate {other} not in the vectors"),
     }
 }
@@ -152,6 +225,8 @@ fn index(
     let cs = ConstraintSystem::create(gates)
         .public(public)
         .prev_challenges(prev_challenges(name).len())
+        .lookup(tables(name))
+        .runtime(runtime_cfgs(name))
         .max_poly_size(max_poly_size)
         .build()
         .unwrap();
@@ -192,14 +267,46 @@ fn the_witness_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let round =
-            witness_round(&index, witness, &prev_challenges(name), &sponge, &mut rng).unwrap();
+        let round = witness_round(
+            &index,
+            witness,
+            &runtime_tables(name),
+            &prev_challenges(name),
+            &sponge,
+            &mut rng,
+        )
+        .unwrap();
         let comms = lines("comm", name);
         assert_eq!(comms["public"], comm(&round.public_comm), "{name} public");
         for (i, c) in round.w_comm.iter().enumerate() {
             assert_eq!(comms[&format!("w{i}")], comm(c), "{name} w{i}");
         }
         let oracles = lines("oracle", name);
+        if let Some(l) = &round.lookup {
+            for (i, c) in l.sorted.iter().enumerate() {
+                assert_eq!(
+                    comms[&format!("sorted{i}")],
+                    comm(&c.comm),
+                    "{name} sorted{i}"
+                );
+            }
+            assert_eq!(
+                comms.contains_key("runtime"),
+                l.runtime.is_some(),
+                "{name} runtime"
+            );
+            if let Some(r) = &l.runtime {
+                assert_eq!(comms["runtime"], comm(&r.comm), "{name} runtime");
+            }
+            assert_eq!(
+                oracles["joint_combiner_chal"],
+                hex(l.joint_combiner_chal.0),
+                "{name}"
+            );
+            assert_eq!(oracles["joint_combiner"], hex(l.joint_combiner), "{name}");
+        } else {
+            assert!(!comms.contains_key("sorted0"), "{name}");
+        }
         assert_eq!(oracles["beta"], hex(round.beta), "{name} beta");
         assert_eq!(oracles["gamma"], hex(round.gamma), "{name} gamma");
     }
@@ -211,10 +318,22 @@ fn the_permutation_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first =
-            witness_round(&index, witness, &prev_challenges(name), &sponge, &mut rng).unwrap();
+        let first = witness_round(
+            &index,
+            witness,
+            &runtime_tables(name),
+            &prev_challenges(name),
+            &sponge,
+            &mut rng,
+        )
+        .unwrap();
         let round = permutation_round(&index, first, &mut rng).unwrap();
-        assert_eq!(lines("comm", name)["z"], comm(&round.z_comm), "{name} z");
+        let comms = lines("comm", name);
+        assert_eq!(comms["z"], comm(&round.z_comm), "{name} z");
+        match &round.aggregation {
+            Some(a) => assert_eq!(comms["aggreg"], comm(&a.comm), "{name} aggreg"),
+            None => assert!(!comms.contains_key("aggreg"), "{name}"),
+        }
         let oracles = lines("oracle", name);
         assert_eq!(oracles["alpha_chal"], hex(round.alpha_chal.0), "{name}");
         assert_eq!(oracles["alpha"], hex(round.alpha), "{name} alpha");
@@ -228,8 +347,15 @@ fn the_quotient_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first =
-            witness_round(&index, witness, &prev_challenges(name), &sponge, &mut rng).unwrap();
+        let first = witness_round(
+            &index,
+            witness,
+            &runtime_tables(name),
+            &prev_challenges(name),
+            &sponge,
+            &mut rng,
+        )
+        .unwrap();
         let second = permutation_round(&index, first, &mut rng).unwrap();
         let round = quotient_round(&index, second, &gates, &mut rng).unwrap();
         assert_eq!(lines("comm", name)["t"], comm(&round.t_comm), "{name} t");
@@ -256,8 +382,15 @@ fn the_evaluation_round_is_kimchis() {
         let sponge = KimchiSponge::new(vesta_base());
         let scalar_sponge = KimchiSponge::new(pallas_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first =
-            witness_round(&index, witness, &prev_challenges(name), &sponge, &mut rng).unwrap();
+        let first = witness_round(
+            &index,
+            witness,
+            &runtime_tables(name),
+            &prev_challenges(name),
+            &sponge,
+            &mut rng,
+        )
+        .unwrap();
         let second = permutation_round(&index, first, &mut rng).unwrap();
         let third = quotient_round(&index, second, &gates, &mut rng).unwrap();
         let round = evaluation_round(&index, third, &scalar_sponge);
@@ -300,28 +433,11 @@ fn the_evaluation_round_is_kimchis() {
                 .map_or_else(|| String::from("none"), |(_, p)| evaluation(p));
             ours.push((label.to_string(), value));
         }
-        for label in [
-            "lookup_aggregation",
-            "lookup_table",
-            "lookup_sorted0",
-            "lookup_sorted1",
-            "lookup_sorted2",
-            "lookup_sorted3",
-            "lookup_sorted4",
-            "runtime_lookup_table",
-            "runtime_lookup_table_selector",
-            "xor_lookup_selector",
-            "lookup_gate_lookup_selector",
-            "range_check_lookup_selector",
-            "foreign_field_mul_lookup_selector",
-        ] {
-            ours.push((label.to_string(), String::from("none")));
-        }
+        ours.extend(lookup_lines(e));
         assert_eq!(ours.len(), expected.len(), "{name}");
         for (label, value) in &ours {
             assert_eq!(&expected[label], value, "{name} {label}");
         }
-        assert!(e.optional_selectors.is_empty());
         let ft_eval1 = VECTORS
             .lines()
             .find(|l| l.starts_with(&format!("ft_eval1 {name} ")))
@@ -346,6 +462,7 @@ fn the_proofs_are_kimchis() {
         let proof = prove(
             &index,
             witness,
+            &runtime_tables(name),
             &prev_challenges(name),
             &gates,
             (&base, &scalar),
@@ -447,10 +564,40 @@ fn kimchis_proof(name: &str) -> ProverProof<Vesta> {
         .split_whitespace()
         .nth(2)
         .unwrap();
+    let lookup = comms.contains_key("aggreg").then(|| LookupCommitments {
+        sorted: (0..)
+            .map_while(|i| comms.get(&format!("sorted{i}")).map(|c| parse_comm(c)))
+            .collect(),
+        aggreg: parse_comm(&comms["aggreg"]),
+        runtime: comms.get("runtime").map(|c| parse_comm(c)),
+    });
+    let some = |label: &str| (evals[label] != "none").then(|| e(label));
+    let lookup_evals = (evals["lookup_aggregation"] != "none").then(|| LookupEvaluations {
+        aggregation: e("lookup_aggregation"),
+        table: e("lookup_table"),
+        sorted: (0..5)
+            .filter_map(|i| some(&format!("lookup_sorted{i}")))
+            .collect(),
+        runtime_table: some("runtime_lookup_table"),
+        runtime_selector: some("runtime_lookup_table_selector"),
+        selectors: [
+            ("xor_lookup_selector", LookupPattern::Xor),
+            ("lookup_gate_lookup_selector", LookupPattern::Lookup),
+            ("range_check_lookup_selector", LookupPattern::RangeCheck),
+            (
+                "foreign_field_mul_lookup_selector",
+                LookupPattern::ForeignFieldMul,
+            ),
+        ]
+        .iter()
+        .filter_map(|(label, p)| some(label).map(|v| (*p, v)))
+        .collect(),
+    });
     ProverProof {
         w_comm: core::array::from_fn(|i| parse_comm(&comms[&format!("w{i}")])),
         z_comm: parse_comm(&comms["z"]),
         t_comm: parse_comm(&comms["t"]),
+        lookup,
         evals: ProofEvaluations {
             public: e("public"),
             w: core::array::from_fn(|i| e(&format!("w{i}"))),
@@ -464,6 +611,7 @@ fn kimchis_proof(name: &str) -> ProverProof<Vesta> {
             emul_selector: e("EndoMul"),
             endomul_scalar_selector: e("EndoMulScalar"),
             optional_selectors,
+            lookup: lookup_evals,
         },
         ft_eval1: element(ft_eval1),
         proof: OpeningProof {
@@ -495,6 +643,7 @@ fn kimchis_proofs_are_ours() {
         let ours = prove(
             &index,
             witness,
+            &runtime_tables(name),
             &prev_challenges(name),
             &gates,
             (&base, &scalar),
@@ -640,6 +789,15 @@ fn dump(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
     }
     out.push(format!("comm {name} z {}", comm(&proof.z_comm)));
     out.push(format!("comm {name} t {}", comm(&proof.t_comm)));
+    if let Some(l) = &proof.lookup {
+        for (i, c) in l.sorted.iter().enumerate() {
+            out.push(format!("comm {name} sorted{i} {}", comm(c)));
+        }
+        out.push(format!("comm {name} aggreg {}", comm(&l.aggreg)));
+        if let Some(r) = &l.runtime {
+            out.push(format!("comm {name} runtime {}", comm(r)));
+        }
+    }
     let e = &proof.evals;
     let mut put = |label: String, p: &PointEvaluations<Fp>| {
         out.push(format!("eval {name} {label} {}", evaluation(p)));
@@ -668,6 +826,11 @@ fn dump(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
     for (typ, p) in &e.optional_selectors {
         put(format!("{typ:?}"), p);
     }
+    for (label, value) in lookup_lines(e) {
+        if value != "none" {
+            out.push(format!("eval {name} {label} {value}"));
+        }
+    }
     out.push(format!("ft_eval1 {name} {}", hex(proof.ft_eval1)));
     let o = &proof.proof;
     for (i, (l, r)) in o.lr.iter().enumerate() {
@@ -694,6 +857,7 @@ fn our_proofs() -> Vec<(&'static str, ProverProof<Vesta>)> {
             let proof = prove(
                 &index,
                 witness,
+                &runtime_tables(name),
                 &prev_challenges(name),
                 &gates,
                 (&base, &scalar),
@@ -781,4 +945,115 @@ fn kimchi_verifies_our_proofs() {
             assert!(KIMCHI_ON_OURS.lines().any(|l| l == line), "{line}");
         }
     }
+}
+
+/// The lookup evaluation lines of `e`, labelled as the vectors label them.
+fn lookup_lines(e: &ProofEvaluations<Fp>) -> Vec<(String, String)> {
+    let none = || String::from("none");
+    let shown = |p: Option<&PointEvaluations<Fp>>| p.map_or_else(none, evaluation);
+    let l = e.lookup.as_ref();
+    let mut out = vec![
+        (
+            "lookup_aggregation".to_string(),
+            shown(l.map(|l| &l.aggregation)),
+        ),
+        ("lookup_table".to_string(), shown(l.map(|l| &l.table))),
+    ];
+    for i in 0..5 {
+        out.push((
+            format!("lookup_sorted{i}"),
+            shown(l.and_then(|l| l.sorted.get(i))),
+        ));
+    }
+    out.push((
+        "runtime_lookup_table".to_string(),
+        shown(l.and_then(|l| l.runtime_table.as_ref())),
+    ));
+    out.push((
+        "runtime_lookup_table_selector".to_string(),
+        shown(l.and_then(|l| l.runtime_selector.as_ref())),
+    ));
+    for (label, pattern) in [
+        ("xor_lookup_selector", LookupPattern::Xor),
+        ("lookup_gate_lookup_selector", LookupPattern::Lookup),
+        ("range_check_lookup_selector", LookupPattern::RangeCheck),
+        (
+            "foreign_field_mul_lookup_selector",
+            LookupPattern::ForeignFieldMul,
+        ),
+    ] {
+        let p = l.and_then(|l| {
+            l.selectors
+                .iter()
+                .find(|(q, _)| *q == pattern)
+                .map(|(_, p)| p)
+        });
+        out.push((label.to_string(), shown(p)));
+    }
+    out
+}
+
+#[test]
+fn tampered_lookup_proofs_are_refused() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let (name, max_poly_size, public) = CIRCUITS[7];
+    assert_eq!(name, "runtime");
+    let (index, _) = index(name, max_poly_size, public);
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let check = |proof: &ProverProof<Vesta>| {
+        let mut rng = Arkworks(SplitMix64(1));
+        let sponges = (&base, &scalar);
+        verify(
+            &index.verifier_index,
+            &index.srs,
+            proof,
+            &[],
+            &gates,
+            sponges,
+            &mut rng,
+        )
+    };
+    let good = kimchis_proof(name);
+    assert_eq!(check(&good), Ok(()));
+    let shift = Projective::<Vesta>::generator();
+    let mut bad = good.clone();
+    bad.lookup.as_mut().unwrap().sorted[1].chunks[0] =
+        bad.lookup.as_ref().unwrap().sorted[1].chunks[0] + shift;
+    assert_eq!(
+        check(&bad),
+        Err(VerifyError::OpeningProof),
+        "a sorted column"
+    );
+    let mut bad = good.clone();
+    let l = bad.evals.lookup.as_mut().unwrap();
+    l.aggregation.zeta_omega[0] = l.aggregation.zeta_omega[0] + Fp::ONE;
+    assert_eq!(
+        check(&bad),
+        Err(VerifyError::OpeningProof),
+        "the aggregation"
+    );
+    let mut bad = good.clone();
+    let l = bad.evals.lookup.as_mut().unwrap();
+    l.table.zeta[0] = l.table.zeta[0] + Fp::ONE;
+    assert_eq!(
+        check(&bad),
+        Err(VerifyError::OpeningProof),
+        "the joint table"
+    );
+    let mut bad = good.clone();
+    let r = bad.lookup.as_mut().unwrap().runtime.as_mut().unwrap();
+    r.chunks[0] = r.chunks[0] + shift;
+    assert_eq!(
+        check(&bad),
+        Err(VerifyError::OpeningProof),
+        "the runtime table"
+    );
+    let mut bad = good.clone();
+    bad.lookup = None;
+    assert_eq!(
+        check(&bad),
+        Err(VerifyError::LookupMismatch),
+        "no lookup part"
+    );
 }

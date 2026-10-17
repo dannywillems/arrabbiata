@@ -10,13 +10,15 @@ use arrabbiata_kimchi::{
     },
     gates::{Gates, KimchiGates},
     lookup::{
-        JointLookup, LookupError, LookupIndex, LookupInfo, LookupPattern, LookupTableId, PATTERNS,
-        RANGE_CHECK_TABLE_ID, XOR_TABLE_ID, id_to_field, range_check_table, xor_table,
+        self as lookups, JointLookup, LookupError, LookupIndex, LookupInfo, LookupPattern,
+        LookupPoint, LookupTableId, PATTERNS, RANGE_CHECK_TABLE_ID, RuntimeTable, XOR_TABLE_ID,
+        combine_entry, constraint_count, id_to_field, lookup_value, range_check_table, xor_table,
     },
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
     prover::{
-        self, EvaluationRound, OpeningProof, PERMUTATION_ALPHA, PermutationRound, PointEvaluations,
+        self, EvaluationRound, Hidden, LOOKUP_ALPHA, LookupCommitments, LookupEvaluations,
+        LookupRound, OpeningProof, PERMUTATION_ALPHA, PermutationRound, PointEvaluations,
         ProofEvaluations, ProverIndex, ProverProof, QuotientRound, WitnessRound, evaluation_round,
         opening_round, permutation_round, prove, quotient_round, shift_scalar, witness_round,
     },
@@ -368,18 +370,18 @@ fn prover_errors() {
     let mut rng = Arkworks(SplitMix64(3));
     let mut ragged: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
     ragged[4].push(Fp::ZERO);
-    let error = witness_round(&index, ragged, &[], &sponge, &mut rng).unwrap_err();
+    let error = witness_round(&index, ragged, &[], &[], &sponge, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::WitnessCsInconsistent);
     assert_eq!(error.to_string(), "witness columns of different lengths");
     // Six rows leave two of eight free, fewer than the three zk rows.
     let long: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 6]);
-    let error = witness_round(&index, long, &[], &sponge, &mut rng).unwrap_err();
+    let error = witness_round(&index, long, &[], &[], &sponge, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::NoRoomForZkInWitness);
     // Chunks of 4 rows need more zk rows than the 3 built for one chunk.
     let one_chunk = ConstraintSystem::create(two_generic()).build().unwrap();
     let chunked = ProverIndex::create(one_chunk, Srs::<Vesta>::create(4));
     let short: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
-    let error = witness_round(&chunked, short, &[], &sponge, &mut rng).unwrap_err();
+    let error = witness_round(&chunked, short, &[], &[], &sponge, &mut rng).unwrap_err();
     assert_eq!(
         error,
         prover::Error::NotZeroKnowledge {
@@ -401,7 +403,7 @@ fn witness_round_state() {
     let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
     witness[0][0] = Fp::ONE;
     let round: WitnessRound<Vesta, _> =
-        witness_round(&index, witness, &[], &sponge, &mut rng).unwrap();
+        witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
     assert_eq!(round.public, vec![Fp::ONE]);
     // Padded to 8 rows, the last three random, the others zero.
     assert_eq!(round.witness[3].len(), 8);
@@ -423,7 +425,7 @@ fn permutation_round_state() {
     let sponge = KimchiSponge::new(vesta_base());
     let equal: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ONE; 2]);
     let mut rng = Arkworks(SplitMix64(5));
-    let first = witness_round(&index, equal, &[], &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, equal, &[], &[], &sponge, &mut rng).unwrap();
     let round: PermutationRound<Vesta, _> = permutation_round(&index, first, &mut rng).unwrap();
     // z starts at 1 and closes at row n - zk_rows = 5.
     assert_eq!(round.z[0], Fp::ONE);
@@ -433,7 +435,7 @@ fn permutation_round_state() {
     // Breaking the copy breaks the product.
     let mut broken: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ONE; 2]);
     broken[0][1] = Fp::ZERO;
-    let first = witness_round(&index, broken, &[], &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, broken, &[], &[], &sponge, &mut rng).unwrap();
     let error = permutation_round(&index, first, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::PermutationFinalValue);
 }
@@ -483,7 +485,7 @@ fn quotient_round_state() {
         vec![value; 2]
     });
     let mut rng = Arkworks(SplitMix64(9));
-    let first = witness_round(&index, good.clone(), &[], &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, good.clone(), &[], &[], &sponge, &mut rng).unwrap();
     let second = permutation_round(&index, first, &mut rng).unwrap();
     let round: QuotientRound<Vesta, _> = quotient_round(&index, second, &kimchi, &mut rng).unwrap();
     // 7 chunks of 8 rows, each hidden by its blinder.
@@ -494,7 +496,7 @@ fn quotient_round_state() {
     // A broken addition leaves a remainder.
     let mut bad = good;
     bad[2][1] = Fp::from_u64(4);
-    let first = witness_round(&index, bad, &[], &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, bad, &[], &[], &sponge, &mut rng).unwrap();
     let second = permutation_round(&index, first, &mut rng).unwrap();
     let error = quotient_round(&index, second, &kimchi, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::QuotientRemainder);
@@ -529,7 +531,7 @@ fn evaluated() -> (
         vec![value; 2]
     });
     let mut rng = Arkworks(SplitMix64(11));
-    let first = witness_round(&index, witness, &[], &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
     let second = permutation_round(&index, first, &mut rng).unwrap();
     let third = quotient_round(&index, second, &kimchi, &mut rng).unwrap();
     let round = evaluation_round(&index, third, &scalar_sponge);
@@ -613,12 +615,39 @@ fn prove_runs_every_round() {
     let sponges = (&base, &scalar);
     let mut one = Arkworks(SplitMix64(17));
     let mut two = Arkworks(SplitMix64(17));
-    let a = prove(&index, witness.clone(), &[], &kimchi, sponges, &mut one).unwrap();
-    let b = prove(&index, witness.clone(), &[], &kimchi, sponges, &mut two).unwrap();
+    let a = prove(
+        &index,
+        witness.clone(),
+        &[],
+        &[],
+        &kimchi,
+        sponges,
+        &mut one,
+    )
+    .unwrap();
+    let b = prove(
+        &index,
+        witness.clone(),
+        &[],
+        &[],
+        &kimchi,
+        sponges,
+        &mut two,
+    )
+    .unwrap();
     // Reproducible from the stream; another stream hides differently.
     assert_eq!(a, b);
     let mut three = Arkworks(SplitMix64(18));
-    let c = prove(&index, witness.clone(), &[], &kimchi, sponges, &mut three).unwrap();
+    let c = prove(
+        &index,
+        witness.clone(),
+        &[],
+        &[],
+        &kimchi,
+        sponges,
+        &mut three,
+    )
+    .unwrap();
     assert_ne!(a.w_comm, c.w_comm);
     assert!(a.prev_challenges.is_empty());
     // A previous accumulator is carried, and changes the transcript.
@@ -631,7 +660,7 @@ fn prove_runs_every_round() {
     };
     let mut four = Arkworks(SplitMix64(17));
     let previous = [previous];
-    let d = prove(&index, witness, &previous, &kimchi, sponges, &mut four).unwrap();
+    let d = prove(&index, witness, &[], &previous, &kimchi, sponges, &mut four).unwrap();
     assert_eq!(d.prev_challenges, previous.to_vec());
     assert_eq!(d.w_comm, a.w_comm);
     assert_ne!(d.proof, a.proof);
@@ -742,7 +771,16 @@ fn proved() -> (ProverIndex<Vesta>, ProverProof<Vesta>, KimchiGates<Fp>) {
         vec![value; 2]
     });
     let mut rng = Arkworks(SplitMix64(19));
-    let proof = prove(&index, witness, &[], &kimchi, (&base, &scalar), &mut rng).unwrap();
+    let proof = prove(
+        &index,
+        witness,
+        &[],
+        &[],
+        &kimchi,
+        (&base, &scalar),
+        &mut rng,
+    )
+    .unwrap();
     (index, proof, kimchi)
 }
 
@@ -801,4 +839,204 @@ fn verifier_accepts_and_refuses() {
     }];
     let error = verify(vi, &index.srs, &extra, &[], &kimchi, sponges, &mut rng).unwrap_err();
     assert_eq!(error, VerifyError::IncorrectPrevChallengesLength);
+}
+
+/// Three Lookup rows over a table of id 1: rows (index, value) = (i, 10 i).
+fn lookup_circuit() -> (ProverIndex<Vesta>, [Vec<Fp>; COLUMNS]) {
+    let gates: Vec<CircuitGate<Fp>> = (0..3)
+        .map(|row| CircuitGate::new(GateType::Lookup, Wire::for_row(row), vec![]))
+        .collect();
+    let table = LookupTable {
+        id: 1,
+        data: vec![
+            (0..4).map(Fp::from_u64).collect(),
+            (0..4).map(|i| Fp::from_u64(10 * i)).collect(),
+        ],
+    };
+    let cs = ConstraintSystem::create(gates)
+        .lookup(vec![table])
+        .build()
+        .unwrap();
+    let srs = Srs::<Vesta>::create(cs.domain.d1.size());
+    // Column 0 the table id; columns 2i + 1, 2i + 2 the index (row + i)
+    // mod 4 and its value.
+    let witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|c| {
+        (0..3u64)
+            .map(|row| match c {
+                0 => Fp::ONE,
+                1..=6 => {
+                    let index = (row + (c as u64 - 1) / 2) % 4;
+                    if c % 2 == 1 {
+                        Fp::from_u64(index)
+                    } else {
+                        Fp::from_u64(10 * index)
+                    }
+                }
+                _ => Fp::ZERO,
+            })
+            .collect()
+    });
+    (ProverIndex::create(cs, srs), witness)
+}
+
+#[test]
+fn lookup_values() {
+    // sum_i jc^i entry_i + tid id.
+    let (jc, tid) = (Fp::from_u64(3), Fp::from_u64(5));
+    let entry = [Fp::from_u64(2), Fp::from_u64(7)];
+    assert_eq!(
+        combine_entry(&entry, Fp::ONE, jc, tid),
+        Fp::from_u64(2 + 21 + 5)
+    );
+    let lookup = &LookupPattern::Lookup.lookups()[0];
+    let cell = |c: usize| Fp::from_u64(c as u64 + 1);
+    // Table id from column 0 (1), entry columns 1, 2 (2, 3).
+    assert_eq!(
+        lookup_value(lookup, &cell, jc, tid),
+        Fp::from_u64(2 + 9 + 5)
+    );
+}
+
+#[test]
+fn lookup_algorithms() {
+    let (index, witness) = lookup_circuit();
+    let cs = &index.cs;
+    let l = cs.lookup.as_ref().unwrap();
+    let n = cs.domain.d1.size();
+    let (jc, tid) = (Fp::from_u64(3), Fp::from_u64(9));
+    let joint = l.joint_table(jc, tid, None);
+    // Row 2 of the table of id 1: (2, 20, id 1).
+    assert_eq!(joint[2], Fp::from_u64(2 + 60 + 9));
+    let mut padded: Vec<Vec<Fp>> = witness.to_vec();
+    for column in &mut padded {
+        column.resize(n, Fp::ZERO);
+    }
+    let sorted = lookups::sorted(
+        &l.info,
+        &cs.gates,
+        &padded,
+        &joint,
+        jc,
+        tid,
+        Fp::ZERO,
+        cs.zk_rows,
+    )
+    .unwrap();
+    // max_per_row + 1 columns of n - zk_rows values, joined end to end.
+    assert_eq!(sorted.len(), 4);
+    assert!(sorted.iter().all(|c| c.len() == n - cs.zk_rows));
+    let (beta, gamma) = (Fp::from_u64(11), Fp::from_u64(13));
+    let z = lookups::aggregation(
+        &l.info,
+        &cs.gates,
+        &padded,
+        &joint,
+        &sorted,
+        (beta, gamma, jc, tid),
+        Fp::ZERO,
+        cs.zk_rows,
+    );
+    // The product closes: the sorted multiset is the table and the lookups.
+    assert_eq!(z[0], Fp::ONE);
+    assert_eq!(z[n - cs.zk_rows - 1], Fp::ONE);
+    // A value in no table.
+    let mut bad = padded.clone();
+    bad[2][0] = Fp::from_u64(11);
+    let error = lookups::sorted(
+        &l.info,
+        &cs.gates,
+        &bad,
+        &joint,
+        jc,
+        tid,
+        Fp::ZERO,
+        cs.zk_rows,
+    )
+    .unwrap_err();
+    assert_eq!(error, LookupError::ValueNotInTable { row: 0 });
+    // Runtime tables the index does not configure.
+    let runtime = [RuntimeTable {
+        id: 2,
+        data: vec![Fp::ONE],
+    }];
+    assert_eq!(
+        l.runtime_contribution(&runtime, n).unwrap_err(),
+        LookupError::RuntimeTablesInconsistent
+    );
+}
+
+#[test]
+fn lookup_constraints_at_a_point() {
+    let (index, _) = lookup_circuit();
+    let info = &index.cs.lookup.as_ref().unwrap().info;
+    assert_eq!(constraint_count(info), 7);
+    // z = 1 and equal sorted values: the boundary and join constraints
+    // vanish whatever the weights.
+    let point = LookupPoint {
+        witness: vec![Fp::ZERO; COLUMNS],
+        sorted: vec![(Fp::ONE, Fp::ONE); 4],
+        aggregation: (Fp::ONE, Fp::ONE),
+        table: (Fp::ZERO, Fp::ZERO),
+        selectors: vec![(LookupPattern::Lookup, Fp::ZERO)],
+        runtime: None,
+        vanishing: Fp::ZERO,
+        first: Fp::from_u64(5),
+        last: Fp::from_u64(7),
+    };
+    let values = lookups::constraints(info, &point, Fp::ONE, Fp::ONE, Fp::ONE);
+    assert_eq!(values.len(), 7);
+    assert!(values.iter().all(|v| *v == Fp::ZERO));
+}
+
+#[test]
+fn lookup_proofs() {
+    let (index, witness) = lookup_circuit();
+    assert_eq!(LOOKUP_ALPHA, PERMUTATION_ALPHA + 3);
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let mut rng = Arkworks(SplitMix64(29));
+    let first = witness_round(&index, witness.clone(), &[], &[], &base, &mut rng).unwrap();
+    let round: &LookupRound<Vesta> = first.lookup.as_ref().unwrap();
+    // One lookup reads two columns: the joint combiner is squeezed.
+    assert_ne!(round.joint_combiner_chal.0, Fp::ZERO);
+    let column: &Hidden<Vesta> = &round.sorted[0];
+    assert_eq!(column.blinders.len(), 1);
+    let second = permutation_round(&index, first, &mut rng).unwrap();
+    assert!(second.aggregation.is_some());
+    let mut rng = Arkworks(SplitMix64(29));
+    let proof = prove(
+        &index,
+        witness.clone(),
+        &[],
+        &[],
+        &kimchi,
+        (&base, &scalar),
+        &mut rng,
+    )
+    .unwrap();
+    let comms: &LookupCommitments<Vesta> = proof.lookup.as_ref().unwrap();
+    assert_eq!(comms.sorted.len(), 4);
+    assert!(comms.runtime.is_none());
+    let evals: &LookupEvaluations<Fp> = proof.evals.lookup.as_ref().unwrap();
+    assert_eq!(evals.selectors.len(), 1);
+    let mut rng = Arkworks(SplitMix64(31));
+    let vi = &index.verifier_index;
+    let sponges = (&base, &scalar);
+    assert_eq!(
+        verify(vi, &index.srs, &proof, &[], &kimchi, sponges, &mut rng),
+        Ok(())
+    );
+    let mut bad = proof.clone();
+    bad.evals.lookup = None;
+    let error = verify(vi, &index.srs, &bad, &[], &kimchi, sponges, &mut rng).unwrap_err();
+    assert_eq!(error, VerifyError::LookupMismatch);
+    // A value in no table is refused by the prover.
+    let mut wrong = witness;
+    wrong[2][1] = Fp::from_u64(12);
+    let error = prove(&index, wrong, &[], &[], &kimchi, sponges, &mut rng).unwrap_err();
+    assert_eq!(
+        error,
+        prover::Error::Lookup(LookupError::ValueNotInTable { row: 1 })
+    );
 }
