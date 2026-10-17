@@ -28,6 +28,24 @@
 //! 2. `z` committed and hidden, one blinder per chunk, and absorbed;
 //! 3. `alpha`, the endomorphism image of a 128-bit challenge.
 //!
+//! [`quotient_round`], the third: the quotient `t = f / Z_H + bnd`, with
+//!
+//! - `f` the sum of each gate's constraints weighted by `alpha^i`
+//!   (constraint `i`; gates share the powers, their selectors being
+//!   disjoint) and times its selector, of the permutation term
+//!   `alpha^21 (z(X) prod_i (w_i + gamma + beta k_i X) - z(w X) prod_i (w_i +
+//!   gamma + beta sigma_i)) M(X)`, `M` vanishing on rows `n - zk_rows`,
+//!   `n - zk_rows + 1` and `n - 1`, and of the public polynomial;
+//! - `bnd = alpha^22 (z - 1) / (X - 1) + alpha^23 (z - 1) / (X - w^(n -
+//!   zk_rows))`, the two boundary conditions, already divided;
+//!
+//! then `t` committed in `7 num_chunks` chunks, hidden, absorbed, and
+//! `zeta` the endomorphism image of a 128-bit challenge. `f` is evaluated
+//! on `d8` and interpolated, exact since its degree is below `8 n` for
+//! Kimchi's gates (Kimchi evaluates on `d4` the terms of degree below
+//! `4 n`, and skips the points of `d1` in the permutation products, where
+//! the term vanishes anyway; the polynomial is the same).
+//!
 //! The randomness is the [`Sampler`] passed in; with [`crate::rng::Arkworks`]
 //! over the same stream as Kimchi's RNG, the round gives Kimchi's values.
 //! Lookups are not supported yet: a circuit with Lookup, RangeCheck, Rot64,
@@ -38,10 +56,12 @@ use core::fmt;
 
 use arrabbiata_curve::{Curve, glv::Glv};
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
+use arrabbiata_poly::UniPoly;
 use arrabbiata_transcript::Transcript;
 
 use crate::{
-    constraints::{COLUMNS, ConstraintSystem, zk_rows_strict_lower_bound},
+    constraints::{COLUMNS, ConstraintSystem, GateType, zk_rows_strict_lower_bound},
+    gates::Gates,
     oracle::{FqSponge, ScalarChallenge},
     permutation::PERMUTS,
     rng::Sampler,
@@ -67,6 +87,9 @@ pub enum Error {
     LookupsUnsupported,
     /// The permutation product does not close: the witness breaks a copy.
     PermutationFinalValue,
+    /// `f` is not divisible by the vanishing polynomial: the witness breaks
+    /// a constraint.
+    QuotientRemainder,
 }
 
 impl fmt::Display for Error {
@@ -86,6 +109,7 @@ impl fmt::Display for Error {
                     "the permutation product does not close: a copy is broken"
                 )
             }
+            Self::QuotientRemainder => write!(f, "the constraints do not vanish on the domain"),
         }
     }
 }
@@ -358,5 +382,205 @@ where
         fq_sponge,
         alpha_chal,
         alpha,
+    })
+}
+
+/// The first power of `alpha` of the permutation: the gates use the first
+/// 21, VarBaseMul's number of constraints.
+pub const PERMUTATION_ALPHA: usize = 21;
+
+/// The gate types with constraints, in Kimchi's order.
+const CONSTRAINED: [GateType; 12] = [
+    GateType::Generic,
+    GateType::Poseidon,
+    GateType::CompleteAdd,
+    GateType::VarBaseMul,
+    GateType::EndoMul,
+    GateType::EndoMulScalar,
+    GateType::RangeCheck0,
+    GateType::RangeCheck1,
+    GateType::ForeignFieldAdd,
+    GateType::ForeignFieldMul,
+    GateType::Xor16,
+    GateType::Rot64,
+];
+
+/// `p / (X - a)`, or `None` when `a` is not a root of `p`.
+fn divide_by_linear<F: Field>(p: &UniPoly<F>, a: F) -> Option<UniPoly<F>> {
+    let coefficients = p.coefficients();
+    if coefficients.is_empty() {
+        return Some(UniPoly::new(Vec::new()));
+    }
+    let mut quotient = alloc::vec![F::ZERO; coefficients.len() - 1];
+    let mut carry = F::ZERO;
+    for k in (1..coefficients.len()).rev() {
+        carry = coefficients[k] + carry * a;
+        quotient[k - 1] = carry;
+    }
+    let remainder = coefficients[0] + carry * a;
+    remainder.is_zero().then(|| UniPoly::new(quotient))
+}
+
+/// The state after the quotient round.
+#[derive(Clone, Debug)]
+pub struct QuotientRound<C, S>
+where
+    C: Curve,
+{
+    /// The state before it.
+    pub previous: PermutationRound<C, S>,
+    /// The quotient's coefficients, at most `7 n`.
+    pub t: UniPoly<C::Scalar>,
+    /// The blinders of its commitment, one per chunk.
+    pub t_blinders: Vec<C::Scalar>,
+    /// The commitment to `t`, in `7 num_chunks` chunks.
+    pub t_comm: PolyComm<C>,
+    /// The base-field sponge after `zeta`.
+    pub fq_sponge: FqSponge<C, S>,
+    /// The 128-bit challenge `zeta` comes from.
+    pub zeta_chal: ScalarChallenge<C::Scalar>,
+    /// The evaluation point.
+    pub zeta: C::Scalar,
+}
+
+/// The quotient round (see the module documentation), the gates' constraints
+/// given by `gates`.
+///
+/// # Errors
+///
+/// [`Error::QuotientRemainder`] when the witness breaks a constraint.
+///
+/// # Panics
+///
+/// If the field has no domain of `8 n` points (the constraint system
+/// builds `d8`, so it has one).
+pub fn quotient_round<C, S, R, G>(
+    index: &ProverIndex<C>,
+    previous: PermutationRound<C, S>,
+    gates: &G,
+    rng: &mut R,
+) -> Result<QuotientRound<C, S>, Error>
+where
+    C: Glv,
+    C::Base: PrimeField,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    R: Sampler<C::Scalar>,
+    G: Gates<C::Scalar>,
+{
+    let cs = &index.cs;
+    let (d1, d8) = (cs.domain.d1, cs.domain.d8);
+    let (n, big) = (d1.size(), d8.size());
+    let zk_rows = cs.zk_rows;
+    let first = &previous.previous;
+    let (alpha, beta, gamma) = (previous.alpha, first.beta, first.gamma);
+    let extend = |column: &[C::Scalar]| match cs.extend(column, &d8) {
+        Some(values) => values,
+        None => unreachable!("every column has one value per row of d1"),
+    };
+    let w8: Vec<Vec<C::Scalar>> = first.witness.iter().map(|c| extend(c)).collect();
+    let z8 = extend(&previous.z);
+    let coefficients8: Vec<Vec<C::Scalar>> =
+        (0..COLUMNS).map(|i| extend(&cs.coefficient(i))).collect();
+    let sigmas = cs.sigmas();
+    let sigmas8: Vec<Vec<C::Scalar>> = sigmas.iter().map(|c| extend(c)).collect();
+    let used: Vec<(GateType, Vec<C::Scalar>)> = CONSTRAINED
+        .iter()
+        .filter(|typ| cs.uses(**typ))
+        .map(|typ| (*typ, extend(&cs.selector(*typ))))
+        .collect();
+    let mut alphas = alloc::vec![C::Scalar::ONE; PERMUTATION_ALPHA + 3];
+    for k in 1..alphas.len() {
+        alphas[k] = alphas[k - 1] * alpha;
+    }
+    // M's roots: rows n - zk_rows, n - zk_rows + 1 and n - 1.
+    let roots = [
+        d1.element(n - zk_rows),
+        d1.element(n - zk_rows + 1),
+        d1.element(n - 1),
+    ];
+
+    let mut f8 = alloc::vec![C::Scalar::ZERO; big];
+    let mut x = C::Scalar::ONE;
+    for k in 0..big {
+        let witness = |c: usize, r: usize| w8[c][(k + 8 * r) % big];
+        let coefficient = |c: usize, r: usize| coefficients8[c][(k + 8 * r) % big];
+        let mut value = C::Scalar::ZERO;
+        for (typ, selector) in &used {
+            let constraints = gates.evaluate(*typ, &witness, &coefficient);
+            let mut combined = C::Scalar::ZERO;
+            for (i, c) in constraints.iter().enumerate() {
+                combined = combined + alphas[i] * *c;
+            }
+            value = value + selector[k] * combined;
+        }
+        let mut shifted = z8[k];
+        let mut permuted = z8[(k + 8) % big];
+        for i in 0..PERMUTS {
+            shifted = shifted * (w8[i][k] + gamma + beta * cs.shift[i] * x);
+            permuted = permuted * (w8[i][k] + gamma + beta * sigmas8[i][k]);
+        }
+        let vanishing = (x - roots[0]) * (x - roots[1]) * (x - roots[2]);
+        value = value + alphas[PERMUTATION_ALPHA] * (shifted - permuted) * vanishing;
+        f8[k] = value;
+        x = x * d8.generator();
+    }
+    let f = match d8.interpolate(&f8) {
+        Some(p) => p,
+        None => unreachable!("one value per point of d8"),
+    };
+    let mut negated = alloc::vec![C::Scalar::ZERO; n];
+    for (slot, p) in negated.iter_mut().zip(&first.public) {
+        *slot = -*p;
+    }
+    let public = match d1.interpolate(&negated) {
+        Some(p) => p,
+        None => unreachable!("one value per row"),
+    };
+    let f = &f + &public;
+    let quotient = f.divide_by_vanishing(n).ok_or(Error::QuotientRemainder)?;
+
+    let z = match d1.interpolate(&previous.z) {
+        Some(p) => p,
+        None => unreachable!("one value per row"),
+    };
+    let z_minus_1 = &z - &UniPoly::constant(C::Scalar::ONE);
+    let (Some(bnd1), Some(bnd2)) = (
+        divide_by_linear(&z_minus_1, C::Scalar::ONE),
+        divide_by_linear(&z_minus_1, d1.element(n - zk_rows)),
+    ) else {
+        return Err(Error::PermutationFinalValue);
+    };
+    let bnd =
+        &bnd1.scale(alphas[PERMUTATION_ALPHA + 1]) + &bnd2.scale(alphas[PERMUTATION_ALPHA + 2]);
+    let t = &quotient + &bnd;
+    let mut coefficients = t.coefficients().to_vec();
+    while coefficients.len() > 7 * n && coefficients.last().is_some_and(|c| c.is_zero()) {
+        coefficients.pop();
+    }
+    if coefficients.len() > 7 * n {
+        return Err(Error::QuotientRemainder);
+    }
+    let t = UniPoly::new(coefficients);
+
+    let chunks = 7 * index.num_chunks();
+    let t_blinders: Vec<C::Scalar> = (0..chunks).map(|_| rng.sample()).collect();
+    let t_comm = hide(
+        index,
+        index.srs.commit_non_hiding(t.coefficients(), 7 * n),
+        &t_blinders,
+    );
+    let mut fq_sponge = previous.fq_sponge.clone();
+    fq_sponge.absorb_g(&t_comm.chunks);
+    let zeta_chal = ScalarChallenge(fq_sponge.challenge());
+    let zeta = zeta_chal.to_field(C::lambda());
+    Ok(QuotientRound {
+        previous,
+        t,
+        t_blinders,
+        t_comm,
+        fq_sponge,
+        zeta_chal,
+        zeta,
     })
 }

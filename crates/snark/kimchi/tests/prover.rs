@@ -7,16 +7,17 @@
 
 use std::collections::BTreeMap;
 
-use arrabbiata_curve::Projective;
+use arrabbiata_curve::{Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_kimchi::{
     constraints::{CircuitGate, ConstraintSystem, GateType, Wire},
-    prover::{ProverIndex, permutation_round, witness_round},
+    gates::KimchiGates,
+    prover::{ProverIndex, permutation_round, quotient_round, witness_round},
     rng::{Arkworks, Sampler, SplitMix64},
     srs::{PolyComm, Srs},
 };
-use arrabbiata_pasta::{Fp, Vesta};
-use arrabbiata_poseidon::kimchi::{KimchiSponge, vesta_base};
+use arrabbiata_pasta::{Fp, Pallas, Vesta};
+use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 
 /// Kimchi's output.
 const VECTORS: &str = include_str!("vectors/kimchi_prover.txt");
@@ -169,5 +170,22 @@ fn the_permutation_round_is_kimchis() {
         let oracles = lines("oracle", name);
         assert_eq!(oracles["alpha_chal"], hex(round.alpha_chal.0), "{name}");
         assert_eq!(oracles["alpha"], hex(round.alpha), "{name} alpha");
+    }
+}
+
+#[test]
+fn the_quotient_round_is_kimchis() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size);
+        let sponge = KimchiSponge::new(vesta_base());
+        let mut rng = Arkworks(SplitMix64(7));
+        let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+        let second = permutation_round(&index, first, &mut rng).unwrap();
+        let round = quotient_round(&index, second, &gates, &mut rng).unwrap();
+        assert_eq!(lines("comm", name)["t"], comm(&round.t_comm), "{name} t");
+        let oracles = lines("oracle", name);
+        assert_eq!(oracles["zeta_chal"], hex(round.zeta_chal.0), "{name}");
+        assert_eq!(oracles["zeta"], hex(round.zeta), "{name} zeta");
     }
 }

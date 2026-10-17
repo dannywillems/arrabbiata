@@ -160,6 +160,8 @@ version = "0.0.0"
 dependencies = [
  "arrabbiata-curve",
  "arrabbiata-field",
+ "arrabbiata-gadget",
+ "arrabbiata-kimchi-gadgets",
  "arrabbiata-pasta",
  "arrabbiata-poly",
  "arrabbiata-poseidon",

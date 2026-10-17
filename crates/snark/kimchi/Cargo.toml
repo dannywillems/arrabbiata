@@ -11,13 +11,15 @@ authors.workspace = true
 [dependencies]
 arrabbiata-curve = { workspace = true }
 arrabbiata-field = { workspace = true }
+arrabbiata-gadget = { workspace = true }
+arrabbiata-kimchi-gadgets = { workspace = true }
 arrabbiata-poly = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 blake2 = { workspace = true }
 
 [dev-dependencies]
 arrabbiata-pasta = { workspace = true }
-arrabbiata-poseidon = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

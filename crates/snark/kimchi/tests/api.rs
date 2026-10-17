@@ -8,14 +8,18 @@ use arrabbiata_kimchi::{
         GateTable, GateType, LookupTable, RANGE_CHECK_TABLE_SIZE, RuntimeTableCfg, Wire,
         XOR_TABLE_SIZE, zk_rows_strict_lower_bound,
     },
+    gates::{Gates, KimchiGates},
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
-    prover::{self, PermutationRound, ProverIndex, WitnessRound, permutation_round, witness_round},
+    prover::{
+        self, PERMUTATION_ALPHA, PermutationRound, ProverIndex, QuotientRound, WitnessRound,
+        permutation_round, quotient_round, witness_round,
+    },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
     verifier_index::VerifierIndex,
 };
-use arrabbiata_pasta::{Fp, Fq, Vesta};
+use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 
 #[test]
@@ -425,4 +429,70 @@ fn permutation_round_state() {
     let first = witness_round(&index, broken, &sponge, &mut rng).unwrap();
     let error = permutation_round(&index, first, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::PermutationFinalValue);
+}
+
+#[test]
+fn kimchi_gates() {
+    // The Generic gate: two constraints, the first l c0 + r c1 + o c2 +
+    // l r c3 + c4 with the coefficients 0-4 and the cells 0-2.
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let witness = |c: usize, _: usize| Fp::from_u64(c as u64 + 1);
+    let coefficient = |c: usize, _: usize| if c == 4 { Fp::ONE } else { Fp::ZERO };
+    let values = gates.evaluate(GateType::Generic, &witness, &coefficient);
+    assert_eq!(values.len(), 2);
+    assert_eq!(values[0], Fp::ONE);
+    assert!(
+        gates
+            .evaluate(GateType::Zero, &witness, &coefficient)
+            .is_empty()
+    );
+    assert_eq!(
+        gates
+            .evaluate(GateType::VarBaseMul, &witness, &coefficient)
+            .len(),
+        PERMUTATION_ALPHA
+    );
+}
+
+#[test]
+fn quotient_round_state() {
+    // Two Generic rows asserting l + r - o = 0 on (1, 2, 3).
+    let gates: Vec<CircuitGate<Fp>> = (0..2)
+        .map(|row| {
+            let coeffs = vec![Fp::ONE, Fp::ONE, -Fp::ONE];
+            CircuitGate::new(GateType::Generic, Wire::for_row(row), coeffs)
+        })
+        .collect();
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(8));
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let sponge = KimchiSponge::new(vesta_base());
+    let good: [Vec<Fp>; COLUMNS] = core::array::from_fn(|c| {
+        let value = if c < 3 {
+            Fp::from_u64(c as u64 + 1)
+        } else {
+            Fp::ZERO
+        };
+        vec![value; 2]
+    });
+    let mut rng = Arkworks(SplitMix64(9));
+    let first = witness_round(&index, good.clone(), &sponge, &mut rng).unwrap();
+    let second = permutation_round(&index, first, &mut rng).unwrap();
+    let round: QuotientRound<Vesta, _> = quotient_round(&index, second, &kimchi, &mut rng).unwrap();
+    // 7 chunks of 8 rows, each hidden by its blinder.
+    assert_eq!(round.t_comm.chunks.len(), 7);
+    assert_eq!(round.t_blinders.len(), 7);
+    assert!(round.t.coefficients().len() <= 7 * 8);
+    assert_eq!(round.zeta, round.zeta_chal.to_field(Vesta::lambda()));
+    // A broken addition leaves a remainder.
+    let mut bad = good;
+    bad[2][1] = Fp::from_u64(4);
+    let first = witness_round(&index, bad, &sponge, &mut rng).unwrap();
+    let second = permutation_round(&index, first, &mut rng).unwrap();
+    let error = quotient_round(&index, second, &kimchi, &mut rng).unwrap_err();
+    assert_eq!(error, prover::Error::QuotientRemainder);
+    assert_eq!(
+        error.to_string(),
+        "the constraints do not vanish on the domain"
+    );
 }
