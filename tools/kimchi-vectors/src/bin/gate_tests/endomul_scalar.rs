@@ -69,5 +69,6 @@ pub fn run() {
         witness(&w);
         let result = gate.verify_endomul::<55, Vesta>(0, &w, &cs);
         verdict("is_err", &result.is_err());
+        verdict("verify", &result);
     }
 }

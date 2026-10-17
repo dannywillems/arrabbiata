@@ -1280,6 +1280,25 @@ fn constraints_circuit_gate_verify_witness() {
 }
 
 #[test]
+fn constraints_circuit_gate_verify_endomul() {
+    // All zeros satisfy every EndoMul constraint but the last,
+    // `(xp - xr) (xr - xs) inv = 1`, counted from 0 as in Kimchi; another
+    // gate type is refused.
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
+    let endomul = CircuitGate::<Fp>::new(GateType::EndoMul, Wire::for_row(0), vec![]);
+    assert_eq!(
+        endomul.verify_endomul(0, &witness, &kimchi),
+        Err("Bad endo equation 11".to_string())
+    );
+    let zero = CircuitGate::<Fp>::new(GateType::Zero, Wire::for_row(0), vec![]);
+    assert_eq!(
+        zero.verify_endomul(0, &witness, &kimchi),
+        Err("incorrect gate type".to_string())
+    );
+}
+
+#[test]
 fn constraints_circuit_gate_verify_generic() {
     // w0 = 3 is `Const(3)`; w0 = 4 is not.
     let spec = GenericGateSpec::Spec(GenericSpec::Const(Fp::from_u64(3)));

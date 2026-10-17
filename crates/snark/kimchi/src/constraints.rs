@@ -263,6 +263,41 @@ impl<F> CircuitGate<F>
 where
     F: PrimeField,
 {
+    /// Whether rows `row` and `row + 1` satisfy this EndoMul gate's
+    /// constraints, evaluated by `gates`, without its wiring (Kimchi's
+    /// `verify_endomul`).
+    ///
+    /// # Errors
+    ///
+    /// Kimchi's messages: `"incorrect gate type"` when the gate is not an
+    /// EndoMul gate, `"Bad endo equation {i}"` for the first constraint that
+    /// does not hold, counted from 0.
+    pub fn verify_endomul<G>(
+        &self,
+        row: usize,
+        witness: &[Vec<F>; COLUMNS],
+        gates: &G,
+    ) -> Result<(), String>
+    where
+        G: Gates<F>,
+    {
+        if self.typ != GateType::EndoMul {
+            return Err("incorrect gate type".to_string());
+        }
+        let cell = |column: usize, rotation: usize| {
+            witness[column]
+                .get(row + rotation)
+                .copied()
+                .unwrap_or(F::ZERO)
+        };
+        let no_coefficient = |_: usize, _: usize| F::ZERO;
+        let values = gates.evaluate(GateType::EndoMul, &cell, &no_coefficient);
+        match values.iter().position(|v| !v.is_zero()) {
+            Some(i) => Err(format!("Bad endo equation {i}")),
+            None => Ok(()),
+        }
+    }
+
     /// Whether row `row` satisfies this Generic gate's two half-gates, the
     /// first less the public input of its row (Kimchi's `verify_generic`).
     ///
