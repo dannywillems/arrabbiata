@@ -7,8 +7,9 @@
 
 use std::collections::BTreeMap;
 
-use arrabbiata_curve::{Projective, glv::Glv};
+use arrabbiata_curve::{Affine, Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_ipa::RecursionChallenge;
 use arrabbiata_kimchi::{
     constraints::{CircuitGate, ConstraintSystem, GateType, Wire},
     gates::KimchiGates,
@@ -19,20 +20,22 @@ use arrabbiata_kimchi::{
     rng::{Arkworks, Sampler, SplitMix64},
     srs::{PolyComm, Srs},
 };
-use arrabbiata_pasta::{Fp, Pallas, Vesta};
+use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 
 /// Kimchi's output.
 const VECTORS: &str = include_str!("vectors/kimchi_prover.txt");
 
 /// The circuits of the tool, their chunk sizes and public inputs: Kimchi's
-/// generic test circuit unchunked and in chunks of 16 rows, and one block
-/// of each gate without lookups (Poseidon, CompleteAdd, VarBaseMul,
-/// EndoMul, EndoMulScalar).
-const CIRCUITS: [(&str, Option<usize>, usize); 3] = [
+/// generic test circuit unchunked and in chunks of 16 rows, one block of
+/// each gate without lookups (Poseidon, CompleteAdd, VarBaseMul, EndoMul,
+/// EndoMulScalar), and the generic circuit carrying one previous
+/// accumulator (as Kimchi's `test_recursion`).
+const CIRCUITS: [(&str, Option<usize>, usize); 4] = [
     ("generic", None, 5),
     ("chunked", Some(16), 5),
     ("gadgets", None, 0),
+    ("recursion", None, 5),
 ];
 
 fn hex<F: PrimeField>(x: F) -> String {
@@ -42,12 +45,33 @@ fn hex<F: PrimeField>(x: F) -> String {
         .collect()
 }
 
-fn element(hex: &str) -> Fp {
+fn field<F: PrimeField>(hex: &str) -> F {
     let limbs: Vec<u64> = (0..4)
         .rev()
         .map(|i| u64::from_str_radix(&hex[16 * i..16 * (i + 1)], 16).unwrap())
         .collect();
-    Fp::from_limbs(&limbs).unwrap()
+    F::from_limbs(&limbs).unwrap()
+}
+
+fn element(hex: &str) -> Fp {
+    field(hex)
+}
+
+/// The previous accumulators of the tool's circuit `name`.
+fn prev_challenges(name: &str) -> Vec<RecursionChallenge<Vesta>> {
+    let prev = lines("prev", name);
+    if prev.is_empty() {
+        return vec![];
+    }
+    let chals = (0..prev.len() - 1)
+        .map(|i| element(&prev[&format!("chal{i}")]))
+        .collect();
+    let words: Vec<&str> = prev["comm"].split_whitespace().collect();
+    assert_eq!(words[0], "1");
+    let comm = Affine::<Vesta>::new(field::<Fq>(words[1]), field::<Fq>(words[2]))
+        .unwrap()
+        .to_projective();
+    vec![RecursionChallenge { chals, comm }]
 }
 
 fn point(p: &Projective<Vesta>) -> String {
@@ -125,6 +149,7 @@ fn index(
     let (gates, witness) = circuit(name);
     let cs = ConstraintSystem::create(gates)
         .public(public)
+        .prev_challenges(prev_challenges(name).len())
         .max_poly_size(max_poly_size)
         .build()
         .unwrap();
@@ -165,7 +190,8 @@ fn the_witness_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let round = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+        let round =
+            witness_round(&index, witness, &prev_challenges(name), &sponge, &mut rng).unwrap();
         let comms = lines("comm", name);
         assert_eq!(comms["public"], comm(&round.public_comm), "{name} public");
         for (i, c) in round.w_comm.iter().enumerate() {
@@ -183,7 +209,8 @@ fn the_permutation_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+        let first =
+            witness_round(&index, witness, &prev_challenges(name), &sponge, &mut rng).unwrap();
         let round = permutation_round(&index, first, &mut rng).unwrap();
         assert_eq!(lines("comm", name)["z"], comm(&round.z_comm), "{name} z");
         let oracles = lines("oracle", name);
@@ -199,7 +226,8 @@ fn the_quotient_round_is_kimchis() {
         let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+        let first =
+            witness_round(&index, witness, &prev_challenges(name), &sponge, &mut rng).unwrap();
         let second = permutation_round(&index, first, &mut rng).unwrap();
         let round = quotient_round(&index, second, &gates, &mut rng).unwrap();
         assert_eq!(lines("comm", name)["t"], comm(&round.t_comm), "{name} t");
@@ -226,7 +254,8 @@ fn the_evaluation_round_is_kimchis() {
         let sponge = KimchiSponge::new(vesta_base());
         let scalar_sponge = KimchiSponge::new(pallas_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+        let first =
+            witness_round(&index, witness, &prev_challenges(name), &sponge, &mut rng).unwrap();
         let second = permutation_round(&index, first, &mut rng).unwrap();
         let third = quotient_round(&index, second, &gates, &mut rng).unwrap();
         let round = evaluation_round(&index, third, &scalar_sponge);
@@ -279,7 +308,15 @@ fn the_proofs_are_kimchis() {
         let base = KimchiSponge::new(vesta_base());
         let scalar = KimchiSponge::new(pallas_base());
         let mut rng = Arkworks(SplitMix64(7));
-        let proof = prove(&index, witness, &gates, (&base, &scalar), &mut rng).unwrap();
+        let proof = prove(
+            &index,
+            witness,
+            &prev_challenges(name),
+            &gates,
+            (&base, &scalar),
+            &mut rng,
+        )
+        .unwrap();
         let opening = lines("opening", name);
         let o = &proof.proof;
         assert_eq!(opening.len(), o.lr.len() + 4, "{name}");

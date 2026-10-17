@@ -8,8 +8,8 @@
 //! 1. pad each witness column with zeros to the domain, then overwrite its
 //!    last `zk_rows` rows with random values (column 0 first, each column
 //!    from its last row up);
-//! 2. a base-field sponge absorbs the verifier-index digest (Kimchi then
-//!    absorbs the previous accumulators' commitments; there are none yet);
+//! 2. a base-field sponge absorbs the verifier-index digest, then the
+//!    commitment `sg` of each previous accumulator;
 //! 3. the public polynomial, the negated public inputs on the first rows,
 //!    committed and masked by `h` with blinder 1, is absorbed;
 //! 4. each column is committed, hidden by `h` with one random blinder per
@@ -59,7 +59,8 @@
 //!    `scalar sigma_6(X)` remains, `scalar = -z(zeta w) beta alpha^21
 //!    M(zeta) prod_(i < 6) (gamma + beta sigma_i(zeta) + w_i(zeta))`;
 //! 3. the scalar sponge absorbs the base sponge's digest, the digest of
-//!    the previous challenges (none, an empty sponge's), `ft(zeta w)`, the
+//!    the previous accumulators' challenges (a fresh sponge absorbing them
+//!    all, then squeezed), `ft(zeta w)`, the
 //!    public evaluations, then `z`, the six selectors, the witness, the
 //!    coefficients, the sigmas and the optional selectors, each at `zeta`
 //!    then `zeta w`; `v` and `u` are squeezed and mapped by the
@@ -68,7 +69,8 @@
 //! [`opening_round`], the last: Kimchi's batched, hidden IPA opening of
 //! every polynomial at `zeta` and `zeta w`:
 //!
-//! 1. the polynomials, in Kimchi's order (public, `ft`, `z`, the six
+//! 1. the polynomials, in Kimchi's order (each previous accumulator's
+//!    `b`, unhidden, then public, `ft`, `z`, the six
 //!    selectors, the witness, the coefficients, the first six sigmas, the
 //!    optional selectors), each taking as many consecutive powers of `v`
 //!    as it has chunks, chunk `j` of a polynomial starting at `v^s` scaled
@@ -104,6 +106,7 @@ use core::fmt;
 
 use arrabbiata_curve::{Curve, Projective, glv::Glv, msm};
 use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
+use arrabbiata_ipa::{RecursionChallenge, b_poly_coefficients};
 use arrabbiata_poly::UniPoly;
 use arrabbiata_transcript::Transcript;
 
@@ -213,6 +216,8 @@ where
     pub witness: [Vec<C::Scalar>; COLUMNS],
     /// The public inputs.
     pub public: Vec<C::Scalar>,
+    /// The previous accumulators the proof carries.
+    pub prev_challenges: Vec<RecursionChallenge<C>>,
     /// The commitment to the public polynomial (masked).
     pub public_comm: PolyComm<C>,
     /// The blinders of the witness commitments, one per chunk.
@@ -238,6 +243,7 @@ where
 pub fn witness_round<C, S, R>(
     index: &ProverIndex<C>,
     witness: [Vec<C::Scalar>; COLUMNS],
+    prev_challenges: &[RecursionChallenge<C>],
     sponge: &S,
     rng: &mut R,
 ) -> Result<WitnessRound<C, S>, Error>
@@ -286,6 +292,9 @@ where
     let mut fq_sponge = FqSponge::<C, S>::new(sponge.clone());
     let digest = index.verifier_index.digest(sponge.clone());
     fq_sponge.absorb_fq(&[digest]);
+    for previous in prev_challenges {
+        fq_sponge.absorb_g(&[previous.comm]);
+    }
 
     let public: Vec<C::Scalar> = witness[0][..cs.public].to_vec();
     let mut negated = alloc::vec![C::Scalar::ZERO; n];
@@ -307,6 +316,7 @@ where
     Ok(WitnessRound {
         witness,
         public,
+        prev_challenges: prev_challenges.to_vec(),
         public_comm,
         blinders,
         w_comm,
@@ -863,7 +873,11 @@ where
 
     let mut fr_sponge = FrSponge::<C::Scalar, T>::new(scalar_sponge.clone());
     fr_sponge.absorb(previous.fq_sponge.clone().digest());
-    let prev_challenge_digest = FrSponge::<C::Scalar, T>::new(scalar_sponge.clone()).digest();
+    let mut challenges = FrSponge::<C::Scalar, T>::new(scalar_sponge.clone());
+    for previous in &first.prev_challenges {
+        challenges.absorb_multiple(&previous.chals);
+    }
+    let prev_challenge_digest = challenges.digest();
     fr_sponge.absorb(prev_challenge_digest);
     fr_sponge.absorb(ft_eval1);
     fr_sponge.absorb_multiple(&evals.public.zeta);
@@ -910,7 +924,7 @@ where
     pub sg: Projective<C>,
 }
 
-/// A Kimchi proof (without lookups and without previous accumulators).
+/// A Kimchi proof (without lookups).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProverProof<C>
 where
@@ -928,6 +942,8 @@ where
     pub ft_eval1: C::Scalar,
     /// The opening.
     pub proof: OpeningProof<C>,
+    /// The previous accumulators the proof carries.
+    pub prev_challenges: Vec<RecursionChallenge<C>>,
 }
 
 /// Kimchi's `shift_scalar`: the scalar `x` as the base-field sponge must
@@ -1000,14 +1016,22 @@ where
         *slot = -*p;
     }
     let sigmas = cs.sigmas();
-    let mut polynomials: Vec<Blinded<C::Scalar>> = alloc::vec![
+    let mut polynomials: Vec<Blinded<C::Scalar>> = first
+        .prev_challenges
+        .iter()
+        .map(|previous| {
+            let b = b_poly_coefficients(&previous.chals);
+            (b, alloc::vec![C::Scalar::ZERO])
+        })
+        .collect();
+    polynomials.extend([
         (interpolate(&negated), ones.clone()),
         (
             previous.ft.coefficients().to_vec(),
-            alloc::vec![previous.blinding_ft]
+            alloc::vec![previous.blinding_ft],
         ),
         (interpolate(&permutation.z), permutation.z_blinders.clone()),
-    ];
+    ]);
     for typ in [
         GateType::Generic,
         GateType::Poseidon,
@@ -1128,6 +1152,7 @@ where
             z2: r_prime * c + r_delta,
             sg: g0,
         },
+        prev_challenges: first.prev_challenges.clone(),
     }
 }
 
@@ -1141,6 +1166,7 @@ where
 pub fn prove<C, S, T, R, G>(
     index: &ProverIndex<C>,
     witness: [Vec<C::Scalar>; COLUMNS],
+    prev_challenges: &[RecursionChallenge<C>],
     gates: &G,
     sponges: (&S, &T),
     rng: &mut R,
@@ -1155,7 +1181,7 @@ where
     G: Gates<C::Scalar>,
 {
     let (base_sponge, scalar_sponge) = sponges;
-    let first = witness_round(index, witness, base_sponge, rng)?;
+    let first = witness_round(index, witness, prev_challenges, base_sponge, rng)?;
     let second = permutation_round(index, first, rng)?;
     let third = quotient_round(index, second, gates, rng)?;
     let fourth = evaluation_round(index, third, scalar_sponge);

@@ -161,6 +161,7 @@ dependencies = [
  "arrabbiata-curve",
  "arrabbiata-field",
  "arrabbiata-gadget",
+ "arrabbiata-ipa",
  "arrabbiata-kimchi-gadgets",
  "arrabbiata-pasta",
  "arrabbiata-poly",

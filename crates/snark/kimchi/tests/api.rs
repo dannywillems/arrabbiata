@@ -363,18 +363,18 @@ fn prover_errors() {
     let mut rng = Arkworks(SplitMix64(3));
     let mut ragged: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
     ragged[4].push(Fp::ZERO);
-    let error = witness_round(&index, ragged, &sponge, &mut rng).unwrap_err();
+    let error = witness_round(&index, ragged, &[], &sponge, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::WitnessCsInconsistent);
     assert_eq!(error.to_string(), "witness columns of different lengths");
     // Six rows leave two of eight free, fewer than the three zk rows.
     let long: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 6]);
-    let error = witness_round(&index, long, &sponge, &mut rng).unwrap_err();
+    let error = witness_round(&index, long, &[], &sponge, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::NoRoomForZkInWitness);
     // Chunks of 4 rows need more zk rows than the 3 built for one chunk.
     let one_chunk = ConstraintSystem::create(two_generic()).build().unwrap();
     let chunked = ProverIndex::create(one_chunk, Srs::<Vesta>::create(4));
     let short: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
-    let error = witness_round(&chunked, short, &sponge, &mut rng).unwrap_err();
+    let error = witness_round(&chunked, short, &[], &sponge, &mut rng).unwrap_err();
     assert_eq!(
         error,
         prover::Error::NotZeroKnowledge {
@@ -395,7 +395,8 @@ fn witness_round_state() {
     let mut rng = Arkworks(SplitMix64(3));
     let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
     witness[0][0] = Fp::ONE;
-    let round: WitnessRound<Vesta, _> = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+    let round: WitnessRound<Vesta, _> =
+        witness_round(&index, witness, &[], &sponge, &mut rng).unwrap();
     assert_eq!(round.public, vec![Fp::ONE]);
     // Padded to 8 rows, the last three random, the others zero.
     assert_eq!(round.witness[3].len(), 8);
@@ -417,7 +418,7 @@ fn permutation_round_state() {
     let sponge = KimchiSponge::new(vesta_base());
     let equal: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ONE; 2]);
     let mut rng = Arkworks(SplitMix64(5));
-    let first = witness_round(&index, equal, &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, equal, &[], &sponge, &mut rng).unwrap();
     let round: PermutationRound<Vesta, _> = permutation_round(&index, first, &mut rng).unwrap();
     // z starts at 1 and closes at row n - zk_rows = 5.
     assert_eq!(round.z[0], Fp::ONE);
@@ -427,7 +428,7 @@ fn permutation_round_state() {
     // Breaking the copy breaks the product.
     let mut broken: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ONE; 2]);
     broken[0][1] = Fp::ZERO;
-    let first = witness_round(&index, broken, &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, broken, &[], &sponge, &mut rng).unwrap();
     let error = permutation_round(&index, first, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::PermutationFinalValue);
 }
@@ -477,7 +478,7 @@ fn quotient_round_state() {
         vec![value; 2]
     });
     let mut rng = Arkworks(SplitMix64(9));
-    let first = witness_round(&index, good.clone(), &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, good.clone(), &[], &sponge, &mut rng).unwrap();
     let second = permutation_round(&index, first, &mut rng).unwrap();
     let round: QuotientRound<Vesta, _> = quotient_round(&index, second, &kimchi, &mut rng).unwrap();
     // 7 chunks of 8 rows, each hidden by its blinder.
@@ -488,7 +489,7 @@ fn quotient_round_state() {
     // A broken addition leaves a remainder.
     let mut bad = good;
     bad[2][1] = Fp::from_u64(4);
-    let first = witness_round(&index, bad, &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, bad, &[], &sponge, &mut rng).unwrap();
     let second = permutation_round(&index, first, &mut rng).unwrap();
     let error = quotient_round(&index, second, &kimchi, &mut rng).unwrap_err();
     assert_eq!(error, prover::Error::QuotientRemainder);
@@ -523,7 +524,7 @@ fn evaluated() -> (
         vec![value; 2]
     });
     let mut rng = Arkworks(SplitMix64(11));
-    let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+    let first = witness_round(&index, witness, &[], &sponge, &mut rng).unwrap();
     let second = permutation_round(&index, first, &mut rng).unwrap();
     let third = quotient_round(&index, second, &kimchi, &mut rng).unwrap();
     let round = evaluation_round(&index, third, &scalar_sponge);
@@ -607,11 +608,26 @@ fn prove_runs_every_round() {
     let sponges = (&base, &scalar);
     let mut one = Arkworks(SplitMix64(17));
     let mut two = Arkworks(SplitMix64(17));
-    let a = prove(&index, witness.clone(), &kimchi, sponges, &mut one).unwrap();
-    let b = prove(&index, witness.clone(), &kimchi, sponges, &mut two).unwrap();
+    let a = prove(&index, witness.clone(), &[], &kimchi, sponges, &mut one).unwrap();
+    let b = prove(&index, witness.clone(), &[], &kimchi, sponges, &mut two).unwrap();
     // Reproducible from the stream; another stream hides differently.
     assert_eq!(a, b);
     let mut three = Arkworks(SplitMix64(18));
-    let c = prove(&index, witness, &kimchi, sponges, &mut three).unwrap();
+    let c = prove(&index, witness.clone(), &[], &kimchi, sponges, &mut three).unwrap();
     assert_ne!(a.w_comm, c.w_comm);
+    assert!(a.prev_challenges.is_empty());
+    // A previous accumulator is carried, and changes the transcript.
+    let chals = vec![Fp::from_u64(2), Fp::from_u64(3), Fp::from_u64(5)];
+    let b = arrabbiata_kimchi::srs::Srs::<Vesta>::create(8)
+        .commit_non_hiding(&arrabbiata_ipa::b_poly_coefficients(&chals), 8);
+    let previous = arrabbiata_ipa::RecursionChallenge {
+        chals,
+        comm: b.chunks[0],
+    };
+    let mut four = Arkworks(SplitMix64(17));
+    let previous = [previous];
+    let d = prove(&index, witness, &previous, &kimchi, sponges, &mut four).unwrap();
+    assert_eq!(d.prev_challenges, previous.to_vec());
+    assert_eq!(d.w_comm, a.w_comm);
+    assert_ne!(d.proof, a.proof);
 }
