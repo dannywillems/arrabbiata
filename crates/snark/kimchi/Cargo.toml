@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 arrabbiata-curve = { workspace = true }
 arrabbiata-field = { workspace = true }
+arrabbiata-poly = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 blake2 = { workspace = true }
 

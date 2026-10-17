@@ -10,6 +10,9 @@
 //!   that absorbs commitments and squeezes 128-bit challenges, the
 //!   scalar-field sponge that absorbs evaluations, and the map of a 128-bit
 //!   challenge to a scalar through the curve's endomorphism;
+//! - [`constraints`]: the constraint system, built as Kimchi builds it
+//!   (lookup domain, zero-knowledge rows, domains, padding), with its
+//!   permutation, selector and coefficient columns;
 //! - [`permutation`]: the shifts of the copy argument, sampled as Kimchi
 //!   samples them (Blake2b512 of a counter, the first non-residues not in
 //!   the domain).
@@ -18,5 +21,6 @@
 
 extern crate alloc;
 
+pub mod constraints;
 pub mod oracle;
 pub mod permutation;

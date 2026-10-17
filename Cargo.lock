@@ -161,6 +161,7 @@ dependencies = [
  "arrabbiata-curve",
  "arrabbiata-field",
  "arrabbiata-pasta",
+ "arrabbiata-poly",
  "arrabbiata-poseidon",
  "arrabbiata-transcript",
  "blake2",
