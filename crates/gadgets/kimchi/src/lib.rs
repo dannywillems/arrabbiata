@@ -19,6 +19,8 @@
 //!   a foreign modulus, checked modulo the native field and modulo `2^264`,
 //!   with the external range checks;
 //! - [`generic`]: the Generic gate, two PlonK half-gates per row;
+//! - [`harness`]: each gate in a harness, and the constraints of each of
+//!   Kimchi's gates by Kimchi's gate name;
 //! - [`poseidon`]: the Poseidon gate, five rounds per row;
 //! - [`range_check`]: the RangeCheck0 and RangeCheck1 gates, three 88-bit
 //!   values on four rows, with 12-bit lookups;
@@ -61,6 +63,7 @@ pub mod foreign_field;
 pub mod foreign_field_add;
 pub mod foreign_field_mul;
 pub mod generic;
+pub mod harness;
 pub mod poseidon;
 pub mod range_check;
 pub mod rot;

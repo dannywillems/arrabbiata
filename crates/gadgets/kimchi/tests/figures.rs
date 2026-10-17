@@ -13,13 +13,13 @@
 //! - the cells the constraints read: the `witness_curr` and `witness_next`
 //!   columns, and the coefficient columns, that `constraint_checks` reads.
 
-mod harness;
-
+use arrabbiata_curve::glv::Glv;
 use arrabbiata_gadget::figures;
 use arrabbiata_kimchi_gadgets::LAYOUT;
+use arrabbiata_pasta::Pallas;
 use arrabbiata_poseidon::kimchi::pallas_base;
 
-use crate::harness::Harness;
+use arrabbiata_kimchi_gadgets::harness::{self, Harness};
 
 /// A gate's figures in Kimchi.
 struct Kimchi {
@@ -217,7 +217,7 @@ fn kimchi() -> Vec<Kimchi> {
 fn every_gate_has_kimchis_figures() {
     let poseidon = pallas_base();
     for expected in kimchi() {
-        let harness = harness::of(expected.gadget, &poseidon);
+        let harness = harness::of(expected.gadget, &poseidon, Pallas::beta());
         let f = figures(&harness, LAYOUT).unwrap();
         let kinds = f.gates_of(expected.gadget);
         let [gate] = kinds[..] else {

@@ -17,8 +17,7 @@
 //!   `foreign_field_add::witness::create_chain` for an addition and a
 //!   subtraction, `foreign_field_mul::witness::create`), cell for cell.
 
-mod harness;
-
+use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Of, TypedGadget, Unit, gates, witness};
 use arrabbiata_kimchi_gadgets::{
@@ -26,11 +25,12 @@ use arrabbiata_kimchi_gadgets::{
     foreign_field::Limbs,
     foreign_field_add::{FFOps, ForeignFieldAdd},
     foreign_field_mul::ForeignFieldMul,
+    harness::{self, NAMES},
     range_check::{MultiRangeCheck, range_check_table},
     rot::{Rot64, RotMode},
     xor::{Xor, xor_table},
 };
-use arrabbiata_pasta::Fp;
+use arrabbiata_pasta::{Fp, Pallas};
 use arrabbiata_poseidon::kimchi::pallas_base;
 
 /// Kimchi's output.
@@ -41,22 +41,6 @@ const VECTORS: &str = include_str!("vectors/kimchi_differential.txt");
 const VARIABLES: usize = 40;
 /// The largest constraint degree of the gadgets compiled here.
 const DEGREE: usize = 4;
-
-/// Our gadget name of each Kimchi gate.
-const NAMES: [(&str, &str); 12] = [
-    ("Generic", "kimchi-generic"),
-    ("Poseidon", "kimchi-poseidon"),
-    ("CompleteAdd", "kimchi-complete-add"),
-    ("VarBaseMul", "kimchi-varbasemul"),
-    ("EndoMul", "kimchi-endomul"),
-    ("EndoMulScalar", "kimchi-endomul-scalar"),
-    ("RangeCheck0", "kimchi-range-check-0"),
-    ("RangeCheck1", "kimchi-range-check-1"),
-    ("ForeignFieldAdd", "kimchi-foreign-field-add"),
-    ("ForeignFieldMul", "kimchi-foreign-field-mul"),
-    ("Xor16", "kimchi-xor16"),
-    ("Rot64", "kimchi-rot64"),
-];
 
 /// A field element from 64 hex digits, big-endian.
 fn element(hex: &str) -> Fp {
@@ -125,7 +109,7 @@ fn every_constraint_is_kimchis() {
     let poseidon = pallas_base();
     for point in &points {
         let (_, ours) = NAMES.iter().find(|(k, _)| *k == point.gate).unwrap();
-        let harness = harness::of(ours, &poseidon);
+        let harness = harness::of(ours, &poseidon, Pallas::beta());
         let kinds = gates::<Fp, _>(&harness, LAYOUT).unwrap();
         let kind = kinds
             .iter()
