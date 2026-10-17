@@ -3,7 +3,7 @@
 //! variant for a 176-bit limb and an 88-bit one, and the single RangeCheck0
 //! row.
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Error, Of, Rom, Scalar, TypedGadget, Unit};
@@ -12,31 +12,56 @@ use arrabbiata_kimchi_gadgets::range_check::{
 };
 
 use crate::{
-    constraints::{COLUMNS, CircuitGate, Connect, GateType, Wire},
-    polynomials::columns,
+    constraints::{COLUMNS, CircuitGate},
+    polynomials::{DeriveError, Rows, columns, derive},
 };
 
 impl<F> CircuitGate<F>
 where
     F: PrimeField,
 {
-    /// A multi-range check from `start_row`: the row after it and its rows
-    /// (Kimchi's `create_multi_range_check`).
+    /// A multi-range check from `start_row`, derived from our multi-range
+    /// check: the row after it and its rows (Kimchi's
+    /// `create_multi_range_check`).
+    ///
+    /// # Panics
+    ///
+    /// Never: the gadget derives on any row.
     #[must_use]
     pub fn create_multi_range_check(start_row: usize) -> (usize, Vec<Self>) {
-        Self::create_multi_range_check_gadget(start_row, false)
+        let gadget = Multi(range_check_table());
+        rows_of(derive::<F, _, VARIABLES, DEGREE>(
+            &gadget,
+            &[F::ZERO; 3],
+            4,
+            start_row,
+        ))
     }
 
-    /// The compact multi-range check (Kimchi's
-    /// `create_compact_multi_range_check`): the second row's coefficient is
-    /// 1.
+    /// The compact multi-range check, derived from our compact multi-range
+    /// check (Kimchi's `create_compact_multi_range_check`): the second row's
+    /// coefficient is 1.
+    ///
+    /// # Panics
+    ///
+    /// As [`CircuitGate::create_multi_range_check`].
     #[must_use]
     pub fn create_compact_multi_range_check(start_row: usize) -> (usize, Vec<Self>) {
-        Self::create_multi_range_check_gadget(start_row, true)
+        let gadget = Compact(range_check_table());
+        rows_of(derive::<F, _, VARIABLES, DEGREE>(
+            &gadget,
+            &[F::ZERO; 2],
+            4,
+            start_row,
+        ))
     }
 
     /// `gates` extended by a multi-range check at `curr_row`, which moves
     /// past it (Kimchi's `extend_multi_range_check`).
+    ///
+    /// # Panics
+    ///
+    /// As [`CircuitGate::create_multi_range_check`].
     pub fn extend_multi_range_check(gates: &mut Vec<Self>, curr_row: &mut usize) {
         let (next_row, rows) = Self::create_multi_range_check(*curr_row);
         *curr_row = next_row;
@@ -45,55 +70,54 @@ where
 
     /// `gates` extended by a compact multi-range check at `curr_row`
     /// (Kimchi's `extend_compact_multi_range_check`).
+    ///
+    /// # Panics
+    ///
+    /// As [`CircuitGate::create_multi_range_check`].
     pub fn extend_compact_multi_range_check(gates: &mut Vec<Self>, curr_row: &mut usize) {
         let (next_row, rows) = Self::create_compact_multi_range_check(*curr_row);
         *curr_row = next_row;
         gates.extend_from_slice(&rows);
     }
 
-    /// One RangeCheck0 row at `start_row` (Kimchi's `create_range_check`).
+    /// One RangeCheck0 row at `start_row`, derived from our RangeCheck0
+    /// gate (Kimchi's `create_range_check`).
+    ///
+    /// # Panics
+    ///
+    /// As [`CircuitGate::create_multi_range_check`].
     #[must_use]
     pub fn create_range_check(start_row: usize) -> (usize, Vec<Self>) {
-        let gate = Self::new(
-            GateType::RangeCheck0,
-            Wire::for_row(start_row),
-            vec![F::ZERO],
-        );
-        (start_row + 1, vec![gate])
+        let gadget = Single(range_check_table());
+        rows_of(derive::<F, _, VARIABLES, DEGREE>(
+            &gadget,
+            &F::ZERO,
+            1,
+            start_row,
+        ))
     }
 
     /// `gates` extended by one RangeCheck0 row at `curr_row` (Kimchi's
     /// `extend_range_check`).
+    ///
+    /// # Panics
+    ///
+    /// As [`CircuitGate::create_multi_range_check`].
     pub fn extend_range_check(gates: &mut Vec<Self>, curr_row: &mut usize) {
         let (next_row, rows) = Self::create_range_check(*curr_row);
         *curr_row = next_row;
         gates.extend_from_slice(&rows);
     }
+}
 
-    /// The four rows, the two high limbs of each RangeCheck0 row wired to
-    /// columns 3-6 of the Zero row. Kimchi wires them by the rows' positions
-    /// in the gadget, as here.
-    fn create_multi_range_check_gadget(start_row: usize, compact: bool) -> (usize, Vec<Self>) {
-        let coeff = if compact { F::ONE } else { F::ZERO };
-        let mut rows = vec![
-            Self::new(
-                GateType::RangeCheck0,
-                Wire::for_row(start_row),
-                vec![F::ZERO],
-            ),
-            Self::new(
-                GateType::RangeCheck0,
-                Wire::for_row(start_row + 1),
-                vec![coeff],
-            ),
-            Self::new(GateType::RangeCheck1, Wire::for_row(start_row + 2), vec![]),
-            Self::new(GateType::Zero, Wire::for_row(start_row + 3), vec![]),
-        ];
-        rows.connect_cell_pair((0, 1), (3, 3));
-        rows.connect_cell_pair((0, 2), (3, 4));
-        rows.connect_cell_pair((1, 1), (3, 5));
-        rows.connect_cell_pair((1, 2), (3, 6));
-        (start_row + rows.len(), rows)
+/// The row after derived rows, and the rows.
+fn rows_of<F>(derived: Result<Rows<F>, DeriveError>) -> (usize, Vec<CircuitGate<F>>) {
+    match derived {
+        Ok(rows) => {
+            let next = rows.gates.last().map_or(0, |g| g.wires[0].row + 1);
+            (next, rows.gates)
+        }
+        Err(e) => panic!("no range check: {e:?}"),
     }
 }
 

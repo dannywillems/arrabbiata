@@ -1599,7 +1599,34 @@ fn polynomials_range_check_create_multi_range_check() {
         GateType::Zero,
     ];
     assert_eq!(types, expected);
-    assert_eq!(gates[1].coeffs, vec![Fp::ZERO]);
+    // Not compact: the coefficient is zero (trimmed off the derived row).
+    assert!(gates[1].coeffs.iter().all(|c| *c == Fp::ZERO));
+    // The two high limbs of each RangeCheck0 row wired to columns 3-6 of
+    // the Zero row.
+    for (from, to) in [
+        ((2, 1), (5, 3)),
+        ((2, 2), (5, 4)),
+        ((3, 1), (5, 5)),
+        ((3, 2), (5, 6)),
+    ] {
+        let start = Wire {
+            row: from.0,
+            col: from.1,
+        };
+        let mut at = gates[from.0 - 2].wires[from.1];
+        let mut cycle = vec![start];
+        while at != start {
+            cycle.push(at);
+            at = gates[at.row - 2].wires[at.col];
+        }
+        assert!(
+            cycle.contains(&Wire {
+                row: to.0,
+                col: to.1
+            }),
+            "{from:?}: {cycle:?}"
+        );
+    }
 }
 
 #[test]
