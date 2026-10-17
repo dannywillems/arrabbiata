@@ -82,6 +82,7 @@ kimchi-checkout: ## Fetch proof-systems at KIMCHI_REV, without submodules
 kimchi-vectors: kimchi-checkout ## Write Kimchi's vectors from KIMCHI_REV
 	cargo build --release --locked --bins \
 		--manifest-path $(KIMCHI_TOOL)/Cargo.toml
+	mkdir -p $(SNARK_VECTORS) $(GADGET_VECTORS)
 	$(KIMCHI_BIN)/shifts > $(SNARK_VECTORS)/kimchi_shifts.txt
 	$(KIMCHI_BIN)/constraint_system \
 		> $(SNARK_VECTORS)/kimchi_constraint_system.txt
