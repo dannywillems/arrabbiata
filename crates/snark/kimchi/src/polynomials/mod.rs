@@ -5,6 +5,7 @@
 
 pub mod and;
 pub mod endomul_scalar;
+pub mod endosclmul;
 pub mod generic;
 pub mod not;
 pub mod range_check;

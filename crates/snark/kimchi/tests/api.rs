@@ -26,6 +26,8 @@ use arrabbiata_kimchi::{
         self as gadgets,
         and::{create_and_witness, extend_and_witness},
         bit_length,
+        endomul_scalar::gen_witness as endomul_scalar_witness,
+        endosclmul::{EndoMulResult, gen_witness as endomul_witness},
         generic::{
             GenericGateSpec,
             testing::{create_circuit, fill_in_witness},
@@ -1817,4 +1819,40 @@ fn polynomials_and_extend_and_witness() {
     extend_and_witness(&mut witness, Fp::ONE, Fp::ONE, 2).unwrap();
     assert_eq!(witness[0].len(), 4);
     assert_eq!(witness[5][3], Fp::ONE);
+}
+
+#[test]
+fn polynomials_endomul_scalar_gen_witness() {
+    // The 16-bit challenge 1 is one row, and stands for the scalar `b = 1`
+    // (`a = 0`); a width that is not a multiple of 16 is refused.
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![]);
+    let lambda = Vesta::lambda();
+    let scalar = endomul_scalar_witness(&mut witness, Fp::ONE, lambda, 16).unwrap();
+    assert_eq!(witness[0].len(), 1);
+    assert_eq!(
+        scalar,
+        ScalarChallenge(Fp::ONE).to_field_with_length(16, lambda)
+    );
+    assert!(endomul_scalar_witness(&mut witness, Fp::ONE, lambda, 12).is_err());
+}
+
+#[test]
+fn polynomials_endosclmul_gen_witness_and_result() {
+    // Sixteen zero bits: four EndoMul rows, then the accumulator and n = 0
+    // on the fifth; too few rows, or a width not a multiple of 16, refused.
+    let t = Projective::<Pallas>::generator();
+    let start = t.endomorphism() + t;
+    let start = (start + start).to_affine();
+    let acc0 = (start.x().unwrap(), start.y().unwrap());
+    let g = t.to_affine();
+    let base = (g.x().unwrap(), g.y().unwrap());
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 5]);
+    let bits = [false; 16];
+    let result: EndoMulResult<Fp> =
+        endomul_witness(&mut witness, 0, Pallas::beta(), base, &bits, acc0).unwrap();
+    assert_eq!(result.n, Fp::ZERO);
+    assert_eq!((witness[4][4], witness[5][4]), result.acc);
+    let mut short: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 4]);
+    assert!(endomul_witness(&mut short, 0, Pallas::beta(), base, &bits, acc0).is_err());
+    assert!(endomul_witness(&mut witness, 0, Pallas::beta(), base, &bits[..12], acc0).is_err());
 }

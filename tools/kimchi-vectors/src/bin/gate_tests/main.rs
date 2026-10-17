@@ -14,6 +14,7 @@
 
 mod and;
 mod common;
+mod endomul;
 mod endomul_scalar;
 mod generic;
 mod not;
@@ -30,4 +31,5 @@ fn main() {
     and::run();
     and::serialization();
     endomul_scalar::run();
+    endomul::run();
 }
