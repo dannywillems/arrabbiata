@@ -13,11 +13,14 @@ use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, Unit};
 use arrabbiata_kimchi::{
-    constraints::{COLUMNS, CircuitGate, ConstraintSystem, GateType, Wire},
+    constraints::{COLUMNS, ConstraintSystem, GateType},
     gates::KimchiGates,
     oracle::ScalarChallenge,
 };
-use arrabbiata_kimchi_gadgets::endomul_scalar::{CRUMBS_PER_ROW, EndoMulScalarGate, column};
+use arrabbiata_kimchi_gadgets::{
+    endomul::{BITS_PER_ROW, EndoMulGate, column as endomul},
+    endomul_scalar::{CRUMBS_PER_ROW, EndoMulScalarGate, column},
+};
 use arrabbiata_pasta::{Fp, Vesta};
 use arrabbiata_poseidon::kimchi::pallas_base;
 use blake2::{Blake2b512, Digest};
@@ -135,13 +138,53 @@ fn endomul_scalar_test_body() {
     assert_eq!(debug(&result), case.verdict("prove"));
 }
 
+/// One EndoMul row, its inputs `(T, P, n, bits)` written into the row: the
+/// rows of Kimchi's `test_degenerate_case`.
+#[derive(Clone, Copy, Debug)]
+struct OneEndoMul;
+
+impl TypedGadget<Fp> for OneEndoMul {
+    type Input = (
+        Array<Scalar, 2>,
+        Array<Scalar, 2>,
+        Scalar,
+        Array<Scalar, BITS_PER_ROW>,
+    );
+    type Output = Unit;
+    const NAME: &'static str = "one-endomul";
+    const ROWS: usize = 2;
+
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        (t, p, n, bits): Of<Self::Input, E::Var>,
+    ) -> Of<Unit, E::Var> {
+        let write =
+            |env: &mut E, column: usize, v: &E::Var| env.advice(Cell::new(column, 0), [v], |[x]| x);
+        let t = [
+            write(env, endomul::XT, &t[0]),
+            write(env, endomul::YT, &t[1]),
+        ];
+        let p = [
+            write(env, endomul::XP, &p[0]),
+            write(env, endomul::YP, &p[1]),
+        ];
+        let n = write(env, endomul::N, &n);
+        env.call(&EndoMulGate { endo: Fp::ZERO }, (t, p, n, bits));
+    }
+}
+
 #[test]
 fn test_degenerate_case() {
     // Kimchi's witness: P = -R, which EndoMul's constraints refuse.
     let case = case("test_degenerate_case");
-    let gate = CircuitGate::new(GateType::EndoMul, Wire::for_row(0), vec![]);
-    let zero = CircuitGate::new(GateType::Zero, Wire::for_row(1), vec![]);
-    let gates = vec![gate.clone(), zero];
+    // Kimchi's rows: one EndoMul row and the Zero row after it.
+    let gates = kimchi_rows(&OneEndoMul, 2);
+    assert_eq!(
+        (gates[0].typ, gates[1].typ),
+        (GateType::EndoMul, GateType::Zero)
+    );
+    let gate = gates[0].clone();
     // Kimchi builds the constraint system and does not use it further.
     ConstraintSystem::<Fp>::create(gates).build().unwrap();
     let witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|c| {

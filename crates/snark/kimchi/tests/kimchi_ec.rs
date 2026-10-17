@@ -1,16 +1,16 @@
 //! Kimchi's `kimchi/src/tests/ec.rs`, with the same inputs and outputs: 100
 //! doublings, 100 additions and 100 sums `P + (-P)` of multiples of two
-//! points Kimchi draws, each row computed by our CompleteAdd gate, the
-//! witness's Blake2b512 digest Kimchi's, and the proof's verdict
-//! (`gate_tests/`).
+//! points Kimchi draws, as one typed gadget of our CompleteAdd rows: its
+//! rows (the symbolic run) Kimchi's, its witness (the numeric run) of
+//! Kimchi's Blake2b512 digest, and the proof's verdict (`gate_tests/`).
 
 mod gate_tests;
 mod kimchi_runs;
 
 use arrabbiata_curve::{Affine, Projective};
-use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, assign};
-use arrabbiata_kimchi::constraints::{COLUMNS, CircuitGate, GateType, Wire};
-use arrabbiata_kimchi_gadgets::{LAYOUT, complete_add::CompleteAdd};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, Unit};
+use arrabbiata_kimchi::constraints::COLUMNS;
+use arrabbiata_kimchi_gadgets::complete_add::CompleteAdd;
 use arrabbiata_pasta::{Fp, Fq, Pallas};
 use blake2::{Blake2b512, Digest};
 use gate_tests::{case, debug, prove_and_verify, rows};
@@ -35,10 +35,30 @@ impl TypedGadget<Fp> for AddRow {
     }
 }
 
-/// The column variables of the row.
-const VARIABLES: usize = 11;
-/// The degree of the CompleteAdd constraints.
-const DEGREE: usize = 3;
+/// The additions of Kimchi's test: 100 doublings, 100 additions, 100 sums
+/// to infinity.
+const ADDITIONS: usize = 300;
+
+/// Kimchi's circuit: one CompleteAdd row per pair of points, unwired.
+#[derive(Clone, Copy, Debug)]
+struct Additions;
+
+impl TypedGadget<Fp> for Additions {
+    type Input = Array<Array<Scalar, 4>, ADDITIONS>;
+    type Output = Unit;
+    const NAME: &'static str = "kimchi-ec-test";
+    const ROWS: usize = ADDITIONS;
+
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        pairs: Of<Self::Input, E::Var>,
+    ) -> Of<Unit, E::Var> {
+        for points in pairs {
+            env.call(&AddRow, points);
+        }
+    }
+}
 
 /// The coordinates of `p`.
 fn coordinates(p: &Projective<Pallas>) -> [Fp; 2] {
@@ -68,6 +88,10 @@ fn digest(witness: &[Vec<Fp>; COLUMNS]) -> String {
 
 #[test]
 fn ec_test() {
+    gate_tests::with_stack(ec_test_body);
+}
+
+fn ec_test_body() {
     let case = case("ec_test");
     let (num_doubles, num_additions, num_infs) = (100, 100, 100);
     // Kimchi's generator, mina-curves' (1, y), not ours.
@@ -76,23 +100,21 @@ fn ec_test() {
     let [r1, r2]: [Fq; 2] = case.elements("r").try_into().unwrap();
     let ps = multiples(g * r1, num_additions);
     let qs = multiples(g * r2, num_additions);
-    let gates: Vec<CircuitGate<Fp>> = (0..num_doubles + num_additions + num_infs)
-        .map(|row| CircuitGate::new(GateType::CompleteAdd, Wire::for_row(row), vec![]))
-        .collect();
+    assert_eq!(num_doubles + num_additions + num_infs, ADDITIONS);
+    let gates = gate_tests::kimchi_rows(&Additions, ADDITIONS);
     gate_tests::assert_kimchi_rows(&gates, &case.gates[0]);
     let pairs = ps.iter().take(num_doubles).map(|p| (*p, *p));
     let pairs = pairs.chain(ps.iter().zip(&qs).map(|(p, q)| (*p, *q)));
     let pairs = pairs.chain(ps.iter().take(num_infs).map(|p| (*p, -*p)));
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![]);
-    for (p, q) in pairs {
-        let [x1, y1] = coordinates(&p);
-        let [x2, y2] = coordinates(&q);
-        let (compiled, _) =
-            assign::<Fp, _, VARIABLES, DEGREE>(&AddRow, LAYOUT, &[x1, y1, x2, y2]).unwrap();
-        for (column, values) in witness.iter_mut().zip(&compiled.columns) {
-            column.push(values[0]);
-        }
-    }
+    let input: Vec<[Fp; 4]> = pairs
+        .map(|(p, q)| {
+            let [x1, y1] = coordinates(&p);
+            let [x2, y2] = coordinates(&q);
+            [x1, y1, x2, y2]
+        })
+        .collect();
+    let input: [[Fp; 4]; ADDITIONS] = input.try_into().unwrap();
+    let witness = gate_tests::kimchi_witness(&Additions, &input, ADDITIONS);
     let kimchi_digest = case.input("digest");
     assert_eq!(kimchi_digest[0], witness[0].len().to_string());
     assert_eq!(kimchi_digest[1], digest(&witness));
