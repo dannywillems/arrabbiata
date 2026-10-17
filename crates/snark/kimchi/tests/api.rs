@@ -10,6 +10,8 @@ use arrabbiata_kimchi::{
     },
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
+    prover::{self, ProverIndex, WitnessRound, witness_round},
+    rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
     verifier_index::VerifierIndex,
 };
@@ -299,4 +301,103 @@ fn verifier_index() {
     // No Poseidon row: the masked selector is h alone.
     assert_eq!(index.psm_comm.chunks, vec![srs.h]);
     assert!(index.rot_comm.is_none());
+}
+
+#[test]
+fn split_mix_64() {
+    // The first output of SplitMix64(0) (Steele, Lea, Flood).
+    let mut rng = SplitMix64(0);
+    assert_eq!(rng.next_u64(), 0xe220_a839_7b1d_cdaf);
+}
+
+#[test]
+fn arkworks_sampler() {
+    // A zero stream is the zero element; samples are in the field.
+    struct Zeros;
+    impl RandomSource for Zeros {
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+    }
+    let zero: Fp = Arkworks(Zeros).sample();
+    assert_eq!(zero, Fp::ZERO);
+    let mut rng = Arkworks(SplitMix64(1));
+    let a: Fp = rng.sample();
+    let b: Fp = rng.sample();
+    assert_ne!(a, b);
+}
+
+#[test]
+fn verifier_index_digest() {
+    // The digest depends on the commitments.
+    let srs = Srs::<Vesta>::create(8);
+    let one = ConstraintSystem::create(two_generic()).build().unwrap();
+    let mut other_gates = two_generic();
+    other_gates[1].coeffs = vec![Fp::ONE + Fp::ONE];
+    let other = ConstraintSystem::create(other_gates).build().unwrap();
+    let sponge = KimchiSponge::new(vesta_base());
+    let a = VerifierIndex::create(&one, &srs).digest(sponge.clone());
+    let b = VerifierIndex::create(&other, &srs).digest(sponge);
+    assert_ne!(a, b);
+}
+
+#[test]
+fn prover_index() {
+    let cs = ConstraintSystem::create(two_generic()).build().unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(4));
+    // 8 rows in chunks of 4.
+    assert_eq!(index.num_chunks(), 2);
+    assert_eq!(index.verifier_index.max_poly_size, 4);
+}
+
+#[test]
+fn prover_errors() {
+    let cs = ConstraintSystem::create(two_generic()).build().unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(8));
+    let sponge = KimchiSponge::new(vesta_base());
+    let mut rng = Arkworks(SplitMix64(3));
+    let mut ragged: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
+    ragged[4].push(Fp::ZERO);
+    let error = witness_round(&index, ragged, &sponge, &mut rng).unwrap_err();
+    assert_eq!(error, prover::Error::WitnessCsInconsistent);
+    assert_eq!(error.to_string(), "witness columns of different lengths");
+    // Six rows leave two of eight free, fewer than the three zk rows.
+    let long: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 6]);
+    let error = witness_round(&index, long, &sponge, &mut rng).unwrap_err();
+    assert_eq!(error, prover::Error::NoRoomForZkInWitness);
+    // Chunks of 4 rows need more zk rows than the 3 built for one chunk.
+    let one_chunk = ConstraintSystem::create(two_generic()).build().unwrap();
+    let chunked = ProverIndex::create(one_chunk, Srs::<Vesta>::create(4));
+    let short: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
+    let error = witness_round(&chunked, short, &sponge, &mut rng).unwrap_err();
+    assert_eq!(
+        error,
+        prover::Error::NotZeroKnowledge {
+            needed: 5,
+            found: 3
+        }
+    );
+}
+
+#[test]
+fn witness_round_state() {
+    let cs = ConstraintSystem::create(two_generic())
+        .public(1)
+        .build()
+        .unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(8));
+    let sponge = KimchiSponge::new(vesta_base());
+    let mut rng = Arkworks(SplitMix64(3));
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO; 2]);
+    witness[0][0] = Fp::ONE;
+    let round: WitnessRound<Vesta, _> = witness_round(&index, witness, &sponge, &mut rng).unwrap();
+    assert_eq!(round.public, vec![Fp::ONE]);
+    // Padded to 8 rows, the last three random, the others zero.
+    assert_eq!(round.witness[3].len(), 8);
+    assert_eq!(round.witness[3][4], Fp::ZERO);
+    assert_ne!(round.witness[3][7], Fp::ZERO);
+    // A commitment is the column's plus h times its blinder.
+    let blinded = round.w_comm[3].chunks[0];
+    assert_ne!(blinded, index.srs.h * round.blinders[3][0]);
+    assert_ne!(round.beta, round.gamma);
 }

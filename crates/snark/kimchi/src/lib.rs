@@ -16,6 +16,8 @@
 //! - [`permutation`]: the shifts of the copy argument, sampled as Kimchi
 //!   samples them (Blake2b512 of a counter, the first non-residues not in
 //!   the domain);
+//! - [`prover`]: the prover, round by round (so far the witness round, up
+//!   to `beta` and `gamma`), randomness a parameter ([`rng`]);
 //! - [`srs`]: Kimchi's SRS, hashed to the curve by Kimchi's group map, and
 //!   chunked commitments;
 //! - [`verifier_index`]: the commitments to the fixed columns, masked as
@@ -28,5 +30,7 @@ extern crate alloc;
 pub mod constraints;
 pub mod oracle;
 pub mod permutation;
+pub mod prover;
+pub mod rng;
 pub mod srs;
 pub mod verifier_index;

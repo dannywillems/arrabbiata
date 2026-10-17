@@ -16,9 +16,11 @@
 
 use arrabbiata_curve::Curve;
 use arrabbiata_field::{PrimeField, TwoAdicField};
+use arrabbiata_transcript::Transcript;
 
 use crate::{
     constraints::{COLUMNS, ConstraintSystem, GateType},
+    oracle::FqSponge,
     permutation::PERMUTS,
     srs::{PolyComm, Srs},
 };
@@ -120,5 +122,55 @@ where
             xor_comm: optional(GateType::Xor16),
             rot_comm: optional(GateType::Rot64),
         }
+    }
+}
+
+impl<C> VerifierIndex<C>
+where
+    C: Curve,
+    C::Base: PrimeField,
+{
+    /// Kimchi's digest of the index: every commitment absorbed into a fresh
+    /// base-field sponge over `sponge`, in Kimchi's order (sigmas,
+    /// coefficients, the six masked selectors, then the optional ones as
+    /// RangeCheck0, RangeCheck1, ForeignFieldMul, ForeignFieldAdd, Xor16,
+    /// Rot64), then a squeeze. The parameters are not absorbed.
+    #[must_use]
+    pub fn digest<S>(&self, sponge: S) -> C::Base
+    where
+        S: Transcript<C::Base>,
+    {
+        let mut fq = FqSponge::<C, S>::new(sponge);
+        let mut absorb = |c: &PolyComm<C>| fq.absorb_g(&c.chunks);
+        for c in &self.sigma_comm {
+            absorb(c);
+        }
+        for c in &self.coefficients_comm {
+            absorb(c);
+        }
+        for c in [
+            &self.generic_comm,
+            &self.psm_comm,
+            &self.complete_add_comm,
+            &self.mul_comm,
+            &self.emul_comm,
+            &self.endomul_scalar_comm,
+        ] {
+            absorb(c);
+        }
+        for c in [
+            &self.range_check0_comm,
+            &self.range_check1_comm,
+            &self.foreign_field_mul_comm,
+            &self.foreign_field_add_comm,
+            &self.xor_comm,
+            &self.rot_comm,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            absorb(c);
+        }
+        fq.digest_fq()
     }
 }
