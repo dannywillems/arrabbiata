@@ -1,4 +1,4 @@
-file 6d5ab2213e9b86278c3777e2692df475ca1bdc0c3208180f7d885c392a03dcb09a474b86b31fbf072bd2083c6cc1ec4bc15591cb089c69ad7f3987c4d753dccb
+file abbcba14b5a68317a50fb3cc7f38f59a33e032e35d398497d8ea12285fd82cb2e426c01ead520b651a89a6a88f34038fbe94c1c8d980d33c71d74771a4b77a2c
 verify generic arrabbiata Ok("accepted")
 verify generic arrabbiata-tampered refused
 verify generic kimchi Ok("accepted")
@@ -23,3 +23,9 @@ verify lookup kimchi Ok("accepted")
 verify runtime arrabbiata Ok("accepted")
 verify runtime arrabbiata-tampered refused
 verify runtime kimchi Ok("accepted")
+verify rot arrabbiata Ok("accepted")
+verify rot arrabbiata-tampered refused
+verify rot kimchi Ok("accepted")
+verify ffmul arrabbiata Ok("accepted")
+verify ffmul arrabbiata-tampered refused
+verify ffmul kimchi Ok("accepted")

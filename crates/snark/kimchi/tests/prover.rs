@@ -36,8 +36,10 @@ const VECTORS: &str = include_str!("vectors/kimchi_prover.txt");
 /// EndoMulScalar), and the generic circuit carrying one previous
 /// accumulator (as Kimchi's `test_recursion`); then four circuits with
 /// lookups: a 64-bit Xor, a multi-range check, Lookup gates over two fixed
-/// tables, and over two runtime tables.
-const CIRCUITS: [(&str, Option<usize>, usize); 8] = [
+/// tables, over two runtime tables, a 64-bit word rotated left and right
+/// (Rot64), and a foreign-field multiplication modulo secp256k1's base
+/// field with all its external checks (ForeignFieldMul).
+const CIRCUITS: [(&str, Option<usize>, usize); 10] = [
     ("generic", None, 5),
     ("chunked", Some(16), 5),
     ("gadgets", None, 0),
@@ -46,6 +48,8 @@ const CIRCUITS: [(&str, Option<usize>, usize); 8] = [
     ("range_check", None, 0),
     ("lookup", None, 0),
     ("runtime", None, 0),
+    ("rot", None, 0),
+    ("ffmul", None, 0),
 ];
 
 /// Values from `k x1 ... xk`.
