@@ -155,7 +155,7 @@ where
                 table_ids: l.table_ids.as_ref().map(|c| srs.mask_fixed(commit(c))),
                 runtime_tables_selector: l.runtime_selector.as_ref().map(|c| commit(c)),
                 lookup_selectors: crate::lookup::PATTERNS
-                    .map(|p: LookupPattern| l.selector(p).map(&commit)),
+                    .map(|p: LookupPattern| l.selector(p).map(commit)),
             }),
         }
     }
