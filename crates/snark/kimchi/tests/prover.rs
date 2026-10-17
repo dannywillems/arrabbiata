@@ -13,7 +13,7 @@ use arrabbiata_kimchi::{
     constraints::{CircuitGate, ConstraintSystem, GateType, Wire},
     gates::KimchiGates,
     prover::{
-        PointEvaluations, ProverIndex, evaluation_round, permutation_round, quotient_round,
+        PointEvaluations, ProverIndex, evaluation_round, permutation_round, prove, quotient_round,
         witness_round,
     },
     rng::{Arkworks, Sampler, SplitMix64},
@@ -252,5 +252,34 @@ fn the_evaluation_round_is_kimchis() {
         assert_eq!(oracles["v"], hex(round.v), "{name} v");
         assert_eq!(oracles["u_chal"], hex(round.u_chal.0), "{name}");
         assert_eq!(oracles["u"], hex(round.u), "{name} u");
+    }
+}
+
+#[test]
+fn the_proofs_are_kimchis() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let mut rng = Arkworks(SplitMix64(7));
+        let proof = prove(&index, witness, &gates, (&base, &scalar), &mut rng).unwrap();
+        let opening = lines("opening", name);
+        let o = &proof.proof;
+        assert_eq!(opening.len(), o.lr.len() + 4, "{name}");
+        for (i, (l, r)) in o.lr.iter().enumerate() {
+            assert_eq!(
+                opening[&format!("lr{i}")],
+                format!("{} {}", point(l), point(r)),
+                "{name} lr{i}"
+            );
+        }
+        assert_eq!(opening["delta"], point(&o.delta), "{name} delta");
+        assert_eq!(opening["z1"], hex(o.z1), "{name} z1");
+        assert_eq!(opening["z2"], hex(o.z2), "{name} z2");
+        assert_eq!(opening["sg"], point(&o.sg), "{name} sg");
+        // The rest of the proof is the rounds', checked above.
+        let comms = lines("comm", name);
+        assert_eq!(comms["t"], comm(&proof.t_comm), "{name}");
     }
 }

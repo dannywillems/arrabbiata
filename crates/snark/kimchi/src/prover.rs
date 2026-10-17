@@ -65,6 +65,35 @@
 //!    then `zeta w`; `v` and `u` are squeezed and mapped by the
 //!    endomorphism.
 //!
+//! [`opening_round`], the last: Kimchi's batched, hidden IPA opening of
+//! every polynomial at `zeta` and `zeta w`:
+//!
+//! 1. the polynomials, in Kimchi's order (public, `ft`, `z`, the six
+//!    selectors, the witness, the coefficients, the first six sigmas, the
+//!    optional selectors), each taking as many consecutive powers of `v`
+//!    as it has chunks, chunk `j` of a polynomial starting at `v^s` scaled
+//!    by `v^(s + j)`; their blinders combined the same way (1 for the
+//!    public polynomial and the six selectors, 0 for the index columns);
+//! 2. `b = sum_k u^k (1, x_k, x_k^2, ...)` over the points, the combined
+//!    inner product `<p, b>`, absorbed into the base sponge (as it was after
+//!    `zeta`) shifted by Kimchi's `shift_scalar`; the base `U` is the group
+//!    map of a squeezed base-field element;
+//! 3. each round `L = <G_lo, a_hi> + r_l H + <a_hi, b_lo> U`, `R = <G_hi,
+//!    a_lo> + r_r H + <a_lo, b_hi> U` (`r_l`, `r_r` random), absorbed; the
+//!    round challenge `u_j` is the endomorphism image of a 128-bit
+//!    challenge; `a <- a_lo + u_j^(-1) a_hi`, `b <- b_lo + u_j b_hi`,
+//!    `G <- G_lo + u_j G_hi`;
+//! 4. with `a, b, G` single, random `d`, `r_delta`: `delta = d (G + b U) +
+//!    r_delta H`, absorbed, `c` the endomorphism image of a challenge,
+//!    `z1 = a c + d`, `z2 = r' c + r_delta` with `r'` the blinder plus the
+//!    rounds' `r_l u_j^(-1) + r_r u_j`; `sg = G`.
+//!
+//! This is the IPA of `arrabbiata-ipa` with Kimchi's choices for the four
+//! deviations of plan 0005 (hiding, the base of the value, endomorphism
+//! challenges, and the scales drawn by the protocol), written out here.
+//!
+//! [`prove`] runs the five rounds and gives the proof.
+//!
 //! The randomness is the [`Sampler`] passed in; with [`crate::rng::Arkworks`]
 //! over the same stream as Kimchi's RNG, the round gives Kimchi's values.
 //! Lookups are not supported yet: a circuit with Lookup, RangeCheck, Rot64,
@@ -73,18 +102,18 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use arrabbiata_curve::{Curve, glv::Glv};
-use arrabbiata_field::{Field, PrimeField, TwoAdicField};
+use arrabbiata_curve::{Curve, Projective, glv::Glv, msm};
+use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_poly::UniPoly;
 use arrabbiata_transcript::Transcript;
 
 use crate::{
     constraints::{COLUMNS, ConstraintSystem, GateType, zk_rows_strict_lower_bound},
     gates::Gates,
-    oracle::{FqSponge, FrSponge, ScalarChallenge},
+    oracle::{FqSponge, FrSponge, ScalarChallenge, compare_moduli},
     permutation::PERMUTS,
     rng::Sampler,
-    srs::{PolyComm, Srs},
+    srs::{GroupMap, PolyComm, Srs},
     verifier_index::VerifierIndex,
 };
 
@@ -860,4 +889,276 @@ where
         u_chal,
         u,
     }
+}
+
+/// Kimchi's opening proof: the rounds' `(L, R)`, `delta`, `z1`, `z2` and
+/// the folded generator `sg`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpeningProof<C>
+where
+    C: Curve,
+{
+    /// The `(L, R)` of each round.
+    pub lr: Vec<(Projective<C>, Projective<C>)>,
+    /// The commitment of the final Schnorr-like step.
+    pub delta: Projective<C>,
+    /// The response for the folded coefficient.
+    pub z1: C::Scalar,
+    /// The response for the blinder.
+    pub z2: C::Scalar,
+    /// The folded generator.
+    pub sg: Projective<C>,
+}
+
+/// A Kimchi proof (without lookups and without previous accumulators).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProverProof<C>
+where
+    C: Curve,
+{
+    /// The witness commitments.
+    pub w_comm: [PolyComm<C>; COLUMNS],
+    /// The permutation aggregation's commitment.
+    pub z_comm: PolyComm<C>,
+    /// The quotient's commitment.
+    pub t_comm: PolyComm<C>,
+    /// The evaluations.
+    pub evals: ProofEvaluations<C::Scalar>,
+    /// `ft(zeta w)`.
+    pub ft_eval1: C::Scalar,
+    /// The opening.
+    pub proof: OpeningProof<C>,
+}
+
+/// Kimchi's `shift_scalar`: the scalar `x` as the base-field sponge must
+/// see it, `(x - 2^b - 1) / 2` when the scalar modulus is the smaller and
+/// `x - 2^b` otherwise, `b` the scalar modulus's bit length.
+#[must_use]
+pub fn shift_scalar<C>(x: C::Scalar) -> C::Scalar
+where
+    C: Curve,
+    C::Base: PrimeField,
+{
+    let two = C::Scalar::ONE + C::Scalar::ONE;
+    let two_pow = two.pow(u64::from(C::Scalar::MODULUS_BITS));
+    if compare_moduli::<C::Scalar, C::Base>() == core::cmp::Ordering::Less {
+        let half = match two.inverse() {
+            Some(h) => h,
+            None => unreachable!("the scalar field is odd"),
+        };
+        (x - (two_pow + C::Scalar::ONE)) * half
+    } else {
+        x - two_pow
+    }
+}
+
+/// A polynomial to open, its coefficients and one blinder per chunk.
+type Blinded<F> = (Vec<F>, Vec<F>);
+
+/// The inner product.
+fn inner<F: Field>(a: &[F], b: &[F]) -> F {
+    a.iter().zip(b).fold(F::ZERO, |acc, (x, y)| acc + *x * *y)
+}
+
+/// The opening round (see the module documentation), with Kimchi's group
+/// map for `U`.
+///
+/// # Panics
+///
+/// If the SRS size is not a power of two.
+pub fn opening_round<C, S, T, R>(
+    index: &ProverIndex<C>,
+    previous: &EvaluationRound<C, S, T>,
+    group_map: &GroupMap<C>,
+    rng: &mut R,
+) -> ProverProof<C>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    R: Sampler<C::Scalar>,
+{
+    let cs = &index.cs;
+    let d1 = cs.domain.d1;
+    let n = d1.size();
+    let m = index.srs.max_poly_size();
+    assert!(m.is_power_of_two(), "the SRS size must be a power of two");
+    let num_chunks = index.num_chunks();
+    let quotient = &previous.previous;
+    let permutation = &quotient.previous;
+    let first = &permutation.previous;
+    let (polyscale, evalscale) = (previous.v, previous.u);
+    let interpolate = |column: &[C::Scalar]| match d1.interpolate(column) {
+        Some(p) => p.coefficients().to_vec(),
+        None => unreachable!("one value per row"),
+    };
+    let ones = alloc::vec![C::Scalar::ONE; num_chunks];
+    let zeros = alloc::vec![C::Scalar::ZERO; num_chunks];
+    let mut negated = alloc::vec![C::Scalar::ZERO; n];
+    for (slot, p) in negated.iter_mut().zip(&first.public) {
+        *slot = -*p;
+    }
+    let sigmas = cs.sigmas();
+    let mut polynomials: Vec<Blinded<C::Scalar>> = alloc::vec![
+        (interpolate(&negated), ones.clone()),
+        (
+            previous.ft.coefficients().to_vec(),
+            alloc::vec![previous.blinding_ft]
+        ),
+        (interpolate(&permutation.z), permutation.z_blinders.clone()),
+    ];
+    for typ in [
+        GateType::Generic,
+        GateType::Poseidon,
+        GateType::CompleteAdd,
+        GateType::VarBaseMul,
+        GateType::EndoMul,
+        GateType::EndoMulScalar,
+    ] {
+        polynomials.push((interpolate(&cs.selector(typ)), ones.clone()));
+    }
+    for (w, blinders) in first.witness.iter().zip(&first.blinders) {
+        polynomials.push((interpolate(w), blinders.clone()));
+    }
+    for i in 0..COLUMNS {
+        polynomials.push((interpolate(&cs.coefficient(i)), zeros.clone()));
+    }
+    for sigma in &sigmas[..PERMUTS - 1] {
+        polynomials.push((interpolate(sigma), zeros.clone()));
+    }
+    for (typ, _) in &previous.evals.optional_selectors {
+        polynomials.push((interpolate(&cs.selector(*typ)), zeros.clone()));
+    }
+
+    let mut a = alloc::vec![C::Scalar::ZERO; m];
+    let mut blinding = C::Scalar::ZERO;
+    let mut scale = C::Scalar::ONE;
+    for (coefficients, blinders) in &polynomials {
+        for (j, blinder) in blinders.iter().enumerate() {
+            let start = (j * m).min(coefficients.len());
+            let end = ((j + 1) * m).min(coefficients.len());
+            for (slot, c) in a.iter_mut().zip(&coefficients[start..end]) {
+                *slot = *slot + scale * *c;
+            }
+            blinding = blinding + scale * *blinder;
+            scale = scale * polyscale;
+        }
+    }
+    let mut b = alloc::vec![C::Scalar::ZERO; m];
+    let mut point_scale = C::Scalar::ONE;
+    for point in [quotient.zeta, previous.zeta_omega] {
+        let mut power = C::Scalar::ONE;
+        for slot in &mut b {
+            *slot = *slot + point_scale * power;
+            power = power * point;
+        }
+        point_scale = point_scale * evalscale;
+    }
+    let combined_inner_product = inner(&a, &b);
+
+    let mut sponge = quotient.fq_sponge.clone();
+    sponge.absorb_fr(&[shift_scalar::<C>(combined_inner_product)]);
+    let u_base = group_map.to_group(sponge.challenge_fq()).to_projective();
+    let h = index.srs.h;
+    let mut g = index.srs.g.clone();
+    let mut lr = Vec::new();
+    let mut blinders = Vec::new();
+    let mut chals = Vec::new();
+    while g.len() > 1 {
+        let half = g.len() / 2;
+        let (g_lo, g_hi) = g.split_at(half);
+        let (a_lo, a_hi) = a.split_at(half);
+        let (b_lo, b_hi) = b.split_at(half);
+        let rand_l: C::Scalar = rng.sample();
+        let rand_r: C::Scalar = rng.sample();
+        let l = msm(g_lo, a_hi) + h * rand_l + u_base * inner(a_hi, b_lo);
+        let r = msm(g_hi, a_lo) + h * rand_r + u_base * inner(a_lo, b_hi);
+        sponge.absorb_g(&[l]);
+        sponge.absorb_g(&[r]);
+        let u = ScalarChallenge(sponge.challenge()).to_field(C::lambda());
+        let u_inv = match u.inverse() {
+            Some(x) => x,
+            None => unreachable!("a 128-bit endomorphism challenge is not zero"),
+        };
+        let next_a: Vec<C::Scalar> = a_lo
+            .iter()
+            .zip(a_hi)
+            .map(|(lo, hi)| *lo + u_inv * *hi)
+            .collect();
+        let next_b: Vec<C::Scalar> = b_lo
+            .iter()
+            .zip(b_hi)
+            .map(|(lo, hi)| *lo + u * *hi)
+            .collect();
+        let next_g: Vec<Projective<C>> = g_lo
+            .iter()
+            .zip(g_hi)
+            .map(|(lo, hi)| *lo + *hi * u)
+            .collect();
+        lr.push((l, r));
+        blinders.push((rand_l, rand_r));
+        chals.push((u, u_inv));
+        a = next_a;
+        b = next_b;
+        g = next_g;
+    }
+    let (a0, b0, g0) = (a[0], b[0], g[0]);
+    let r_prime = blinders
+        .iter()
+        .zip(&chals)
+        .fold(blinding, |acc, ((l, r), (u, u_inv))| {
+            acc + *l * *u_inv + *r * *u
+        });
+    let d: C::Scalar = rng.sample();
+    let r_delta: C::Scalar = rng.sample();
+    let delta = (g0 + u_base * b0) * d + h * r_delta;
+    sponge.absorb_g(&[delta]);
+    let c = ScalarChallenge(sponge.challenge()).to_field(C::lambda());
+    ProverProof {
+        w_comm: first.w_comm.clone(),
+        z_comm: permutation.z_comm.clone(),
+        t_comm: quotient.t_comm.clone(),
+        evals: previous.evals.clone(),
+        ft_eval1: previous.ft_eval1,
+        proof: OpeningProof {
+            lr,
+            delta,
+            z1: a0 * c + d,
+            z2: r_prime * c + r_delta,
+            sg: g0,
+        },
+    }
+}
+
+/// A whole proof: the five rounds in order, on fresh base- and scalar-field
+/// sponges, with Kimchi's group map.
+///
+/// # Errors
+///
+/// As the rounds: an inconsistent or too long witness, a broken copy, or a
+/// broken constraint.
+pub fn prove<C, S, T, R, G>(
+    index: &ProverIndex<C>,
+    witness: [Vec<C::Scalar>; COLUMNS],
+    gates: &G,
+    sponges: (&S, &T),
+    rng: &mut R,
+) -> Result<ProverProof<C>, Error>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    T: Transcript<C::Scalar> + Clone,
+    R: Sampler<C::Scalar>,
+    G: Gates<C::Scalar>,
+{
+    let (base_sponge, scalar_sponge) = sponges;
+    let first = witness_round(index, witness, base_sponge, rng)?;
+    let second = permutation_round(index, first, rng)?;
+    let third = quotient_round(index, second, gates, rng)?;
+    let fourth = evaluation_round(index, third, scalar_sponge);
+    let group_map = GroupMap::setup();
+    Ok(opening_round(index, &fourth, &group_map, rng))
 }

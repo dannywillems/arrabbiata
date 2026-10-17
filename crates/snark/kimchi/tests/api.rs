@@ -12,9 +12,9 @@ use arrabbiata_kimchi::{
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
     prover::{
-        self, EvaluationRound, PERMUTATION_ALPHA, PermutationRound, PointEvaluations,
-        ProofEvaluations, ProverIndex, QuotientRound, WitnessRound, evaluation_round,
-        permutation_round, quotient_round, witness_round,
+        self, EvaluationRound, OpeningProof, PERMUTATION_ALPHA, PermutationRound, PointEvaluations,
+        ProofEvaluations, ProverIndex, ProverProof, QuotientRound, WitnessRound, evaluation_round,
+        opening_round, permutation_round, prove, quotient_round, shift_scalar, witness_round,
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
@@ -557,4 +557,61 @@ fn evaluation_round_state() {
     assert_eq!(round.v, round.v_chal.to_field(Vesta::lambda()));
     assert_eq!(round.u, round.u_chal.to_field(Vesta::lambda()));
     assert_ne!(round.blinding_ft, Fp::ZERO);
+}
+
+#[test]
+fn shift_scalar_inverts_kimchis_unshift() {
+    // On Vesta the scalar modulus is the smaller: shift(x) = (x - 2^255 -
+    // 1) / 2, so 2 shift(x) + 2^255 + 1 = x.
+    let x = Fp::from_u64(12345);
+    let two = Fp::from_u64(2);
+    let shifted = shift_scalar::<Vesta>(x);
+    assert_eq!(shifted * two + two.pow(255) + Fp::ONE, x);
+}
+
+#[test]
+fn opening_round_and_proof() {
+    let (index, round) = evaluated();
+    let map = GroupMap::<Vesta>::setup();
+    let mut rng = Arkworks(SplitMix64(13));
+    let proof: ProverProof<Vesta> = opening_round(&index, &round, &map, &mut rng);
+    let opening: &OpeningProof<Vesta> = &proof.proof;
+    // log2(8) rounds; sg on the curve; the proof carries the rounds' parts.
+    assert_eq!(opening.lr.len(), 3);
+    assert!(opening.sg.is_on_curve());
+    assert_eq!(proof.ft_eval1, round.ft_eval1);
+    assert_eq!(proof.t_comm, round.previous.t_comm);
+}
+
+#[test]
+fn prove_runs_every_round() {
+    let gates: Vec<CircuitGate<Fp>> = (0..2)
+        .map(|row| {
+            let coeffs = vec![Fp::ONE, Fp::ONE, -Fp::ONE];
+            CircuitGate::new(GateType::Generic, Wire::for_row(row), coeffs)
+        })
+        .collect();
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let index = ProverIndex::create(cs, Srs::<Vesta>::create(8));
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|c| {
+        let value = if c < 3 {
+            Fp::from_u64(c as u64 + 1)
+        } else {
+            Fp::ZERO
+        };
+        vec![value; 2]
+    });
+    let sponges = (&base, &scalar);
+    let mut one = Arkworks(SplitMix64(17));
+    let mut two = Arkworks(SplitMix64(17));
+    let a = prove(&index, witness.clone(), &kimchi, sponges, &mut one).unwrap();
+    let b = prove(&index, witness.clone(), &kimchi, sponges, &mut two).unwrap();
+    // Reproducible from the stream; another stream hides differently.
+    assert_eq!(a, b);
+    let mut three = Arkworks(SplitMix64(18));
+    let c = prove(&index, witness, &kimchi, sponges, &mut three).unwrap();
+    assert_ne!(a.w_comm, c.w_comm);
 }

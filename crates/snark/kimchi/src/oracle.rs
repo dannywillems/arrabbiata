@@ -55,7 +55,7 @@ fn limbs<F: PrimeField>(x: F) -> Vec<u64> {
 }
 
 /// The order of the moduli of `A` and `B`, compared through `p - 1`.
-fn compare_moduli<A: PrimeField, B: PrimeField>() -> Ordering {
+pub(crate) fn compare_moduli<A: PrimeField, B: PrimeField>() -> Ordering {
     let (a, b) = (limbs(-A::ONE), limbs(-B::ONE));
     let n = a.len().max(b.len());
     let at = |v: &[u64], i: usize| v.get(i).copied().unwrap_or(0);
