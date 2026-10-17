@@ -4,6 +4,7 @@
 //! proofs) against Kimchi's run of the same test (`gate_tests/`).
 
 mod gate_tests;
+mod kimchi_runs;
 
 use arrabbiata_field::Field;
 use arrabbiata_kimchi::{

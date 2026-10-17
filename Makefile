@@ -51,9 +51,48 @@ test: ## Run all tests, including doctests and compile-fail examples
 	cargo test --workspace
 
 .PHONY: test-kimchi-vectors
-test-kimchi-vectors: ## Regression tests against Kimchi's committed runs
+test-kimchi-vectors: ## Regression tests against Kimchi's runs (kimchi-vectors)
 	cargo test -p arrabbiata-kimchi -p arrabbiata-kimchi-gadgets \
 		-p arrabbiata-ipa
+
+# Kimchi's runs: the tool in tools/kimchi-vectors, built against
+# o1-labs/proof-systems at the commit in KIMCHI_REV, prints the vectors the
+# regression tests read. They are generated, not committed.
+KIMCHI_TOOL := tools/kimchi-vectors
+KIMCHI_REV := $(shell cat $(KIMCHI_TOOL)/KIMCHI_REV)
+KIMCHI_SRC := tools/proof-systems
+KIMCHI_BIN := $(KIMCHI_TOOL)/target/release
+KIMCHI_URL ?= https://github.com/o1-labs/proof-systems.git
+SNARK_VECTORS := crates/snark/kimchi/tests/vectors
+GADGET_VECTORS := crates/gadgets/kimchi/tests/vectors
+
+.PHONY: kimchi-checkout
+kimchi-checkout: ## Fetch proof-systems at KIMCHI_REV, without submodules
+	@[ -d $(KIMCHI_SRC)/.git ] || git init -q --template= $(KIMCHI_SRC)
+	@if [ "$$(git -C $(KIMCHI_SRC) rev-parse -q --verify HEAD)" != \
+		"$(KIMCHI_REV)" ]; then \
+		git -C $(KIMCHI_SRC) fetch -q --depth 1 $(KIMCHI_URL) \
+			$(KIMCHI_REV) && \
+		git -C $(KIMCHI_SRC) checkout -q --detach FETCH_HEAD; \
+	fi
+	test "$$(git -C $(KIMCHI_SRC) rev-parse HEAD)" = "$(KIMCHI_REV)"
+	git -C $(KIMCHI_SRC) diff --quiet HEAD
+
+.PHONY: kimchi-vectors
+kimchi-vectors: kimchi-checkout ## Write Kimchi's vectors from KIMCHI_REV
+	cargo build --release --locked --bins \
+		--manifest-path $(KIMCHI_TOOL)/Cargo.toml
+	$(KIMCHI_BIN)/shifts > $(SNARK_VECTORS)/kimchi_shifts.txt
+	$(KIMCHI_BIN)/constraint_system \
+		> $(SNARK_VECTORS)/kimchi_constraint_system.txt
+	$(KIMCHI_BIN)/verifier_index \
+		> $(SNARK_VECTORS)/kimchi_verifier_index.txt
+	$(KIMCHI_BIN)/oracles > $(SNARK_VECTORS)/kimchi_oracles.txt
+	$(KIMCHI_BIN)/gate_tests > $(SNARK_VECTORS)/kimchi_gate_tests.txt
+	$(KIMCHI_BIN)/prover $(SNARK_VECTORS)/arrabbiata_proofs.txt \
+		> $(SNARK_VECTORS)/kimchi_prover.txt \
+		2> $(SNARK_VECTORS)/kimchi_verifies_arrabbiata.txt
+	$(KIMCHI_BIN)/differential > $(GADGET_VECTORS)/kimchi_differential.txt
 
 .PHONY: test-curve
 test-curve: ## Curve laws on CURVE (pallas, vesta, bn254_g{1,2}, grumpkin)

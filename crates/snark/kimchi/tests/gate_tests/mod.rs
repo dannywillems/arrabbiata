@@ -1,12 +1,12 @@
 //! What the ports of Kimchi's gate tests share: Kimchi's runs of them
-//! (`vectors/kimchi_gate_tests.txt`, from the `gate_tests` tool of the
-//! Kimchi figures notes, each test with a fixed seed for the inputs Kimchi
+//! (`vectors/kimchi_gate_tests.txt`, from the `gate_tests` tool of
+//! `tools/kimchi-vectors`, each test with a fixed seed for the inputs Kimchi
 //! draws at random), and Kimchi's test framework, `prove_and_verify`, on
 //! our prover and verifier.
 
 #![allow(dead_code)]
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::LazyLock};
 
 use arrabbiata_curve::{Projective, glv::Glv};
 use arrabbiata_field::{PrimeField, Sqrt, TwoAdicField};
@@ -24,7 +24,8 @@ use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 use arrabbiata_transcript::Transcript;
 
 /// Kimchi's runs.
-const VECTORS: &str = include_str!("../vectors/kimchi_gate_tests.txt");
+static VECTORS: LazyLock<String> =
+    LazyLock::new(|| crate::kimchi_runs::read("kimchi_gate_tests.txt"));
 
 /// One of Kimchi's tests as Kimchi ran it.
 #[derive(Debug, Default)]

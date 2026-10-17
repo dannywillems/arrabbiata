@@ -1,12 +1,13 @@
 //! Kimchi's constraint system against Kimchi: the four circuits of the
-//! `constraint_system` tool of the Kimchi figures notes, built here the
+//! `constraint_system` tool of `tools/kimchi-vectors`, built here the
 //! same way, give the same domain, zero-knowledge rows and generators, and
 //! every column (sigmas over d8, coefficients over d8, selectors over d4
 //! or d8) has the same Blake2b512 digest (`vectors/kimchi_constraint_system.txt`).
 
 mod common;
+mod kimchi_runs;
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::LazyLock};
 
 use common::circuits;
 
@@ -19,7 +20,8 @@ use arrabbiata_pasta::Fp;
 use blake2::{Blake2b512, Digest};
 
 /// Kimchi's output.
-const VECTORS: &str = include_str!("vectors/kimchi_constraint_system.txt");
+static VECTORS: LazyLock<String> =
+    LazyLock::new(|| kimchi_runs::read("kimchi_constraint_system.txt"));
 
 fn hex_be(x: Fp) -> String {
     (0..4)

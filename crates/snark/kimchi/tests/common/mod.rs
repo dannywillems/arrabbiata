@@ -1,4 +1,4 @@
-//! The four circuits of the Kimchi figures tools (`constraint_system`,
+//! The four circuits of the `tools/kimchi-vectors` tools (`constraint_system`,
 //! `verifier_index`), built as the tools build them.
 
 use arrabbiata_field::Field;

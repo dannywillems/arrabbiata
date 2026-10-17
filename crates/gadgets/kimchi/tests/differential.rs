@@ -1,6 +1,6 @@
 //! A differential test against Kimchi (o1-labs/proof-systems
 //! `9227444890`), on Kimchi's own output (`vectors/kimchi_differential.txt`,
-//! produced by the `differential` tool of the Kimchi figures notes):
+//! produced by the `differential` tool of `tools/kimchi-vectors`):
 //!
 //! - the constraint polynomials: for every gate, at 4 pseudo-random points
 //!   (all cells of the gate's row and the next, and all coefficients,
@@ -16,6 +16,10 @@
 //!   `xor::create_xor_witness`, `rot::extend_rot` left and right,
 //!   `foreign_field_add::witness::create_chain` for an addition and a
 //!   subtraction, `foreign_field_mul::witness::create`), cell for cell.
+
+mod kimchi_runs;
+
+use std::sync::LazyLock;
 
 use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::{Field, PrimeField};
@@ -34,7 +38,7 @@ use arrabbiata_pasta::{Fp, Pallas};
 use arrabbiata_poseidon::kimchi::pallas_base;
 
 /// Kimchi's output.
-const VECTORS: &str = include_str!("vectors/kimchi_differential.txt");
+static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_differential.txt"));
 
 /// The column variables: every cell of a row, those of the next, and the
 /// coefficients.

@@ -1,13 +1,17 @@
 //! Kimchi's permutation shifts against Kimchi: `ConstraintSystem::shift`
 //! for domains of 16, 128 and 1024 rows (`vectors/kimchi_shifts.txt`, from
-//! the `shifts` tool of the Kimchi figures notes), and their properties.
+//! the `shifts` tool of `tools/kimchi-vectors`), and their properties.
+
+mod kimchi_runs;
+
+use std::sync::LazyLock;
 
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_kimchi::permutation::{PERMUTS, shifts};
 use arrabbiata_pasta::Fp;
 
 /// Kimchi's output.
-const VECTORS: &str = include_str!("vectors/kimchi_shifts.txt");
+static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_shifts.txt"));
 
 fn element(hex: &str) -> Fp {
     let limbs: Vec<u64> = (0..4)

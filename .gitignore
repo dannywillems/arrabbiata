@@ -37,3 +37,10 @@ mutants.diff
 
 # Harness scratch directories
 /lean/.claude
+
+# Kimchi's runs: proof-systems at tools/kimchi-vectors/KIMCHI_REV, and the
+# vectors `make kimchi-vectors` writes from it
+/tools/proof-systems/
+/tools/kimchi-vectors/target/
+/crates/snark/kimchi/tests/vectors/kimchi_*.txt
+/crates/gadgets/kimchi/tests/vectors/kimchi_*.txt

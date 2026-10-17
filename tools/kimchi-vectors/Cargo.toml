@@ -1,0 +1,27 @@
+# Kimchi's runs, printed as the vectors arrabbiata's regression tests read.
+# Built against o1-labs/proof-systems at the commit in KIMCHI_REV, which
+# `make kimchi-checkout` fetches into ../proof-systems/ (without its
+# submodules); `make kimchi-vectors` builds this and writes the vectors.
+# Not a member of arrabbiata's workspace: none of this enters its
+# dependency graph.
+[package]
+edition = "2021"
+name = "kimchi-vectors"
+publish = false
+version = "0.0.0"
+
+[dependencies]
+ark-ec = "0.5"
+ark-ff = "0.5"
+ark-poly = "0.5"
+blake2 = "0.10"
+groupmap = { path = "../proof-systems/groupmap" }
+kimchi = { path = "../proof-systems/kimchi" }
+mina-curves = { path = "../proof-systems/curves" }
+mina-poseidon = { path = "../proof-systems/poseidon" }
+num-bigint = "0.4"
+o1-utils = { path = "../proof-systems/utils" }
+poly-commitment = { path = "../proof-systems/poly-commitment" }
+rand = "0.8"
+
+[workspace]

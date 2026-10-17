@@ -1,7 +1,7 @@
 //! The challenge polynomial and the combined inner product against Kimchi's
 //! own `b_poly`, `b_poly_coefficients` and `combined_inner_product`
 //! (`poly-commitment/src/commitment.rs`), run on proof-systems
-//! `9227444890` by the `ipa_vectors` tool of the Kimchi figures notes, over
+//! `9227444890` by the `ipa_vectors` tool of `tools/kimchi-vectors`, over
 //! both Pasta scalar fields. The inputs are small integers, and so are the
 //! outputs, which are the same in the two fields.
 

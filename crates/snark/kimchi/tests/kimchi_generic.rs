@@ -6,6 +6,7 @@
 //! the IPA only.
 
 mod gate_tests;
+mod kimchi_runs;
 
 use arrabbiata_field::Field;
 use arrabbiata_kimchi::{

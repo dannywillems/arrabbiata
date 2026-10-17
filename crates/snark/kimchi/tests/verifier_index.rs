@@ -1,12 +1,13 @@
 //! Kimchi's SRS and verifier index against Kimchi: for the four circuits
-//! of the figures tools, on Vesta, the first and last SRS points and `h`,
+//! of `tools/kimchi-vectors`, on Vesta, the first and last SRS points and `h`,
 //! the parameters of the index, every chunk of every commitment (the
 //! lookup part included), and the digest
 //! (`vectors/kimchi_verifier_index.txt`, from the `verifier_index` tool).
 
 mod common;
+mod kimchi_runs;
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::LazyLock};
 
 use arrabbiata_curve::Projective;
 use arrabbiata_field::PrimeField;
@@ -19,7 +20,7 @@ use arrabbiata_poseidon::kimchi::{KimchiSponge, vesta_base};
 use common::circuits;
 
 /// Kimchi's output.
-const VECTORS: &str = include_str!("vectors/kimchi_verifier_index.txt");
+static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_verifier_index.txt"));
 
 fn hex<F: PrimeField>(x: F) -> String {
     (0..F::LIMBS)

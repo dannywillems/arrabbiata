@@ -1,0 +1,2 @@
+# Kimchi's checkout (`make kimchi-checkout`) is not ours to format.
+exclude = ["tools/proof-systems/**", "**/target/**"]

@@ -1,0 +1,49 @@
+name: Kimchi's vectors
+description: >
+  Kimchi's runs at the commit in tools/kimchi-vectors/KIMCHI_REV, as the
+  vectors the regression tests read: restored from the cache when the tool,
+  the commit, the recipe and our proof dump are unchanged, generated
+  otherwise.
+runs:
+  using: composite
+  steps:
+    - name: Restore the vectors
+      id: vectors
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          crates/snark/kimchi/tests/vectors/kimchi_*.txt
+          crates/gadgets/kimchi/tests/vectors/kimchi_*.txt
+        key: >-
+          kimchi-vectors-${{ hashFiles('tools/kimchi-vectors/KIMCHI_REV',
+          'tools/kimchi-vectors/Cargo.toml', 'tools/kimchi-vectors/Cargo.lock',
+          'tools/kimchi-vectors/src/**', 'Makefile',
+          'crates/snark/kimchi/tests/vectors/arrabbiata_proofs.txt') }}
+    - name: Restore the tool's build
+      if: steps.vectors.outputs.cache-hit != 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry
+          tools/kimchi-vectors/target
+        key: >-
+          kimchi-tool-${{ hashFiles('tools/kimchi-vectors/KIMCHI_REV',
+          'tools/kimchi-vectors/Cargo.lock', 'tools/kimchi-vectors/src/**') }}
+        restore-keys: kimchi-tool-
+    - name: Generate the vectors from Kimchi
+      if: steps.vectors.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        rustup toolchain install stable --profile minimal
+        RUSTUP_TOOLCHAIN=stable make kimchi-vectors
+    - name: Copy the vectors out of the tree
+      shell: bash
+      # cargo-mutants copies the tree without its ignored files: its copies
+      # read the vectors from here (`KIMCHI_VECTORS`, set by the steps that
+      # run it).
+      env:
+        DIR: ${{ runner.temp }}/kimchi-vectors
+      run: |
+        mkdir -p "$DIR"
+        cp crates/snark/kimchi/tests/vectors/kimchi_*.txt \
+          crates/gadgets/kimchi/tests/vectors/kimchi_*.txt "$DIR"

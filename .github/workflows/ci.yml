@@ -49,8 +49,27 @@ jobs:
       - name: Clippy
         run: make lint
 
+  kimchi-generate:
+    name: Kimchi's vectors (o1-labs/proof-systems at KIMCHI_REV)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Kimchi's vectors
+        uses: ./.github/actions/kimchi-vectors
+      - name: Upload the vectors
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kimchi-vectors
+          path: |
+            crates/snark/kimchi/tests/vectors/kimchi_*.txt
+            crates/gadgets/kimchi/tests/vectors/kimchi_*.txt
+          if-no-files-found: error
+
   test:
     name: Test (${{ matrix.toolchain }})
+    needs: kimchi-generate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -62,6 +81,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Kimchi's vectors
+        uses: ./.github/actions/kimchi-vectors
       - name: Install toolchain
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -69,12 +90,15 @@ jobs:
         run: make test
 
   kimchi-vectors:
-    name: Kimchi regression (committed runs)
+    name: Kimchi regression (Kimchi's runs at KIMCHI_REV)
+    needs: kimchi-generate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Kimchi's vectors
+        uses: ./.github/actions/kimchi-vectors
       - name: Install toolchain
         run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

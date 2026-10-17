@@ -1,11 +1,13 @@
 //! Kimchi's prover against Kimchi, round by round: Kimchi's generic test
-//! circuit with five public inputs, proved by the `prover` tool of the
-//! Kimchi figures notes with SplitMix64(7), unchunked and in chunks of 16
+//! circuit with five public inputs, proved by the `prover` tool of
+//! `tools/kimchi-vectors` with SplitMix64(7), unchunked and in chunks of 16
 //! rows (`vectors/kimchi_prover.txt`). The tests rebuild the circuit and
 //! the witness from the vectors, run our rounds on the same stream, and
 //! compare each value the round produces.
 
-use std::collections::BTreeMap;
+mod kimchi_runs;
+
+use std::{collections::BTreeMap, sync::LazyLock};
 
 use arrabbiata_curve::{Affine, Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
@@ -33,7 +35,7 @@ use arrabbiata_reduction::{Reduction, Relation, laws};
 use blake2::{Blake2b512, Digest};
 
 /// Kimchi's output.
-const VECTORS: &str = include_str!("vectors/kimchi_prover.txt");
+static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_prover.txt"));
 
 /// The circuits of the tool, their chunk sizes and public inputs: Kimchi's
 /// generic test circuit unchunked and in chunks of 16 rows, one block of
@@ -787,7 +789,7 @@ fn tampered_proofs_are_refused() {
 }
 
 /// Our proofs, in the format of the vectors, for Kimchi's verifier (the
-/// `verify_ours` tool of the Kimchi figures notes).
+/// `prover` tool of `tools/kimchi-vectors`).
 const OURS: &str = include_str!("vectors/arrabbiata_proofs.txt");
 
 /// The lines of our proof of `name`.
@@ -928,7 +930,8 @@ fn our_proofs_verify_and_are_the_committed_ones() {
 /// `arrabbiata_proofs.txt`): the Blake2b512 digest of the file it read,
 /// then, per circuit, its verdict on our proof, on our proof with `z1 + 1`,
 /// and on its own.
-const KIMCHI_ON_OURS: &str = include_str!("vectors/kimchi_verifies_arrabbiata.txt");
+static KIMCHI_ON_OURS: LazyLock<String> =
+    LazyLock::new(|| kimchi_runs::read("kimchi_verifies_arrabbiata.txt"));
 
 #[test]
 fn kimchi_verifies_our_proofs() {

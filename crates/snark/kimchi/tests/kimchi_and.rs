@@ -4,6 +4,7 @@
 //! same test (`gate_tests/`).
 
 mod gate_tests;
+mod kimchi_runs;
 
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_kimchi::{

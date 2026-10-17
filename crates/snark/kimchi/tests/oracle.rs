@@ -1,5 +1,5 @@
 //! Kimchi's Fiat-Shamir against Kimchi: the same scripts as the `oracles`
-//! tool of the Kimchi figures notes (proof-systems `9227444890`) produce
+//! tool of `tools/kimchi-vectors` (proof-systems `9227444890`) produce
 //! the same values (`vectors/kimchi_oracles.txt`):
 //!
 //! - the base-field sponge over Vesta's base field: points absorbed, 128-bit
@@ -9,6 +9,10 @@
 //! - the endomorphism map of 128-bit challenges, with Vesta's `lambda`,
 //!   which is Kimchi's `endo_r`.
 
+mod kimchi_runs;
+
+use std::sync::LazyLock;
+
 use arrabbiata_curve::{Affine, Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_kimchi::oracle::{FqSponge, FrSponge, ScalarChallenge};
@@ -16,7 +20,7 @@ use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 
 /// Kimchi's output.
-const VECTORS: &str = include_str!("vectors/kimchi_oracles.txt");
+static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_oracles.txt"));
 
 /// A field element from 64 hex digits, big-endian.
 fn element<F: PrimeField>(hex: &str) -> F {
