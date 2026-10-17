@@ -742,6 +742,7 @@ fn main() {
     }
     run("generic", generic().into(), None, false);
     run("chunked", generic().into(), Some(16), false);
+    run("wide", generic().into(), Some(64), false);
     run("gadgets", gadgets().into(), None, false);
     run("recursion", generic().into(), None, true);
     run("xor", xor_circuit(), None, false);

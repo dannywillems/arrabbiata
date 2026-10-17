@@ -52,7 +52,7 @@ use crate::{
         unnormalized_lagrange,
     },
     rng::Sampler,
-    srs::{PolyComm, Srs},
+    srs::{PolyComm, Srs, num_chunks},
     transcript::{self, Base, Message, Scalar},
     verifier_index::VerifierIndex,
 };
@@ -139,20 +139,14 @@ where
 }
 
 /// The chunks `n / max_poly_size`, at least one.
-fn chunks<C: Curve>(index: &VerifierIndex<C>) -> usize {
-    if index.domain_size < index.max_poly_size {
-        1
-    } else {
-        index.domain_size / index.max_poly_size
-    }
+const fn chunks<C: Curve>(index: &VerifierIndex<C>) -> usize {
+    num_chunks(index.domain_size, index.max_poly_size)
 }
 
-/// `sum_i y^i c_i`, for commitments.
+/// `sum_i y^i c_i`, for commitments: [`arrabbiata_poly::combine`] in the group, the image of
+/// the chunks' linearization under the commitment.
 fn chunk_commitment<C: Curve>(c: &PolyComm<C>, y: C::Scalar) -> Projective<C> {
-    c.chunks
-        .iter()
-        .rev()
-        .fold(Projective::identity(), |acc, p| acc * y + *p)
+    arrabbiata_poly::combine(&c.chunks, y).unwrap_or_else(Projective::identity)
 }
 
 /// The two evaluations of `e`.
@@ -267,7 +261,7 @@ where
             Some(p) => p,
             None => unreachable!("one value per row"),
         };
-        srs.mask_fixed(srs.commit_non_hiding(coefficients.coefficients(), n))
+        srs.mask_fixed(srs.commit_non_hiding(coefficients.coefficients(), num_chunks))
     };
 
     // The base-field sponge's part of the PIOP, step by step as the type

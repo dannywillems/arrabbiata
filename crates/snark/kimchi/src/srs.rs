@@ -30,6 +30,7 @@ use alloc::vec::Vec;
 
 use arrabbiata_curve::{Affine, Curve, Projective, msm};
 use arrabbiata_field::{Field, PrimeField, Sqrt};
+use arrabbiata_poly::{Chunking, UniPoly};
 use blake2::{Blake2b512, Digest};
 
 /// The bytes read from each hash.
@@ -221,27 +222,31 @@ where
         self.g.len()
     }
 
-    /// The commitment to the polynomial with `coefficients`, padded or not,
-    /// in `ceil(rows / depth)` chunks (at least one): Kimchi sizes the
-    /// chunks by the domain, not by the degree, so a polynomial of `rows`
-    /// evaluations always has as many chunks.
+    /// The commitment to the polynomial with `coefficients` in exactly
+    /// `chunks` chunks of [`Srs::max_poly_size`] coefficients, a chunk the
+    /// MSM of its coefficients (Kimchi's `commit_non_hiding`): the chunking
+    /// of `arrabbiata_poly::chunk` with each chunk mapped by the linear map
+    /// `<., g>`. The count is the protocol's (by the domain, see
+    /// [`num_chunks`]); a polynomial of smaller degree still has its zero
+    /// chunks, each the identity.
     ///
     /// # Panics
     ///
-    /// If there are more coefficients than `rows`, or the SRS is empty.
+    /// If the SRS is empty, `chunks` is zero, or the polynomial does not fit
+    /// in `chunks` chunks.
     #[must_use]
-    pub fn commit_non_hiding(&self, coefficients: &[C::Scalar], rows: usize) -> PolyComm<C> {
-        assert!(coefficients.len() <= rows, "more coefficients than rows");
-        let depth = self.max_poly_size();
-        assert!(depth > 0, "an empty SRS commits to nothing");
-        let chunks = rows.div_ceil(depth).max(1);
+    pub fn commit_non_hiding(&self, coefficients: &[C::Scalar], chunks: usize) -> PolyComm<C> {
+        let Some(chunking) = Chunking::new(self.max_poly_size(), chunks) else {
+            panic!("an empty SRS, or no chunk, commits to nothing")
+        };
+        let polynomial = UniPoly::new(coefficients.to_vec());
+        let Some(split) = chunking.split(&polynomial) else {
+            panic!("more coefficients than {chunks} chunks hold")
+        };
         PolyComm {
-            chunks: (0..chunks)
-                .map(|k| {
-                    let start = (k * depth).min(coefficients.len());
-                    let end = ((k + 1) * depth).min(coefficients.len());
-                    msm(&self.g, &coefficients[start..end])
-                })
+            chunks: split
+                .iter()
+                .map(|chunk| msm(&self.g, chunk.coefficients()))
                 .collect(),
         }
     }
@@ -252,5 +257,17 @@ where
         PolyComm {
             chunks: commitment.chunks.into_iter().map(|c| c + self.h).collect(),
         }
+    }
+}
+
+/// The chunks of a polynomial of a domain of `domain_size` rows on a key of
+/// `max_poly_size` generators: `domain_size / max_poly_size`, at least one
+/// (Kimchi's count, by the domain and not by the degree).
+#[must_use]
+pub const fn num_chunks(domain_size: usize, max_poly_size: usize) -> usize {
+    if domain_size < max_poly_size {
+        1
+    } else {
+        domain_size / max_poly_size
     }
 }

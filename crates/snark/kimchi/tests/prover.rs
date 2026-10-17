@@ -38,7 +38,8 @@ use blake2::{Blake2b512, Digest};
 static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_prover.txt"));
 
 /// The circuits of the tool, their chunk sizes and public inputs: Kimchi's
-/// generic test circuit unchunked and in chunks of 16 rows, one block of
+/// generic test circuit unchunked, in chunks of 16 rows, and on a key of 64
+/// generators, wider than its domain (one chunk, padded), one block of
 /// each gate without lookups (Poseidon, CompleteAdd, VarBaseMul, EndoMul,
 /// EndoMulScalar), and the generic circuit carrying one previous
 /// accumulator (as Kimchi's `test_recursion`); then four circuits with
@@ -46,9 +47,10 @@ static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_pr
 /// tables, over two runtime tables, a 64-bit word rotated left and right
 /// (Rot64), and a foreign-field multiplication modulo secp256k1's base
 /// field with all its external checks (ForeignFieldMul).
-const CIRCUITS: [(&str, Option<usize>, usize); 10] = [
+const CIRCUITS: [(&str, Option<usize>, usize); 11] = [
     ("generic", None, 5),
     ("chunked", Some(16), 5),
+    ("wide", Some(64), 5),
     ("gadgets", None, 0),
     ("recursion", None, 5),
     ("xor", None, 0),
@@ -58,6 +60,14 @@ const CIRCUITS: [(&str, Option<usize>, usize); 10] = [
     ("rot", None, 0),
     ("ffmul", None, 0),
 ];
+
+/// The entry of [`CIRCUITS`] named `name`.
+fn named(name: &str) -> (&'static str, Option<usize>, usize) {
+    match CIRCUITS.iter().find(|(n, _, _)| *n == name) {
+        Some(c) => *c,
+        None => panic!("no circuit {name}"),
+    }
+}
 
 /// Values from `k x1 ... xk`.
 fn values_of(words: &[&str]) -> Vec<Fp> {
@@ -728,7 +738,7 @@ fn kimchis_proofs_verify() {
 #[test]
 fn tampered_proofs_are_refused() {
     let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    let (name, max_poly_size, public) = CIRCUITS[0];
+    let (name, max_poly_size, public) = named("generic");
     let (index, _) = index(name, max_poly_size, public);
     let base = KimchiSponge::new(vesta_base());
     let scalar = KimchiSponge::new(pallas_base());
@@ -1008,7 +1018,7 @@ fn lookup_lines(e: &ProofEvaluations<Fp>) -> Vec<(String, String)> {
 #[test]
 fn tampered_lookup_proofs_are_refused() {
     let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    let (name, max_poly_size, public) = CIRCUITS[7];
+    let (name, max_poly_size, public) = named("runtime");
     assert_eq!(name, "runtime");
     let (index, _) = index(name, max_poly_size, public);
     let base = KimchiSponge::new(vesta_base());
@@ -1116,7 +1126,12 @@ fn kimchis_proofs_reduce_to_decided_accumulators() {
 #[test]
 fn the_reduction_is_complete_and_its_composites_verify() {
     let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size, public) in [CIRCUITS[0], CIRCUITS[3], CIRCUITS[6], CIRCUITS[7]] {
+    for (name, max_poly_size, public) in [
+        named("generic"),
+        named("recursion"),
+        named("lookup"),
+        named("runtime"),
+    ] {
         let (index, _) = index(name, max_poly_size, public);
         let base = KimchiSponge::new(vesta_base());
         let scalar = KimchiSponge::new(pallas_base());
@@ -1149,7 +1164,7 @@ fn the_reduction_is_complete_and_its_composites_verify() {
 fn two_proofs_fold_into_one_decided_accumulator() {
     // Each(KimchiSuccinct) ; Fold, then one Decide for both proofs.
     let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    let (name, max_poly_size, public) = CIRCUITS[0];
+    let (name, max_poly_size, public) = named("generic");
     let (index, _) = index(name, max_poly_size, public);
     let base = KimchiSponge::new(vesta_base());
     let scalar = KimchiSponge::new(pallas_base());
@@ -1171,7 +1186,7 @@ fn two_proofs_fold_into_one_decided_accumulator() {
 #[test]
 fn a_false_previous_accumulator_is_caught() {
     let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    let (name, max_poly_size, public) = CIRCUITS[3];
+    let (name, max_poly_size, public) = named("recursion");
     assert_eq!(name, "recursion");
     let (index, _) = index(name, max_poly_size, public);
     let base = KimchiSponge::new(vesta_base());
@@ -1207,7 +1222,7 @@ fn merged_and_separate_folding_decide_the_same_statements() {
     let base = KimchiSponge::new(vesta_base());
     let scalar = KimchiSponge::new(pallas_base());
 
-    let (merged_name, max_poly_size, public) = CIRCUITS[3];
+    let (merged_name, max_poly_size, public) = named("recursion");
     let (merged_index, _) = index(merged_name, max_poly_size, public);
     let merged_ipa = ipa_of(&merged_index.srs, scalar.clone());
     let merged_relation = Satisfied::new(&merged_index, &gates, (&base, &scalar), &merged_ipa);
@@ -1215,7 +1230,7 @@ fn merged_and_separate_folding_decide_the_same_statements() {
     let previous = merged_statement.prev_challenges.clone();
     assert!(!previous.is_empty());
 
-    let (separate_name, max_poly_size, public) = CIRCUITS[0];
+    let (separate_name, max_poly_size, public) = named("generic");
     let (separate_index, _) = index(separate_name, max_poly_size, public);
     let separate_ipa = ipa_of(&separate_index.srs, scalar.clone());
     let separate_relation =

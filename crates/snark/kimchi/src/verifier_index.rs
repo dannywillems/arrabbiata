@@ -26,7 +26,7 @@ use crate::{
     lookup::{LookupInfo, LookupPattern},
     oracle::FqSponge,
     permutation::PERMUTS,
-    srs::{PolyComm, Srs},
+    srs::{PolyComm, Srs, num_chunks},
 };
 
 /// The verifier index of a circuit over the scalar field of `C`.
@@ -116,19 +116,19 @@ where
         C::Scalar: PrimeField,
     {
         let d1 = cs.domain.d1;
-        let rows = d1.size();
+        let chunks = num_chunks(d1.size(), srs.max_poly_size());
         let commit = |column: &[C::Scalar]| {
             let polynomial = match d1.interpolate(column) {
                 Some(p) => p,
                 None => unreachable!("every column has one value per row"),
             };
-            srs.commit_non_hiding(polynomial.coefficients(), rows)
+            srs.commit_non_hiding(polynomial.coefficients(), chunks)
         };
         let fixed = |typ: GateType| srs.mask_fixed(commit(&cs.selector(typ)));
         let optional = |typ: GateType| cs.uses(typ).then(|| commit(&cs.selector(typ)));
         let sigmas = cs.sigmas();
         Self {
-            domain_size: rows,
+            domain_size: d1.size(),
             max_poly_size: srs.max_poly_size(),
             zk_rows: cs.zk_rows,
             public: cs.public,

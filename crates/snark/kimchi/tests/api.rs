@@ -320,20 +320,29 @@ fn srs_and_commitments() {
     assert_eq!(srs.max_poly_size(), 4);
     assert_eq!(srs.g.len(), 4);
     assert!(!srs.g.contains(&srs.h));
-    // Six coefficients over 8 rows: two chunks, the second the high two.
+    // Six coefficients in two chunks of four, the second the high two.
     let coefficients: Vec<Fp> = (1..=6).map(Fp::from_u64).collect();
-    let rows = 8;
-    let c: PolyComm<Vesta> = srs.commit_non_hiding(&coefficients, rows);
+    let chunks = 2;
+    let c: PolyComm<Vesta> = srs.commit_non_hiding(&coefficients, chunks);
     assert_eq!(c.chunks.len(), 2);
     assert_eq!(
         c.chunks[1],
         srs.g[0] * Fp::from_u64(5) + srs.g[1] * Fp::from_u64(6)
     );
-    // A zero polynomial still has one chunk per block of rows.
-    let zero = srs.commit_non_hiding(&[], rows);
+    // The count is the protocol's: a zero polynomial still has its chunks.
+    let zero = srs.commit_non_hiding(&[], chunks);
     assert!(zero.chunks.iter().all(Projective::is_identity));
     let masked = srs.mask_fixed(zero);
     assert_eq!(masked.chunks, vec![srs.h, srs.h]);
+}
+
+#[test]
+fn srs_num_chunks() {
+    // By the domain: n / m chunks, one when the key is wider than the
+    // domain.
+    assert_eq!(arrabbiata_kimchi::srs::num_chunks(32, 16), 2);
+    assert_eq!(arrabbiata_kimchi::srs::num_chunks(32, 32), 1);
+    assert_eq!(arrabbiata_kimchi::srs::num_chunks(32, 64), 1);
 }
 
 #[test]
@@ -688,7 +697,7 @@ fn prove_runs_every_round() {
     // A previous accumulator is carried, and changes the transcript.
     let chals = vec![Fp::from_u64(2), Fp::from_u64(3), Fp::from_u64(5)];
     let b = arrabbiata_kimchi::srs::Srs::<Vesta>::create(8)
-        .commit_non_hiding(&arrabbiata_ipa::b_poly_coefficients(&chals), 8);
+        .commit_non_hiding(&arrabbiata_ipa::b_poly_coefficients(&chals), 1);
     let previous = arrabbiata_ipa::RecursionChallenge {
         chals,
         comm: b.chunks[0],

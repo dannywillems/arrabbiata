@@ -125,7 +125,7 @@ use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_ipa::{
     RecursionChallenge, Statement, b_poly_coefficients, evaluation_vector, generic::Witness,
 };
-use arrabbiata_poly::UniPoly;
+use arrabbiata_poly::{Chunking, UniPoly};
 use arrabbiata_transcript::Transcript;
 
 use crate::{
@@ -136,7 +136,7 @@ use crate::{
     oracle::{FqSponge, FrSponge, ScalarChallenge},
     permutation::PERMUTS,
     rng::Sampler,
-    srs::{GroupMap, PolyComm, Srs},
+    srs::{GroupMap, PolyComm, Srs, num_chunks},
     transcript::{
         self, AfterAlpha, AfterGamma, Base, FqTape, Lookups, Message, Scalar, WithLookup,
     },
@@ -224,9 +224,7 @@ where
     /// least one.
     #[must_use]
     pub fn num_chunks(&self) -> usize {
-        let n = self.cs.domain.d1.size();
-        let m = self.srs.max_poly_size();
-        if n < m { 1 } else { n / m }
+        num_chunks(self.cs.domain.d1.size(), self.srs.max_poly_size())
     }
 }
 
@@ -524,7 +522,7 @@ where
     };
     index
         .srs
-        .commit_non_hiding(polynomial.coefficients(), d1.size())
+        .commit_non_hiding(polynomial.coefficients(), index.num_chunks())
 }
 
 /// `commitment` hidden by `h`, one blinder per chunk.
@@ -904,7 +902,7 @@ where
     let t_blinders: Vec<C::Scalar> = (0..chunks).map(|_| rng.sample()).collect();
     let t_comm = hide(
         index,
-        index.srs.commit_non_hiding(t.coefficients(), 7 * n),
+        index.srs.commit_non_hiding(t.coefficients(), chunks),
         &t_blinders,
     );
     let tape = tape.send(&Message::new(t_comm.clone()));
@@ -1029,40 +1027,36 @@ const OPTIONAL: [GateType; 6] = [
     GateType::Rot64,
 ];
 
-/// The chunks of `coefficients`, `num_chunks` of `size` (more if the
-/// polynomial is longer), evaluated at `x`.
+/// The value at `x` of each of the `num_chunks` chunks of `size`
+/// coefficients of `coefficients` ([`Chunking::evaluate`]).
 pub(crate) fn chunk_evaluations<F: Field>(
     coefficients: &[F],
     num_chunks: usize,
     size: usize,
     x: F,
 ) -> Vec<F> {
-    let mut values: Vec<F> = coefficients
-        .chunks(size)
-        .map(|chunk| UniPoly::new(chunk.to_vec()).evaluate(x))
-        .collect();
-    values.resize(values.len().max(num_chunks), F::ZERO);
-    values
+    let polynomial = UniPoly::new(coefficients.to_vec());
+    match Chunking::new(size, num_chunks).and_then(|c| c.evaluate(&polynomial, x)) {
+        Some(values) => values,
+        None => unreachable!("a column polynomial fits its chunks"),
+    }
 }
 
 /// `sum_i c_i y^i`: chunk evaluations combined into the value at the point
-/// (`y` the point to the chunk size).
+/// (`y` the point to the chunk size), [`arrabbiata_poly::combine`].
 pub(crate) fn combine<F: Field>(chunks: &[F], y: F) -> F {
-    chunks.iter().rev().fold(F::ZERO, |acc, c| acc * y + *c)
+    arrabbiata_poly::combine(chunks, y).unwrap_or(F::ZERO)
 }
 
 /// The chunks of `coefficients` summed with powers of `y`: a polynomial of
-/// degree below `size` (Kimchi's `linearize`).
-fn linearize<F: Field>(coefficients: &[F], size: usize, y: F) -> UniPoly<F> {
-    let mut sum = alloc::vec![F::ZERO; size];
-    let mut scale = F::ONE;
-    for chunk in coefficients.chunks(size) {
-        for (s, c) in sum.iter_mut().zip(chunk) {
-            *s = *s + scale * *c;
-        }
-        scale = scale * y;
+/// degree below the chunk size (Kimchi's `linearize`,
+/// [`Chunking::linearize`]).
+fn linearize<F: Field>(coefficients: &[F], chunking: Chunking, y: F) -> UniPoly<F> {
+    let polynomial = UniPoly::new(coefficients.to_vec());
+    match chunking.linearize(&polynomial, y) {
+        Some(p) => p,
+        None => unreachable!("the polynomial fits its chunks"),
     }
-    UniPoly::new(sum)
 }
 
 /// The state after the evaluation round.
@@ -1191,8 +1185,12 @@ where
     let scalar = -scalar;
     let f = interpolate(&sigmas[PERMUTS - 1]).scale(scalar);
     let zeta_n_minus_1 = zeta.pow(n as u64) - C::Scalar::ONE;
-    let f_lin = linearize(f.coefficients(), m, zeta_m);
-    let t_lin = linearize(previous.t.coefficients(), m, zeta_m);
+    let chunked = |count| match Chunking::new(m, count) {
+        Some(c) => c,
+        None => unreachable!("a key of at least one generator, a chunk at least"),
+    };
+    let f_lin = linearize(f.coefficients(), chunked(num_chunks), zeta_m);
+    let t_lin = linearize(previous.t.coefficients(), chunked(7 * num_chunks), zeta_m);
     let ft = &f_lin - &t_lin.scale(zeta_n_minus_1);
     let blinding_t = combine(&previous.t_blinders, zeta_m);
     let blinding_ft = -(zeta_n_minus_1 * blinding_t);
