@@ -379,6 +379,9 @@ struct Frame {
 pub struct Builder<F> {
     layout: Layout,
     with_witness: bool,
+    /// Whether broken constraints and reads are let through (the witness of
+    /// [`assign`]), rather than reported.
+    permissive: bool,
     cursor: usize,
     frames: Vec<Frame>,
     instances: usize,
@@ -403,6 +406,7 @@ where
         Self {
             layout,
             with_witness,
+            permissive: false,
             cursor: 0,
             frames: Vec::new(),
             instances: 0,
@@ -421,6 +425,10 @@ where
     }
 
     fn fail(&mut self, error: Error) {
+        let broken = matches!(error, Error::Unsatisfied { .. } | Error::NotInTable { .. });
+        if self.permissive && broken {
+            return;
+        }
         if self.error.is_none() {
             self.error = Some(error);
         }
@@ -980,6 +988,35 @@ where
     G: TypedGadget<F>,
 {
     let mut builder = Builder::new(layout, true);
+    let wires = inputs::<F, G::Input>(Some(input));
+    let output = builder.call(gadget, wires);
+    let values: Vec<F> = G::Output::flatten(&output)
+        .iter()
+        .map(|w| w.value.unwrap_or(F::ZERO))
+        .collect();
+    let compiled = builder.finish()?;
+    Ok((compiled, G::Output::unflatten(&values)))
+}
+
+/// The circuit of `gadget` and the witness it computes on `input`, whether
+/// or not the witness satisfies the circuit: a witness generator's output
+/// (Kimchi's `create_*_witness`), for a test that checks a broken one.
+/// [`Compiled::check`] then names what it breaks.
+///
+/// # Errors
+///
+/// As [`witness`], except [`Error::Unsatisfied`] and [`Error::NotInTable`].
+pub fn assign<F, G, const N: usize, const D: usize>(
+    gadget: &G,
+    layout: Layout,
+    input: &Of<G::Input, F>,
+) -> Result<Witnessed<F, G, N, D>, Error>
+where
+    F: Field,
+    G: TypedGadget<F>,
+{
+    let mut builder = Builder::new(layout, true);
+    builder.permissive = true;
     let wires = inputs::<F, G::Input>(Some(input));
     let output = builder.call(gadget, wires);
     let values: Vec<F> = G::Output::flatten(&output)

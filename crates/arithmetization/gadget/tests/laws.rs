@@ -18,7 +18,7 @@
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{
     Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, Shape, TypedGadget, Violation,
-    circuit, evaluate, figures, gates, witness,
+    assign, circuit, evaluate, figures, gates, witness,
 };
 use arrabbiata_pasta::Fq as F;
 use proptest::prelude::*;
@@ -110,6 +110,16 @@ proptest! {
         prop_assert_eq!(output, expected);
         prop_assert_eq!(evaluate(&gadget, LAYOUT, &x).unwrap(), expected);
         prop_assert_eq!(compiled.public, vec![expected]);
+    }
+
+    /// `assign` is `witness` on a witness that holds, and the gadget's own
+    /// computation, unchecked, on one that does not.
+    #[test]
+    fn assign_is_the_unchecked_witness(x in arb_f(), c in prop::array::uniform3(arb_f())) {
+        let gadget = three(c);
+        let checked = witness::<F, _, N, D>(&gadget, LAYOUT, &x).unwrap();
+        let assigned = assign::<F, _, N, D>(&gadget, LAYOUT, &x).unwrap();
+        prop_assert_eq!(checked, assigned);
     }
 
     /// Changing any cell the gadget wrote breaks the circuit.
