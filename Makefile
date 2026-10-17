@@ -50,6 +50,11 @@ lint-beta: ## Run clippy with the beta toolchain
 test: ## Run all tests, including doctests and compile-fail examples
 	cargo test --workspace
 
+.PHONY: test-kimchi-vectors
+test-kimchi-vectors: ## Regression tests against Kimchi's committed runs
+	cargo test -p arrabbiata-kimchi -p arrabbiata-kimchi-gadgets \
+		-p arrabbiata-ipa
+
 .PHONY: test-curve
 test-curve: ## Curve laws on CURVE (pallas, vesta, bn254_g{1,2}, grumpkin)
 	cargo test -p arrabbiata-curve --test laws -- --exact $(CURVE)
