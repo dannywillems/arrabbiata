@@ -36,6 +36,7 @@ pub mod extension;
 pub mod goldilocks;
 pub mod laws;
 pub mod montgomery;
+pub mod rng;
 pub mod vector;
 
 pub use goldilocks::Goldilocks;

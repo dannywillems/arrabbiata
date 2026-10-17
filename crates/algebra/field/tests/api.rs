@@ -8,6 +8,7 @@ use arrabbiata_field::{
     inner_product, laws,
     montgomery::{MontField, MontgomeryConfig},
     powers,
+    rng::{Arkworks, RandomSource, Sampler, SplitMix64},
 };
 
 #[test]
@@ -568,4 +569,47 @@ fn vector_inner_product() {
     let a = [F::new(1), F::new(2)];
     let b = [F::new(3), F::new(4), F::new(5)];
     assert_eq!(inner_product(&a, &b), F::new(11));
+}
+
+/// The zero stream.
+struct Zeros;
+
+impl RandomSource for Zeros {
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+}
+
+#[test]
+fn rng_random_source() {
+    assert_eq!(Zeros.next_u64(), 0);
+}
+
+#[test]
+fn rng_sampler() {
+    // A sampler is a stream of field elements.
+    struct Ones;
+    impl Sampler<F> for Ones {
+        fn sample(&mut self) -> F {
+            F::ONE
+        }
+    }
+    assert_eq!(Ones.sample(), F::ONE);
+}
+
+#[test]
+fn rng_split_mix_64() {
+    // The first output of SplitMix64(0) (Steele, Lea, Flood).
+    assert_eq!(SplitMix64(0).next_u64(), 0xe220_a839_7b1d_cdaf);
+}
+
+#[test]
+fn rng_arkworks() {
+    // A zero stream is the zero element; two samples differ.
+    let zero: F = Arkworks(Zeros).sample();
+    assert_eq!(zero, F::ZERO);
+    let mut rng = Arkworks(SplitMix64(1));
+    let a: F = rng.sample();
+    let b: F = rng.sample();
+    assert_ne!(a, b);
 }
