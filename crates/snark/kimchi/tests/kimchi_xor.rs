@@ -223,7 +223,8 @@ fn test_xor_finalization() {
     assert_eq!(debug(&result), case.verdict("prove"));
 }
 
-/// Unused import guard: the half-gate the XOR's last row is made of.
+/// The XOR's last row: the zero constant, its three first cells on one
+/// copy cycle (in whatever order the derivation writes it).
 #[test]
 fn the_last_row_is_a_zero_constant() {
     let (_, gates) = CircuitGate::<Fp>::create_xor_gadget(0, 16);
@@ -232,5 +233,23 @@ fn the_last_row_is_a_zero_constant() {
         GenericGateSpec::Spec(GenericSpec::Const(Fp::ZERO)),
         None,
     );
-    assert_eq!(gates[1], expected);
+    assert_eq!(gates[1].typ, expected.typ);
+    let trimmed = |c: &[Fp]| {
+        let mut c = c.to_vec();
+        while c.last() == Some(&Fp::ZERO) {
+            c.pop();
+        }
+        c
+    };
+    assert_eq!(trimmed(&gates[1].coeffs), trimmed(&expected.coeffs));
+    let start = Wire { row: 1, col: 0 };
+    let mut cycle = vec![start];
+    let mut at = gates[1].wires[0];
+    while at != start {
+        cycle.push(at);
+        at = gates[at.row].wires[at.col];
+    }
+    cycle.sort();
+    let expected_cycle: Vec<Wire> = Wire::for_row(1)[..3].to_vec();
+    assert_eq!(cycle, expected_cycle);
 }

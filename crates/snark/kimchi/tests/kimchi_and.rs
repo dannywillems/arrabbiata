@@ -195,7 +195,11 @@ fn test_serialization_regression() {
         .collect();
     let witness = create_and_witness(in1, in2, 8).unwrap();
     assert_eq!(rows(&witness), case.witnesses[0]);
-    let proof = gate_tests::prove_replayed(gates(8), witness, words);
+    // Our rows are Kimchi's up to the order in each copy cycle; the proof,
+    // which reads that order through the sigmas, is made on Kimchi's.
+    gate_tests::assert_kimchi_rows(&gates::<Fp>(8), &case.gates[0]);
+    let proof =
+        gate_tests::prove_replayed(gate_tests::kimchi_gates(&case.gates[0]), witness, words);
     let mut expected = case.proof.clone();
     expected.sort();
     assert_eq!(gate_tests::proof_lines("serialization", &proof), expected);

@@ -6,10 +6,12 @@
 
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
+
 use arrabbiata_curve::{Projective, glv::Glv};
 use arrabbiata_field::{PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_kimchi::{
-    constraints::{COLUMNS, CircuitGate, ConstraintSystem},
+    constraints::{COLUMNS, CircuitGate, ConstraintSystem, GateType, Wire},
     gates::{Gates, KimchiGates},
     lookup::LookupPattern,
     prover::{PointEvaluations, ProverIndex, ProverProof, prove},
@@ -35,6 +37,19 @@ pub struct Case {
     pub verdicts: Vec<(String, String)>,
     /// Kimchi's proof, in the prover tool's lines.
     pub proof: Vec<String>,
+    /// Kimchi's rows, each block as printed, padding left out.
+    pub gates: Vec<Vec<KimchiRow>>,
+}
+
+/// One of Kimchi's rows as the tool prints it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KimchiRow {
+    /// The gate type, as `Debug` prints it.
+    pub typ: String,
+    /// The wires, `(row, col)`.
+    pub wires: Vec<(usize, usize)>,
+    /// The coefficients, in hex.
+    pub coeffs: Vec<String>,
 }
 
 impl Case {
@@ -101,6 +116,27 @@ pub fn case(name: &str) -> Case {
                 case.witnesses.push(witness);
             }
             Some("proof") => case.proof.push(line["proof ".len()..].to_string()),
+            Some("gates") => {
+                let count: usize = words.next().unwrap().parse().unwrap();
+                let block = (0..count)
+                    .map(|_| {
+                        let row: Vec<&str> = lines.next().unwrap().split_whitespace().collect();
+                        let wires = row[2..9]
+                            .iter()
+                            .map(|w| {
+                                let (r, c) = w.split_once(':').unwrap();
+                                (r.parse().unwrap(), c.parse().unwrap())
+                            })
+                            .collect();
+                        KimchiRow {
+                            typ: row[1].to_string(),
+                            wires,
+                            coeffs: row[10..].iter().map(|c| (*c).to_string()).collect(),
+                        }
+                    })
+                    .collect();
+                case.gates.push(block);
+            }
             Some("verdict") => {
                 let label = words.next().unwrap().to_string();
                 let rest = line.splitn(3, ' ').nth(2).unwrap_or("").to_string();
@@ -383,4 +419,107 @@ pub fn prove_replayed(
         &mut rng,
     )
     .unwrap()
+}
+
+/// The gate type `Debug` prints as `name`.
+pub fn gate_type(name: &str) -> GateType {
+    let all = [
+        GateType::Zero,
+        GateType::Generic,
+        GateType::Poseidon,
+        GateType::CompleteAdd,
+        GateType::VarBaseMul,
+        GateType::EndoMul,
+        GateType::EndoMulScalar,
+        GateType::Lookup,
+        GateType::RangeCheck0,
+        GateType::RangeCheck1,
+        GateType::ForeignFieldAdd,
+        GateType::ForeignFieldMul,
+        GateType::Xor16,
+        GateType::Rot64,
+    ];
+    *all.iter().find(|t| format!("{t:?}") == name).unwrap()
+}
+
+/// Kimchi's rows as ours, for a proof that must be Kimchi's bit for bit
+/// (the sigmas follow the order Kimchi's swaps leave in each cycle).
+pub fn kimchi_gates<F: PrimeField>(rows: &[KimchiRow]) -> Vec<CircuitGate<F>> {
+    rows.iter()
+        .map(|r| {
+            let wires = core::array::from_fn(|c| Wire {
+                row: r.wires[c].0,
+                col: r.wires[c].1,
+            });
+            CircuitGate::new(
+                gate_type(&r.typ),
+                wires,
+                r.coeffs.iter().map(|h| field(h)).collect(),
+            )
+        })
+        .collect()
+}
+
+/// The copy cycles of rows, as sorted sets of cells: what the wiring
+/// means, whatever order each cycle is written in.
+pub fn partition(wires: &[[(usize, usize); 7]]) -> Vec<Vec<(usize, usize)>> {
+    let mut seen = BTreeSet::new();
+    let mut cycles = Vec::new();
+    for (row, w) in wires.iter().enumerate() {
+        for (col, &first) in w.iter().enumerate() {
+            if !seen.insert((row, col)) {
+                continue;
+            }
+            let mut cycle = vec![(row, col)];
+            let mut at = first;
+            while at != (row, col) {
+                seen.insert(at);
+                cycle.push(at);
+                at = wires[at.0][at.1];
+            }
+            cycle.sort_unstable();
+            if cycle.len() > 1 {
+                cycles.push(cycle);
+            }
+        }
+    }
+    cycles.sort();
+    cycles
+}
+
+/// Our rows are Kimchi's: the same gate types and coefficients (trailing
+/// zeros aside), and the same copy cycles as sets of cells.
+pub fn assert_kimchi_rows<F: PrimeField>(ours: &[CircuitGate<F>], kimchi: &[KimchiRow]) {
+    assert!(
+        ours.len() >= kimchi.len(),
+        "{} rows, Kimchi has {}",
+        ours.len(),
+        kimchi.len()
+    );
+    let trim = |mut c: Vec<String>| {
+        let zero = hex(F::ZERO);
+        while c.last() == Some(&zero) {
+            c.pop();
+        }
+        c
+    };
+    for (row, (g, k)) in ours.iter().zip(kimchi).enumerate() {
+        assert_eq!(format!("{:?}", g.typ), k.typ, "row {row}");
+        let coeffs: Vec<String> = g.coeffs.iter().map(|c| hex(*c)).collect();
+        assert_eq!(
+            trim(coeffs),
+            trim(k.coeffs.clone()),
+            "coefficients of row {row}"
+        );
+    }
+    let n = kimchi.len();
+    let ours_wires: Vec<[(usize, usize); 7]> = ours[..n]
+        .iter()
+        .map(|g| core::array::from_fn(|c| (g.wires[c].row, g.wires[c].col)))
+        .collect();
+    let theirs: Vec<[(usize, usize); 7]> = kimchi
+        .iter()
+        .map(|k| core::array::from_fn(|c| k.wires[c]))
+        .collect();
+    assert_eq!(partition(&ours_wires), partition(&theirs), "copy cycles");
 }

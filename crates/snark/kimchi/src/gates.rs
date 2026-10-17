@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use arrabbiata_field::PrimeField;
 use arrabbiata_gadget::{Error, GateConstraints};
-use arrabbiata_kimchi_gadgets::harness::gate_kinds;
+use arrabbiata_kimchi_gadgets::harness::{NAMES, gate_kinds};
 use arrabbiata_poseidon::kimchi::KimchiPoseidon;
 
 use crate::constraints::GateType;
@@ -44,6 +44,17 @@ const TYPES: [(&str, GateType); 12] = [
     ("Xor16", GateType::Xor16),
     ("Rot64", GateType::Rot64),
 ];
+
+/// The Kimchi gate type of the gadget named `gadget` (`kimchi-xor16` is
+/// `Xor16`), by the harness's names; `kimchi-zero` is `Zero`.
+#[must_use]
+pub fn gate_type_of(gadget: &str) -> Option<GateType> {
+    if gadget == "kimchi-zero" {
+        return Some(GateType::Zero);
+    }
+    let kimchi = NAMES.iter().find(|(_, ours)| *ours == gadget)?.0;
+    TYPES.iter().find(|(n, _)| *n == kimchi).map(|(_, t)| *t)
+}
 
 /// Kimchi's gates over `F`.
 #[derive(Clone, Debug)]

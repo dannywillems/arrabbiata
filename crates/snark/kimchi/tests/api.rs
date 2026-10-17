@@ -1367,7 +1367,15 @@ fn polynomials_xor_extend_xor_gadget() {
     let mut gates = Vec::new();
     let next = CircuitGate::<Fp>::extend_xor_gadget(&mut gates, 16);
     assert_eq!(next, 2);
-    assert_eq!(gates[1].wires[0], Wire { row: 1, col: 2 });
+    let mut cycle = vec![Wire { row: 1, col: 0 }];
+    let mut at = gates[1].wires[0];
+    while at != cycle[0] {
+        cycle.push(at);
+        at = gates[at.row].wires[at.col];
+    }
+    cycle.sort();
+    let expected: Vec<Wire> = (0..3).map(|col| Wire { row: 1, col }).collect();
+    assert_eq!(cycle, expected);
 }
 
 #[test]

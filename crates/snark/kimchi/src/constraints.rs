@@ -373,6 +373,16 @@ pub trait Connect {
     /// If a row is out of range or a column is not below [`PERMUTS`].
     fn connect_cell_pair(&mut self, a: (usize, usize), b: (usize, usize));
 
+    /// Put the cells `a` and `b` on one cycle: [`Connect::connect_cell_pair`]
+    /// when they are on two, nothing when they are already on one (where
+    /// the swap would split the cycle). The sound way to wire a cell to
+    /// another; the cycles are a partition, and this is its join.
+    ///
+    /// # Panics
+    ///
+    /// If a row is out of range or a column is not below [`PERMUTS`].
+    fn join(&mut self, a: (usize, usize), b: (usize, usize));
+
     /// Kimchi's `connect_64bit`, meant to wire the cells 1 and 2 of
     /// `start_row`, the two high limbs of a RangeCheck0 row, to
     /// `(zero_row, 0)`.
@@ -399,6 +409,20 @@ impl<F> Connect for [CircuitGate<F>] {
         let next_a = self[a.0].wires[a.1];
         self[a.0].wires[a.1] = self[b.0].wires[b.1];
         self[b.0].wires[b.1] = next_a;
+    }
+
+    fn join(&mut self, a: (usize, usize), b: (usize, usize)) {
+        let start = Wire { row: a.0, col: a.1 };
+        let mut at = self[a.0].wires[a.1];
+        while at != start {
+            if (at.row, at.col) == b {
+                return;
+            }
+            at = self[at.row].wires[at.col];
+        }
+        if a != b {
+            self.connect_cell_pair(a, b);
+        }
     }
 }
 
