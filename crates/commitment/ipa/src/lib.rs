@@ -31,6 +31,11 @@
 //!
 //! The commitment is a module morphism, so [`Ipa`] is also the
 //! [`HomomorphicCommitment`] that folding needs.
+//!
+//! [`Ipa`] is one instance of [`generic::GenericIpa`], whose parameters are
+//! the choices an IPA makes (the oracle, what binds the statement, the
+//! challenges, the base of the value, the hiding): this crate's choices
+//! here, Kimchi's in `arrabbiata-kimchi`, one construction.
 
 #![no_std]
 
@@ -43,19 +48,21 @@ use arrabbiata_commit::{
     Univariate, open_combined, verify_combined,
 };
 use arrabbiata_curve::{Curve, Projective, absorb_point, msm, points_from_transcript};
-use arrabbiata_field::{Field, PrimeField, Sqrt, inner_product};
-use arrabbiata_transcript::{Absorb, Transcript, absorb_length, absorb_slice, typed::Label};
+use arrabbiata_field::{Field, PrimeField, Sqrt};
+use arrabbiata_transcript::{Absorb, Transcript, absorb_length, typed::Label};
+use generic::{
+    BindStatement, Full, GenericIpa, NoRandomness, NotHiding, Opening, ScalarOracle,
+    ScaledGenerator, Witness,
+};
 
 pub mod accumulation;
 pub mod challenge;
+pub mod generic;
 
 pub use accumulation::{Accumulators, Lift};
 pub use challenge::{
     RecursionChallenge, b_poly, b_poly_coefficients, combined_inner_product, evaluation_vector,
 };
-
-/// Domain separator absorbed at the start of every opening.
-const DOMAIN: u64 = 0x6970_615f_6f70_656e;
 
 /// The IPA commitment scheme over the curve `C`, with polynomials over its
 /// scalar field and Fiat-Shamir challenges from a clone of `T`.
@@ -246,19 +253,18 @@ where
         a
     }
 
-    /// Absorb the statement and derive `U' = xi U`, which binds the value:
-    /// the argument proves `C + v U' = <a, G> + <a, b> U'`.
-    fn start<Tr>(&self, transcript: &mut Tr, statement: &Statement<'_, C>) -> Projective<C>
-    where
-        Tr: Transcript<C::Scalar>,
-    {
-        transcript.absorb(C::Scalar::from_u64(DOMAIN));
-        absorb_point(statement.commitment, transcript);
-        absorb_slice(transcript, statement.points);
-        transcript.absorb(statement.evalscale);
-        transcript.absorb(statement.value);
-        let xi = transcript.squeeze();
-        self.u * xi
+    /// This scheme as an instance of [`GenericIpa`]: the whole statement
+    /// bound, full challenges, `U' = xi U`, no hiding.
+    fn generic(&self) -> GenericIpa<C, BindStatement, Full, ScaledGenerator, NotHiding> {
+        GenericIpa {
+            generators: self.generators.clone(),
+            u: self.u,
+            h: Projective::identity(),
+            binding: BindStatement,
+            challenges: Full,
+            value_base: ScaledGenerator,
+            hiding: NotHiding,
+        }
     }
 
     /// Prove that `coefficients`, committed to by `statement.commitment`,
@@ -269,9 +275,10 @@ where
     /// The rounds are Kimchi's (`SRS::open`): `L = <a_hi, G_lo> + <a_hi,
     /// b_lo> U'`, `R = <a_lo, G_hi> + <a_lo, b_hi> U'`, then with the round
     /// challenge `u`, `a <- a_lo + u^-1 a_hi`, `b <- b_lo + u b_hi`,
-    /// `G <- G_lo + u G_hi`. Returns the proof and its accumulator, the
-    /// round challenges with `sg`, which the verifier's [`Ipa::succinct`]
-    /// outputs too.
+    /// `G <- G_lo + u G_hi`, with `U' = xi U`, `xi` drawn after the
+    /// statement ([`GenericIpa::prove`] with this scheme's parameters).
+    /// Returns the proof and its accumulator, the round challenges with
+    /// `sg`, which the verifier's [`Ipa::succinct`] outputs too.
     ///
     /// # Panics
     ///
@@ -285,51 +292,18 @@ where
     where
         Tr: Transcript<C::Scalar>,
     {
-        let mut a = self.padded(coefficients);
-        let mut b = evaluation_vector(statement.points, statement.evalscale, self.size());
-        let u = self.start(transcript, statement);
-        let mut g = self.generators.clone();
-        let mut rounds = Vec::with_capacity(self.rounds());
-        let mut chals = Vec::with_capacity(self.rounds());
-        while a.len() > 1 {
-            let half = a.len() / 2;
-            let (a_lo, a_hi) = a.split_at(half);
-            let (b_lo, b_hi) = b.split_at(half);
-            let (g_lo, g_hi) = g.split_at(half);
-            let l = msm(g_lo, a_hi) + u * inner_product(a_hi, b_lo);
-            let r = msm(g_hi, a_lo) + u * inner_product(a_lo, b_hi);
-            absorb_point(&l, transcript);
-            absorb_point(&r, transcript);
-            let x = transcript.squeeze();
-            let x_inv = match x.inverse() {
-                Some(inverse) => inverse,
-                // Probability 1 / |F|; the verifier rejects such a proof.
-                None => C::Scalar::ONE,
-            };
-            let mut next_a = Vec::with_capacity(half);
-            let mut next_b = Vec::with_capacity(half);
-            let mut next_g = Vec::with_capacity(half);
-            let mut i = 0;
-            while i < half {
-                next_a.push(a_lo[i] + a_hi[i] * x_inv);
-                next_b.push(b_lo[i] + b_hi[i] * x);
-                next_g.push(g_lo[i] + g_hi[i] * x);
-                i += 1;
-            }
-            rounds.push((l, r));
-            chals.push(x);
-            a = next_a;
-            b = next_b;
-            g = next_g;
-        }
-        let proof = IpaProof {
-            rounds,
-            a: a[0],
-            sg: g[0],
+        let witness = Witness {
+            coefficients,
+            blinder: C::Scalar::ZERO,
         };
-        let accumulator = RecursionChallenge {
-            chals,
-            comm: proof.sg,
+        let mut oracle = ScalarOracle(transcript);
+        let (opening, accumulator) =
+            self.generic()
+                .prove(&mut oracle, statement, &witness, &mut NoRandomness);
+        let proof = IpaProof {
+            rounds: opening.rounds,
+            a: opening.last,
+            sg: opening.sg,
         };
         (proof, accumulator)
     }
@@ -349,40 +323,13 @@ where
     where
         Tr: Transcript<C::Scalar>,
     {
-        let k = self.rounds();
-        if proof.rounds.len() != k {
-            return None;
-        }
-        let u = self.start(transcript, statement);
-        let mut chals = Vec::with_capacity(k);
-        let mut q = *statement.commitment + u * statement.value;
-        let mut j = 0;
-        while j < k {
-            let (l, r) = proof.rounds[j];
-            absorb_point(&l, transcript);
-            absorb_point(&r, transcript);
-            let x = transcript.squeeze();
-            let x_inv = x.inverse()?;
-            q = q + l * x_inv + r * x;
-            chals.push(x);
-            j += 1;
-        }
-        let mut b0 = C::Scalar::ZERO;
-        let mut scale = C::Scalar::ONE;
-        let mut i = 0;
-        while i < statement.points.len() {
-            b0 = b0 + scale * b_poly(&chals, statement.points[i]);
-            scale = scale * statement.evalscale;
-            i += 1;
-        }
-        if q == proof.sg * proof.a + u * (proof.a * b0) {
-            Some(RecursionChallenge {
-                chals,
-                comm: proof.sg,
-            })
-        } else {
-            None
-        }
+        let opening = Opening {
+            rounds: proof.rounds.clone(),
+            last: proof.a,
+            sg: proof.sg,
+        };
+        let mut oracle = ScalarOracle(transcript);
+        self.generic().succinct(&mut oracle, statement, &opening)
     }
 
     /// The deferred half of the verifier: whether `accumulator.comm` is the
