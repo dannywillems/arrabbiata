@@ -10,8 +10,6 @@ authors.workspace = true
 
 [dependencies]
 arrabbiata-field = { workspace = true }
-arrabbiata-poly = { workspace = true }
-arrabbiata-relation = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

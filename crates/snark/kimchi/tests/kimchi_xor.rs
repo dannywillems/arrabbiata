@@ -42,8 +42,8 @@ where
 {
     let case = case(name);
     let (cs, witness) = setup::<F>(&case);
-    for row in 0..witness[0].len() {
-        let ours = cs.gates[row].verify_witness(row, &witness, gates);
+    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
+        let ours = gate.verify_witness(row, &witness, gates);
         assert_eq!(
             debug(&ours),
             case.verdict(&format!("row{row}")),
@@ -177,8 +177,8 @@ fn test_extend_xor() {
     let witness = public_witness(in1, in2, bits);
     assert_eq!(rows(&witness), case.witnesses[0]);
     let gates = vesta_gates();
-    for row in 0..witness[0].len() {
-        let ours = cs.gates[row].verify_witness(row, &witness, &gates);
+    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
+        let ours = gate.verify_witness(row, &witness, &gates);
         assert_eq!(debug(&ours), case.verdict(&format!("row{row}")));
     }
 }
@@ -214,8 +214,8 @@ fn test_xor_finalization() {
         .build()
         .unwrap();
     let kimchi = vesta_gates();
-    for row in 0..witness[0].len() {
-        let ours = cs.gates[row].verify_witness(row, &witness, &kimchi);
+    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
+        let ours = gate.verify_witness(row, &witness, &kimchi);
         assert_eq!(debug(&ours), case.verdict(&format!("row{row}")));
     }
     let public = vec![witness[0][0], witness[0][1]];

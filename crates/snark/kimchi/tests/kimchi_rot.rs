@@ -68,8 +68,8 @@ where
     let witness = rot_witness::<F>(word, rot, side);
     assert_eq!(rows(&witness), case.witnesses[0]);
     assert_eq!(witness[1][1], F::from_u64(rotated(word, rot, side)));
-    for row in 0..=2 {
-        let ours = cs.gates[row].verify_witness(row, &witness, gates);
+    for (row, gate) in cs.gates.iter().enumerate().take(3) {
+        let ours = gate.verify_witness(row, &witness, gates);
         assert_eq!(
             debug(&ours),
             case.verdict(&format!("row{row}")),
@@ -201,8 +201,8 @@ fn test_rot_finalization() {
         .build()
         .unwrap();
     let kimchi = vesta_gates();
-    for row in 0..witness[0].len() {
-        let ours = cs.gates[row].verify_witness(row, &witness, &kimchi);
+    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
+        let ours = gate.verify_witness(row, &witness, &kimchi);
         assert_eq!(debug(&ours), case.verdict(&format!("row{row}")));
     }
     let public = vec![witness[0][0], witness[0][1]];
@@ -254,8 +254,8 @@ fn test_keccak_table() {
     }
     assert_eq!(rows(&witness), case.witnesses[0]);
     let kimchi = vesta_gates();
-    for row in 0..=48 {
-        let ours = cs.gates[row].verify_witness(row, &witness, &kimchi);
+    for (row, gate) in cs.gates.iter().enumerate().take(49) {
+        let ours = gate.verify_witness(row, &witness, &kimchi);
         assert_eq!(
             debug(&ours),
             case.verdict(&format!("row{row}")),
@@ -310,8 +310,8 @@ fn connect_64bit_forgery() {
         .build()
         .unwrap();
     let kimchi = vesta_gates();
-    for row in 0..witness[0].len() {
-        let ours = cs.gates[row].verify_witness(row, &witness, &kimchi);
+    for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
+        let ours = gate.verify_witness(row, &witness, &kimchi);
         assert_eq!(
             debug(&ours),
             case.verdict(&format!("row{row}")),

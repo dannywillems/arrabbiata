@@ -67,8 +67,6 @@ name = "arrabbiata-frontend"
 version = "0.0.0"
 dependencies = [
  "arrabbiata-field",
- "arrabbiata-poly",
- "arrabbiata-relation",
  "proptest",
 ]
 
