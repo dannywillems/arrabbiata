@@ -13,8 +13,9 @@ use arrabbiata_ipa::{
         BaseDraw, BaseOracle, BindStatement, BindValue, Binding, Blinded, BoundStatement,
         CHALLENGE_BITS, ChallengeMap, DOMAIN, Delta, Endo, FinalChallenge, Folded, Full,
         GenericIpa, HashToCurve, HashedToCurve, Hiding, IpaOracle, NoRandomness, NotHiding,
-        Opening, OpeningTranscript, Round, RoundChallenge, RoundPoints, ScalarDraw, ScalarOracle,
-        ScaledGenerator, Schnorr, ShiftedValue, ValueBase, ValueChallenge, Witness, shift_scalar,
+        Opening, OpeningTape, OpeningTranscript, Round, RoundChallenge, RoundPoints, ScalarDraw,
+        ScalarOracle, ScaledGenerator, Schnorr, ShiftedValue, ValueBase, ValueChallenge, Witness,
+        shift_scalar,
     },
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas};
