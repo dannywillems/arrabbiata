@@ -25,8 +25,15 @@ use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 /// Kimchi's output.
 const VECTORS: &str = include_str!("vectors/kimchi_prover.txt");
 
-/// The circuits of the tool, and their chunk sizes.
-const CIRCUITS: [(&str, Option<usize>); 2] = [("generic", None), ("chunked", Some(16))];
+/// The circuits of the tool, their chunk sizes and public inputs: Kimchi's
+/// generic test circuit unchunked and in chunks of 16 rows, and one block
+/// of each gate without lookups (Poseidon, CompleteAdd, VarBaseMul,
+/// EndoMul, EndoMulScalar).
+const CIRCUITS: [(&str, Option<usize>, usize); 3] = [
+    ("generic", None, 5),
+    ("chunked", Some(16), 5),
+    ("gadgets", None, 0),
+];
 
 fn hex<F: PrimeField>(x: F) -> String {
     (0..F::LIMBS)
@@ -72,6 +79,11 @@ fn gate_type(name: &str) -> GateType {
     match name {
         "Zero" => GateType::Zero,
         "Generic" => GateType::Generic,
+        "Poseidon" => GateType::Poseidon,
+        "CompleteAdd" => GateType::CompleteAdd,
+        "VarBaseMul" => GateType::VarBaseMul,
+        "EndoMul" => GateType::EndoMul,
+        "EndoMulScalar" => GateType::EndoMulScalar,
         other => panic!("gate {other} not in the vectors"),
     }
 }
@@ -105,10 +117,14 @@ fn circuit(name: &str) -> (Vec<CircuitGate<Fp>>, [Vec<Fp>; 15]) {
     (gates, witness)
 }
 
-fn index(name: &str, max_poly_size: Option<usize>) -> (ProverIndex<Vesta>, [Vec<Fp>; 15]) {
+fn index(
+    name: &str,
+    max_poly_size: Option<usize>,
+    public: usize,
+) -> (ProverIndex<Vesta>, [Vec<Fp>; 15]) {
     let (gates, witness) = circuit(name);
     let cs = ConstraintSystem::create(gates)
-        .public(5)
+        .public(public)
         .max_poly_size(max_poly_size)
         .build()
         .unwrap();
@@ -131,8 +147,8 @@ fn the_samples_are_arkworks() {
 
 #[test]
 fn the_digests_are_kimchis() {
-    for (name, max_poly_size) in CIRCUITS {
-        let (index, _) = index(name, max_poly_size);
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, _) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let digest = index.verifier_index.digest(sponge);
         let expected = VECTORS
@@ -145,8 +161,8 @@ fn the_digests_are_kimchis() {
 
 #[test]
 fn the_witness_round_is_kimchis() {
-    for (name, max_poly_size) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size);
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
         let round = witness_round(&index, witness, &sponge, &mut rng).unwrap();
@@ -163,8 +179,8 @@ fn the_witness_round_is_kimchis() {
 
 #[test]
 fn the_permutation_round_is_kimchis() {
-    for (name, max_poly_size) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size);
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
         let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
@@ -179,8 +195,8 @@ fn the_permutation_round_is_kimchis() {
 #[test]
 fn the_quotient_round_is_kimchis() {
     let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size);
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let mut rng = Arkworks(SplitMix64(7));
         let first = witness_round(&index, witness, &sponge, &mut rng).unwrap();
@@ -205,8 +221,8 @@ fn evaluation(e: &PointEvaluations<Fp>) -> String {
 #[test]
 fn the_evaluation_round_is_kimchis() {
     let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size);
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size, public);
         let sponge = KimchiSponge::new(vesta_base());
         let scalar_sponge = KimchiSponge::new(pallas_base());
         let mut rng = Arkworks(SplitMix64(7));
@@ -258,8 +274,8 @@ fn the_evaluation_round_is_kimchis() {
 #[test]
 fn the_proofs_are_kimchis() {
     let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size);
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, witness) = index(name, max_poly_size, public);
         let base = KimchiSponge::new(vesta_base());
         let scalar = KimchiSponge::new(pallas_base());
         let mut rng = Arkworks(SplitMix64(7));
