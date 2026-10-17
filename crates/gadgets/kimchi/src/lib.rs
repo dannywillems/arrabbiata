@@ -56,6 +56,7 @@
 
 extern crate alloc;
 
+pub mod and;
 pub mod complete_add;
 pub mod endomul;
 pub mod endomul_scalar;

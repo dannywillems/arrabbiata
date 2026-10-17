@@ -260,3 +260,28 @@ where
         [result(self.first, &first), result(self.second, &second)]
     }
 }
+
+/// A public input on a row of its own, in column 0: Kimchi's `Pub` row,
+/// which the compiled circuit holds as a binding and Kimchi presents as a
+/// Generic row of coefficient 1. Input the value; output its cell.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PublicInput;
+
+impl<F> TypedGadget<F> for PublicInput
+where
+    F: Field,
+{
+    type Input = Scalar;
+    type Output = Scalar;
+    const NAME: &'static str = "kimchi-public-input";
+    const ROWS: usize = 1;
+
+    fn synthesize<E>(&self, env: &mut E, x: Of<Scalar, E::Var>) -> Of<Scalar, E::Var>
+    where
+        E: Env<F>,
+    {
+        let cell = env.advice(Cell::new(0, 0), [&x], |[v]| v);
+        env.public(&cell);
+        cell
+    }
+}

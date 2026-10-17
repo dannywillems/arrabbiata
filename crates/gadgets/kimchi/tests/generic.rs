@@ -15,7 +15,7 @@ use arrabbiata_generalized_plonk::{max_coefficients, prove, setup, verify};
 use arrabbiata_ipa::Ipa;
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
-    generic::{Generic, GenericPair, GenericRow, GenericSpec},
+    generic::{Generic, GenericPair, GenericRow, GenericSpec, PublicInput},
 };
 use arrabbiata_pasta::{Fp, Vesta};
 use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
@@ -383,4 +383,20 @@ fn a_root_is_proved() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn a_public_input_is_a_binding_of_its_cell() {
+    // The value in column 0 of its row, bound to the first public input;
+    // another public value breaks it.
+    let x = Fp::from_u64(42);
+    let (compiled, output) =
+        arrabbiata_gadget::assign::<Fp, _, VARIABLES, DEGREE>(&PublicInput, LAYOUT, &x).unwrap();
+    assert_eq!((output, compiled.columns[0][0]), (x, x));
+    assert_eq!(compiled.public, vec![x]);
+    assert_eq!(compiled.circuit.bindings().len(), 1);
+    assert_eq!(compiled.check(&compiled.columns), Ok(()));
+    let mut columns = compiled.columns.clone();
+    columns[0][0] = Fp::ONE;
+    assert!(compiled.check(&columns).is_err());
 }
