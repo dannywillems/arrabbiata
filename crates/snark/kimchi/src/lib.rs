@@ -43,6 +43,7 @@ pub mod ipa;
 pub mod lookup;
 pub mod oracle;
 pub mod permutation;
+pub mod polynomials;
 pub mod prover;
 pub mod rng;
 pub mod srs;

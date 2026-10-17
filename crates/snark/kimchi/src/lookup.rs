@@ -299,7 +299,12 @@ impl fmt::Display for LookupError {
             Self::RuntimeTablesInconsistent => {
                 write!(f, "the runtime tables are not the configured ones")
             }
-            Self::ValueNotInTable { row } => write!(f, "row {row} looks up a value in no table"),
+            Self::ValueNotInTable { row } => {
+                write!(
+                    f,
+                    "the lookup failed to find a match in the table: row={row}"
+                )
+            }
         }
     }
 }

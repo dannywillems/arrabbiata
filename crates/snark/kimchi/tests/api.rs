@@ -9,9 +9,9 @@ use arrabbiata_kimchi::{
         accumulate_proofs, ipa_of, separate,
     },
     constraints::{
-        self, Builder, COLUMNS, CircuitGate, Connect, ConstraintSystem, EvaluationDomains,
-        GateTable, GateType, LookupTable, RANGE_CHECK_TABLE_SIZE, RuntimeTableCfg, Wire,
-        XOR_TABLE_SIZE, zk_rows_strict_lower_bound,
+        self, Builder, COLUMNS, CircuitGate, CircuitGateError, Connect, ConstraintSystem,
+        EvaluationDomains, GateError, GateTable, GateType, LookupTable, RANGE_CHECK_TABLE_SIZE,
+        RuntimeTableCfg, Wire, XOR_TABLE_SIZE, zk_rows_strict_lower_bound,
     },
     gates::{Gates, KimchiGates},
     ipa::{KimchiIpa, kimchi_ipa, kimchi_ipa_with},
@@ -22,6 +22,11 @@ use arrabbiata_kimchi::{
     },
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
+    polynomials::{
+        self as gadgets,
+        generic::GenericGateSpec,
+        xor::{create_xor_witness, extend_xor_witness, num_xors},
+    },
     prover::{
         self, EvaluationRound, Hidden, LOOKUP_ALPHA, LookupCommitments, LookupEvaluations,
         LookupRound, OpeningProof, PERMUTATION_ALPHA, PermutationRound, PointEvaluations,
@@ -33,6 +38,7 @@ use arrabbiata_kimchi::{
     verifier::{Claim, Oracles, VerifyError, oracles, succinct, verify},
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
+use arrabbiata_kimchi_gadgets::{generic::GenericSpec, zero::Zero};
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 use arrabbiata_reduction::{Reduction, Relation};
@@ -1223,4 +1229,138 @@ fn ipa_opening_conversions() {
     assert_eq!(opening.last.z1, proof.proof.z1);
     let back: OpeningProof<Vesta> = opening.into();
     assert_eq!(back, proof.proof);
+}
+
+/// A 16-bit XOR's rows and witness.
+fn xor16() -> (ConstraintSystem<Fp>, [Vec<Fp>; COLUMNS]) {
+    let mut gates = Vec::new();
+    CircuitGate::<Fp>::extend_xor_gadget(&mut gates, 16);
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let in1 = Fp::from_u64(0x1234);
+    let in2 = Fp::from_u64(0x00ff);
+    (cs, create_xor_witness(in1, in2, 16).unwrap())
+}
+
+#[test]
+fn constraints_circuit_gate_error() {
+    let error = CircuitGateError::Constraint(GateType::Xor16, 2);
+    assert_eq!(error.to_string(), "Invalid Xor16 constraint: 2");
+}
+
+#[test]
+fn constraints_circuit_gate_verify_witness() {
+    // A wrong nybble breaks the first constraint, from 1 as in Kimchi.
+    let (cs, mut witness) = xor16();
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    assert_eq!(cs.gates[0].verify_witness(0, &witness, &kimchi), Ok(()));
+    witness[3][0] = witness[3][0] + Fp::ONE;
+    assert_eq!(
+        cs.gates[0].verify_witness(0, &witness, &kimchi),
+        Err(CircuitGateError::Constraint(GateType::Xor16, 1))
+    );
+}
+
+#[test]
+fn constraints_circuit_gate_verify_generic() {
+    // w0 = 3 is `Const(3)`; w0 = 4 is not.
+    let spec = GenericGateSpec::Spec(GenericSpec::Const(Fp::from_u64(3)));
+    let gate = CircuitGate::create_generic_gadget(Wire::for_row(0), spec, None);
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
+    witness[0][0] = Fp::from_u64(3);
+    assert_eq!(gate.verify_generic(0, &witness, &[]), Ok(()));
+    witness[0][0] = Fp::from_u64(4);
+    let error = gate.verify_generic(0, &witness, &[]).unwrap_err();
+    assert_eq!(error, "generic: incorrect gate");
+}
+
+#[test]
+fn constraints_circuit_gate_verify() {
+    // The Xor16 row through verify_witness, as a message.
+    let (cs, mut witness) = xor16();
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    witness[1][0] = witness[1][0] + Fp::ONE;
+    let error = cs.gates[0].verify(0, &witness, &kimchi, &[]).unwrap_err();
+    assert_eq!(error, "Invalid Xor16 constraint: 2");
+}
+
+#[test]
+fn constraints_gate_error() {
+    let error = GateError::IncorrectPublic(3);
+    assert_eq!(error.to_string(), "public row 3 has the wrong gate");
+}
+
+#[test]
+fn constraints_constraint_system_verify_witness() {
+    // Row 1 is also the Xor16 row's next row: changing it fails row 0
+    // first, as Kimchi's row-by-row check does.
+    let (cs, mut witness) = xor16();
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    assert_eq!(cs.verify_witness(&witness, &[], &kimchi), Ok(()));
+    witness[1][1] = Fp::ONE;
+    let found = cs.verify_witness(&witness, &[], &kimchi);
+    let err = String::from("Invalid Xor16 constraint: 2");
+    assert!(found == Err(GateError::Custom { row: 0, err }), "{found:?}");
+}
+
+#[test]
+fn polynomials_columns() {
+    // The witness of a gadget, cut to the rows asked for: the Zero row,
+    // empty.
+    let witness = gadgets::columns::<Fp, Zero, 8, 2>(&Zero, &(), 1).unwrap();
+    assert!(witness.iter().all(|c| c == &vec![Fp::ZERO]));
+}
+
+#[test]
+fn polynomials_generic_generic_gate_spec() {
+    let public = GenericGateSpec::<Fp>::Pub;
+    assert_eq!(public.coefficients()[0], Fp::ONE);
+}
+
+#[test]
+fn polynomials_generic_create_generic_gadget() {
+    // Kimchi's coefficients: [1, 0, 0, 0, -c] for Const(c).
+    let spec = GenericGateSpec::Spec(GenericSpec::Const(Fp::from_u64(5)));
+    let gate = CircuitGate::create_generic_gadget(Wire::for_row(0), spec, None);
+    assert_eq!(gate.typ, GateType::Generic);
+    assert_eq!(gate.coeffs[0], Fp::ONE);
+    assert_eq!(gate.coeffs[4], -Fp::from_u64(5));
+    assert_eq!(gate.coeffs.len(), 10);
+}
+
+#[test]
+fn polynomials_xor_num_xors() {
+    assert_eq!(num_xors(8), 1);
+    assert_eq!(num_xors(64), 4);
+    assert_eq!(num_xors(65), 5);
+}
+
+#[test]
+fn polynomials_xor_create_xor_gadget() {
+    let (next, gates) = CircuitGate::<Fp>::create_xor_gadget(3, 32);
+    assert_eq!(next, 6);
+    assert_eq!(gates[0].typ, GateType::Xor16);
+    assert_eq!(gates[2].typ, GateType::Generic);
+}
+
+#[test]
+fn polynomials_xor_extend_xor_gadget() {
+    // The zero row's three first cells on one cycle.
+    let mut gates = Vec::new();
+    let next = CircuitGate::<Fp>::extend_xor_gadget(&mut gates, 16);
+    assert_eq!(next, 2);
+    assert_eq!(gates[1].wires[0], Wire { row: 1, col: 2 });
+}
+
+#[test]
+fn polynomials_xor_create_xor_witness() {
+    let witness = create_xor_witness(Fp::from_u64(0xf0f0), Fp::from_u64(0x0ff0), 16).unwrap();
+    assert_eq!(witness[2][0], Fp::from_u64(0xff00));
+    assert!(create_xor_witness(Fp::from_u64(1 << 20), Fp::ZERO, 16).is_err());
+}
+
+#[test]
+fn polynomials_xor_extend_xor_witness() {
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
+    extend_xor_witness(&mut witness, Fp::ONE, Fp::ONE, 16).unwrap();
+    assert_eq!(witness[0].len(), 3);
 }

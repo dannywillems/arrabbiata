@@ -174,7 +174,7 @@ impl fmt::Display for Error {
             Self::NotZeroKnowledge { needed, found } => {
                 write!(f, "{found} zero-knowledge rows, {needed} needed")
             }
-            Self::Lookup(e) => write!(f, "lookup: {e}"),
+            Self::Lookup(e) => write!(f, "{e}"),
             Self::PermutationFinalValue => {
                 write!(
                     f,

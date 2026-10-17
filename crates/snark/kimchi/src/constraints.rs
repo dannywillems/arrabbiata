@@ -25,13 +25,19 @@
 //! carries one to a larger domain, as Kimchi stores them (over `d8`, and
 //! over `d4` for the Generic and CompleteAdd selectors).
 
-use alloc::{vec, vec::Vec};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use core::fmt;
 
 use arrabbiata_field::{PrimeField, TwoAdicField};
 use arrabbiata_poly::domain::Domain;
 
 use crate::{
+    gates::Gates,
     lookup::{LookupError, LookupIndex},
     permutation::{PERMUTS, shifts},
 };
@@ -152,6 +158,207 @@ impl<F> CircuitGate<F> {
     #[must_use]
     pub const fn new(typ: GateType, wires: [Wire; PERMUTS], coeffs: Vec<F>) -> Self {
         Self { typ, wires, coeffs }
+    }
+}
+
+/// Why a row of a witness does not satisfy its gate (Kimchi's
+/// `CircuitGateError`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CircuitGateError {
+    /// Constraint `n` (from 1, in Kimchi's order) of the gate does not
+    /// hold.
+    Constraint(GateType, usize),
+    /// The wire of column `n` points outside the permuted columns.
+    WireColumn(GateType, usize),
+    /// The cell `src` differs from the cell `dst` it is wired to.
+    CopyConstraint {
+        /// The gate.
+        typ: GateType,
+        /// The cell of the row.
+        src: Wire,
+        /// The cell it is wired to.
+        dst: Wire,
+    },
+    /// The row is outside the witness.
+    FailedToGetWitnessForRow(GateType, usize),
+}
+
+impl fmt::Display for CircuitGateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Constraint(typ, n) => write!(f, "Invalid {typ:?} constraint: {n}"),
+            Self::WireColumn(typ, n) => write!(f, "Invalid {typ:?} wire column: {n}"),
+            Self::CopyConstraint { typ, src, dst } => write!(
+                f,
+                "Invalid {typ:?} copy constraint: {},{} -> {},{}",
+                src.row, src.col, dst.row, dst.col
+            ),
+            Self::FailedToGetWitnessForRow(typ, row) => {
+                write!(f, "Failed to get {typ:?} witness for row {row}")
+            }
+        }
+    }
+}
+
+impl<F> CircuitGate<F>
+where
+    F: PrimeField,
+{
+    /// Whether row `row` of `witness` satisfies this gate, as Kimchi's
+    /// `CircuitGate::verify_witness` decides it: the wiring of the
+    /// permuted cells of the row, then the gate's constraints by `gates`,
+    /// on the row and the next (zero past the end). Like Kimchi's, it
+    /// checks no constraint for the Zero, Generic and Lookup gates, and no
+    /// lookup.
+    ///
+    /// # Errors
+    ///
+    /// The first [`CircuitGateError`].
+    pub fn verify_witness<G>(
+        &self,
+        row: usize,
+        witness: &[Vec<F>; COLUMNS],
+        gates: &G,
+    ) -> Result<(), CircuitGateError>
+    where
+        G: Gates<F>,
+    {
+        let typ = self.typ;
+        if witness.iter().any(|column| column.len() <= row) {
+            return Err(CircuitGateError::FailedToGetWitnessForRow(typ, row));
+        }
+        for (col, wire) in self.wires.iter().enumerate() {
+            if wire.col >= PERMUTS {
+                return Err(CircuitGateError::WireColumn(typ, col));
+            }
+            let there = witness[wire.col].get(wire.row);
+            if there != Some(&witness[col][row]) {
+                return Err(CircuitGateError::CopyConstraint {
+                    typ,
+                    src: Wire { row, col },
+                    dst: *wire,
+                });
+            }
+        }
+        if matches!(typ, GateType::Zero | GateType::Generic | GateType::Lookup) {
+            return Ok(());
+        }
+        let cell = |column: usize, rotation: usize| {
+            witness[column]
+                .get(row + rotation)
+                .copied()
+                .unwrap_or(F::ZERO)
+        };
+        let coefficient =
+            |column: usize, _: usize| self.coeffs.get(column).copied().unwrap_or(F::ZERO);
+        let values = gates.evaluate(typ, &cell, &coefficient);
+        match values.iter().position(|v| !v.is_zero()) {
+            Some(i) => Err(CircuitGateError::Constraint(typ, i + 1)),
+            None => Ok(()),
+        }
+    }
+}
+
+impl<F> CircuitGate<F>
+where
+    F: PrimeField,
+{
+    /// Whether row `row` satisfies this Generic gate's two half-gates, the
+    /// first less the public input of its row (Kimchi's `verify_generic`).
+    ///
+    /// # Errors
+    ///
+    /// `"generic: incorrect gate"`, Kimchi's message, when the gate is not a
+    /// Generic gate or a half-gate does not hold.
+    pub fn verify_generic(
+        &self,
+        row: usize,
+        witness: &[Vec<F>; COLUMNS],
+        public: &[F],
+    ) -> Result<(), String> {
+        let incorrect = || String::from("generic: incorrect gate");
+        if self.typ != GateType::Generic {
+            return Err(incorrect());
+        }
+        let cell = |c: usize| witness[c].get(row).copied().unwrap_or(F::ZERO);
+        let coefficient = |i: usize| self.coeffs.get(i).copied().unwrap_or(F::ZERO);
+        for half in 0..2 {
+            let (k, r) = (5 * half, 3 * half);
+            let sum = coefficient(k) * cell(r)
+                + coefficient(k + 1) * cell(r + 1)
+                + coefficient(k + 2) * cell(r + 2);
+            let mul = coefficient(k + 3) * cell(r) * cell(r + 1);
+            let x = if half == 0 {
+                public.get(row).copied().unwrap_or(F::ZERO)
+            } else {
+                F::ZERO
+            };
+            if !(sum + mul + coefficient(k + 4) - x).is_zero() {
+                return Err(incorrect());
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether row `row` satisfies this gate, as Kimchi's
+    /// `CircuitGate::verify` decides it: nothing for Zero and Lookup,
+    /// [`CircuitGate::verify_generic`] for Generic, and
+    /// [`CircuitGate::verify_witness`] for the others. (Kimchi checks
+    /// Poseidon, CompleteAdd, VarBaseMul, EndoMul and EndoMulScalar with
+    /// verifiers of their own: they accept the same rows and word their
+    /// rejections differently.)
+    ///
+    /// # Errors
+    ///
+    /// The rejection, as a message.
+    pub fn verify<G>(
+        &self,
+        row: usize,
+        witness: &[Vec<F>; COLUMNS],
+        gates: &G,
+        public: &[F],
+    ) -> Result<(), String>
+    where
+        G: Gates<F>,
+    {
+        match self.typ {
+            GateType::Zero | GateType::Lookup => Ok(()),
+            GateType::Generic => self.verify_generic(row, witness, public),
+            _ => self
+                .verify_witness(row, witness, gates)
+                .map_err(|e| e.to_string()),
+        }
+    }
+}
+
+/// Why a witness does not satisfy a constraint system (Kimchi's
+/// `GateError`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GateError {
+    /// The two cells are wired together and differ.
+    DisconnectedWires(Wire, Wire),
+    /// The public row's gate does not take its left cell.
+    IncorrectPublic(usize),
+    /// The gate of `row` rejects it.
+    Custom {
+        /// The row.
+        row: usize,
+        /// The gate's message.
+        err: String,
+    },
+}
+
+impl fmt::Display for GateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DisconnectedWires(a, b) => write!(
+                f,
+                "the wires ({}, {}) and ({}, {}) differ",
+                a.row, a.col, b.row, b.col
+            ),
+            Self::IncorrectPublic(row) => write!(f, "public row {row} has the wrong gate"),
+            Self::Custom { row, err } => write!(f, "row {row}: {err}"),
+        }
     }
 }
 
@@ -472,6 +679,56 @@ pub struct ConstraintSystem<F> {
     /// The lookup index, when the circuit looks something up.
     pub lookup: Option<LookupIndex<F>>,
     used: Vec<GateType>,
+}
+
+impl<F> ConstraintSystem<F>
+where
+    F: PrimeField + TwoAdicField,
+{
+    /// Whether `witness`, padded with zero rows to the domain, satisfies
+    /// every gate with the public inputs `public` (Kimchi's
+    /// `ConstraintSystem::verify_witness`): row by row, the wiring of the
+    /// row's permuted cells, that a public row takes its left cell, then
+    /// [`CircuitGate::verify`].
+    ///
+    /// # Errors
+    ///
+    /// The first [`GateError`].
+    pub fn verify_witness<G>(
+        &self,
+        witness: &[Vec<F>; COLUMNS],
+        public: &[F],
+        gates: &G,
+    ) -> Result<(), GateError>
+    where
+        G: Gates<F>,
+    {
+        let n = self.domain.d1.size();
+        let witness: [Vec<F>; COLUMNS] = core::array::from_fn(|c| {
+            let mut column = witness[c].clone();
+            column.resize(n.max(column.len()), F::ZERO);
+            column
+        });
+        for (row, gate) in self.gates.iter().enumerate() {
+            for (col, wire) in gate.wires.iter().enumerate() {
+                if wire.col >= PERMUTS {
+                    return Err(GateError::Custom {
+                        row,
+                        err: format!("a wire can only be connected to the first {PERMUTS} columns"),
+                    });
+                }
+                if witness[col][row] != witness[wire.col][wire.row] {
+                    return Err(GateError::DisconnectedWires(Wire { row, col }, *wire));
+                }
+            }
+            if row < self.public && gate.coeffs.first() != Some(&F::ONE) {
+                return Err(GateError::IncorrectPublic(row));
+            }
+            gate.verify(row, &witness, gates, public)
+                .map_err(|err| GateError::Custom { row, err })?;
+        }
+        Ok(())
+    }
 }
 
 impl<F> ConstraintSystem<F>
