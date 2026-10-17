@@ -126,11 +126,8 @@ fn test_bad_constraints() {
     let mut step = 0;
     let mut check = |w: &[Vec<Fp>; COLUMNS], row: usize| {
         let ours = cs.gates[row].verify_witness(row, w, &gates);
-        assert_eq!(
-            debug(&ours),
-            case.verdict(&format!("step{step}")),
-            "step {step}"
-        );
+        let label = format!("step{step}");
+        gate_tests::assert_verdict(&debug(&ours), case.verdict(&label), &cs.gates, &label);
         step += 1;
     };
     let (one, four) = (Fp::ONE, Fp::from_u64(4));
@@ -281,23 +278,27 @@ fn test_keccak_table() {
 /// splits it. Column 1 of each range check is left wired to itself, so the
 /// top limb of `shifted` and of `excess` is free, and a rotation with a
 /// wrong output (`shifted + 2^76`, `excess - 2^12`) satisfies every row and
-/// proves. Our constructor is Kimchi's, so the wiring and the verdicts are
-/// Kimchi's: this pins them.
+/// proves (Kimchi's verdicts, from its run). Our rows are derived from the
+/// rotation gadget, which puts the four high limbs on one cycle with the
+/// zero cell: the same witness breaks our copy constraints and does not
+/// prove.
 #[test]
 fn connect_64bit_forgery() {
     let case = case("connect_64bit_forgery");
     let (word, rot) = (case.number("word") as u64, case.number("rot") as u32);
+    // Kimchi's wiring leaves (2, 1), a high limb of the first range check,
+    // wired to itself.
+    assert_eq!(case.input("wires2")[1], "2:1");
+    // Ours joins it to the zero cell (0, 0).
     let gates = gadget::<Fp>(rot, RotMode::Left);
-    for (r, gate) in gates.iter().enumerate() {
-        let wires: Vec<String> = gate
-            .wires
-            .iter()
-            .map(|w| format!("{}:{}", w.row, w.col))
-            .collect();
-        assert_eq!(wires, case.input(&format!("wires{r}")), "row {r}");
+    let start = Wire { row: 2, col: 1 };
+    let mut cycle = vec![start];
+    let mut at = gates[2].wires[1];
+    while at != start {
+        cycle.push(at);
+        at = gates[at.row].wires[at.col];
     }
-    assert_eq!(gates[2].wires[1], Wire { row: 2, col: 1 });
-    assert_eq!(gates[3].wires[1], Wire { row: 3, col: 1 });
+    assert!(cycle.contains(&Wire { row: 0, col: 0 }), "{cycle:?}");
     let witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|c| {
         case.witnesses[0]
             .iter()
@@ -306,19 +307,33 @@ fn connect_64bit_forgery() {
     });
     let claimed = witness[1][1];
     assert_ne!(claimed, Fp::from_u64(rotated(word, rot, RotMode::Left)));
+    assert_ne!(
+        witness[1][2],
+        Fp::ZERO,
+        "the forgery puts a value in (2, 1)"
+    );
     let cs = ConstraintSystem::create(gates.clone())
         .public(1)
         .build()
         .unwrap();
     let kimchi = vesta_gates();
+    // Kimchi accepts the forged witness row by row and proves it; we refuse
+    // it at the copy constraints of both range checks, whose high limbs
+    // the forgery moved, and refuse to prove it.
     for (row, gate) in cs.gates.iter().enumerate().take(witness[0].len()) {
-        let ours = gate.verify_witness(row, &witness, &kimchi);
-        assert_eq!(
-            debug(&ours),
-            case.verdict(&format!("row{row}")),
-            "row {row}"
-        );
+        let ours = debug(&gate.verify_witness(row, &witness, &kimchi));
+        let theirs = case.verdict(&format!("row{row}"));
+        if row == 2 || row == 3 {
+            assert_eq!(theirs, "Ok(())");
+            assert!(
+                ours.starts_with("Err(CopyConstraint { typ: RangeCheck0"),
+                "row {row}: {ours}"
+            );
+        } else {
+            gate_tests::assert_verdict(&ours, theirs, &cs.gates, &format!("row {row}"));
+        }
     }
+    assert_eq!(case.verdict("prove"), "Ok(())");
     let result = prove_and_verify(gates, witness, vec![Fp::ZERO]);
-    assert_eq!(debug(&result), case.verdict("prove"));
+    assert!(result.is_err(), "{result:?}");
 }

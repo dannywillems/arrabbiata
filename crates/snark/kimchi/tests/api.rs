@@ -1394,12 +1394,30 @@ fn polynomials_xor_extend_xor_witness() {
 
 #[test]
 fn polynomials_rot_create_rot64() {
-    // Rot64 with 2^rot, then two RangeCheck0 rows with coefficient 0.
+    // Rot64 with 2^rot, then two RangeCheck0 rows: the excess (row 1,
+    // column 2) copied to the second range check, and the four high limbs
+    // (columns 1 and 2 of rows 2 and 3) on one cycle.
     let gates = CircuitGate::<Fp>::create_rot64(1, 3);
     assert_eq!(gates[0].typ, GateType::Rot64);
     assert_eq!(gates[0].coeffs, vec![Fp::from_u64(8)]);
     assert_eq!(gates[2].typ, GateType::RangeCheck0);
-    assert_eq!(gates[2].wires, Wire::for_row(3));
+    let at = |row: usize, col: usize| gates[row - 1].wires[col];
+    let cycle_of = |row: usize, col: usize| {
+        let start = Wire { row, col };
+        let mut cycle = vec![start];
+        let mut next = at(row, col);
+        while next != start {
+            cycle.push(next);
+            next = at(next.row, next.col);
+        }
+        cycle.sort();
+        cycle
+    };
+    let wires = |cells: &[(usize, usize)]| -> Vec<Wire> {
+        cells.iter().map(|&(row, col)| Wire { row, col }).collect()
+    };
+    assert_eq!(cycle_of(1, 2), wires(&[(1, 2), (3, 0)]));
+    assert_eq!(cycle_of(2, 1), wires(&[(2, 1), (2, 2), (3, 1), (3, 2)]));
 }
 
 #[test]

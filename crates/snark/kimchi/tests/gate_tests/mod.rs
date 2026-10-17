@@ -524,3 +524,68 @@ pub fn assert_kimchi_rows<F: PrimeField>(ours: &[CircuitGate<F>], kimchi: &[Kimc
         .collect();
     assert_eq!(partition(&ours_wires), partition(&theirs), "copy cycles");
 }
+
+/// A copy-constraint verdict, as `Debug` prints it.
+struct CopyVerdict {
+    /// The gate type.
+    typ: String,
+    /// The cell whose value differs.
+    src: (usize, usize),
+    /// The next cell of its cycle.
+    dst: (usize, usize),
+}
+
+/// The copy-constraint verdict `verdict` is, if it is one.
+fn copy_constraint(verdict: &str) -> Option<CopyVerdict> {
+    let rest = verdict.strip_prefix("Err(CopyConstraint { typ: ")?;
+    let (typ, rest) = rest.split_once(", src: Wire { row: ")?;
+    let numbers: Vec<usize> = rest
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.parse().unwrap())
+        .collect();
+    let [src_row, src_col, dst_row, dst_col] = numbers[..] else {
+        return None;
+    };
+    Some(CopyVerdict {
+        typ: typ.to_string(),
+        src: (src_row, src_col),
+        dst: (dst_row, dst_col),
+    })
+}
+
+/// Our verdict is Kimchi's, up to the order of the copy cycles: a broken
+/// copy constraint names the next cell of the cycle, and the next cell
+/// depends on the order the swaps left. The same type and source, and a
+/// destination on our cycle of the source, is the same verdict.
+pub fn assert_verdict<F: PrimeField>(
+    ours: &str,
+    kimchi: &str,
+    gates: &[CircuitGate<F>],
+    what: &str,
+) {
+    if ours == kimchi {
+        return;
+    }
+    let (Some(ours_copy), Some(theirs)) = (copy_constraint(ours), copy_constraint(kimchi)) else {
+        panic!("{what}: ours {ours}, Kimchi's {kimchi}");
+    };
+    assert_eq!(
+        (&ours_copy.typ, ours_copy.src),
+        (&theirs.typ, theirs.src),
+        "{what}"
+    );
+    let (src, kimchi_dst) = (ours_copy.src, theirs.dst);
+    let start = Wire {
+        row: src.0,
+        col: src.1,
+    };
+    let mut at = gates[src.0].wires[src.1];
+    while at != start {
+        if (at.row, at.col) == kimchi_dst {
+            return;
+        }
+        at = gates[at.row].wires[at.col];
+    }
+    panic!("{what}: Kimchi's {kimchi_dst:?} is not on our cycle of {src:?}");
+}
