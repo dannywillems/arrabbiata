@@ -10,6 +10,8 @@
 //!   that absorbs commitments and squeezes 128-bit challenges, the
 //!   scalar-field sponge that absorbs evaluations, and the map of a 128-bit
 //!   challenge to a scalar through the curve's endomorphism;
+//! - [`accumulation`]: the verifier as a reduction to Halo's accumulation,
+//!   composed with Halo's decider and fold;
 //! - [`constraints`]: the constraint system, built as Kimchi builds it
 //!   (lookup domain, zero-knowledge rows, domains, padding), with its
 //!   permutation, selector and coefficient columns;
@@ -33,6 +35,7 @@
 
 extern crate alloc;
 
+pub mod accumulation;
 pub mod constraints;
 pub mod gates;
 pub mod lookup;

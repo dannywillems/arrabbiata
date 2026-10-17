@@ -9,8 +9,12 @@ use std::collections::BTreeMap;
 
 use arrabbiata_curve::{Affine, Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_halo::Accumulated;
 use arrabbiata_ipa::RecursionChallenge;
 use arrabbiata_kimchi::{
+    accumulation::{
+        self, Assignment, KimchiSuccinct, Satisfied, Statement, accumulate_proofs, ipa_of,
+    },
     constraints::{CircuitGate, ConstraintSystem, GateType, LookupTable, RuntimeTableCfg, Wire},
     gates::KimchiGates,
     lookup::{LookupPattern, RuntimeTable},
@@ -21,10 +25,11 @@ use arrabbiata_kimchi::{
     },
     rng::{Arkworks, Sampler, SplitMix64},
     srs::{PolyComm, Srs},
-    verifier::{VerifyError, oracles, verify},
+    verifier::{VerifyError, oracles, succinct, verify},
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
+use arrabbiata_reduction::{Reduction, Relation, laws};
 use blake2::{Blake2b512, Digest};
 
 /// Kimchi's output.
@@ -1059,5 +1064,132 @@ fn tampered_lookup_proofs_are_refused() {
         check(&bad),
         Err(VerifyError::LookupMismatch),
         "no lookup part"
+    );
+}
+
+/// The statement and the assignment of the tool's circuit `name`.
+fn statement(name: &str, public: usize) -> (Statement<Vesta>, Assignment<Fp>) {
+    let (_, columns) = circuit(name);
+    let statement = Statement {
+        public: columns[0][..public].to_vec(),
+        prev_challenges: prev_challenges(name),
+    };
+    let assignment = Assignment {
+        columns,
+        runtime_tables: runtime_tables(name),
+    };
+    (statement, assignment)
+}
+
+#[test]
+fn kimchis_proofs_reduce_to_decided_accumulators() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size, public) in CIRCUITS {
+        let (index, _) = index(name, max_poly_size, public);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let proof = kimchis_proof(name);
+        let accumulator = succinct(
+            &index.verifier_index,
+            &index.srs,
+            &proof,
+            &public_inputs(name, public),
+            &gates,
+            (&base, &scalar),
+        )
+        .unwrap();
+        // The accumulator is (u, sg): sg is the proof's, u has log2(|G|)
+        // challenges, and Halo's decider (the IPA on Kimchi's key) accepts.
+        assert_eq!(accumulator.comm, proof.proof.sg, "{name}");
+        let ipa = ipa_of(&index.srs, scalar.clone());
+        assert_eq!(accumulator.chals.len(), ipa.rounds(), "{name}");
+        assert!(ipa.decide(&accumulator), "{name}");
+        let mut wrong = accumulator.clone();
+        wrong.chals[0] = wrong.chals[0] + Fp::ONE;
+        assert!(!ipa.decide(&wrong), "{name}");
+    }
+}
+
+#[test]
+fn the_reduction_is_complete_and_its_composites_verify() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size, public) in [CIRCUITS[0], CIRCUITS[3], CIRCUITS[6], CIRCUITS[7]] {
+        let (index, _) = index(name, max_poly_size, public);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let ipa = ipa_of(&index.srs, scalar.clone());
+        let relation = Satisfied::new(&index, &gates, (&base, &scalar), &ipa);
+        let (statement, assignment) = statement(name, public);
+        assert_eq!(relation.check(&statement, &assignment), Ok(()), "{name}");
+        let transcript = || KimchiSponge::new(pallas_base());
+        let reduction = KimchiSuccinct::new(relation, Arkworks(SplitMix64(5)));
+        // The verifier's accumulator is the prover's, and is decided.
+        let out = laws::complete(&reduction, transcript, &statement, &assignment).unwrap();
+        assert_eq!(
+            Accumulated::new(&ipa).check(&out.instance, &()),
+            Ok(()),
+            "{name}"
+        );
+        // KimchiSuccinct ; Decide, Kimchi's whole verifier.
+        let whole = accumulation::verify(reduction);
+        let proved = whole.prove(transcript(), &statement, &assignment).unwrap();
+        let mut tampered = proved.proof.clone();
+        tampered.0.proof.z1 = tampered.0.proof.z1 + Fp::ONE;
+        let accepted = whole.verify(transcript(), &statement, proved.proof);
+        assert!(accepted.is_ok(), "{name}");
+        let refused = whole.verify(transcript(), &statement, tampered);
+        assert!(refused.is_err(), "{name}");
+    }
+}
+
+#[test]
+fn two_proofs_fold_into_one_decided_accumulator() {
+    // Each(KimchiSuccinct) ; Fold, then one Decide for both proofs.
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let (name, max_poly_size, public) = CIRCUITS[0];
+    let (index, _) = index(name, max_poly_size, public);
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let ipa = ipa_of(&index.srs, scalar.clone());
+    let relation = Satisfied::new(&index, &gates, (&base, &scalar), &ipa);
+    let (statement, assignment) = statement(name, public);
+    let statements = vec![statement.clone(), statement];
+    let assignments = vec![assignment.clone(), assignment];
+    let fold = accumulate_proofs(KimchiSuccinct::new(relation, Arkworks(SplitMix64(9))));
+    let transcript = || KimchiSponge::new(pallas_base());
+    let out = laws::complete(&fold, transcript, &statements, &assignments).unwrap();
+    assert!(ipa.decide(&out.instance));
+    // The two proofs differ (the prover's stream moves on), and both
+    // accumulators are folded into the one decided.
+    let (proofs, _) = &out.proof;
+    assert_ne!(proofs[0], proofs[1]);
+}
+
+#[test]
+fn a_false_previous_accumulator_is_caught() {
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let (name, max_poly_size, public) = CIRCUITS[3];
+    assert_eq!(name, "recursion");
+    let (index, _) = index(name, max_poly_size, public);
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let ipa = ipa_of(&index.srs, scalar.clone());
+    let relation = Satisfied::new(&index, &gates, (&base, &scalar), &ipa);
+    let (mut statement, assignment) = statement(name, public);
+    statement.prev_challenges[0].comm =
+        statement.prev_challenges[0].comm + Projective::<Vesta>::generator();
+    // Outside the relation: its previous accumulator is not decided.
+    assert_eq!(
+        relation.check(&statement, &assignment),
+        Err(accumulation::Error::PreviousAccumulator(0))
+    );
+    // And a proof carrying it does not reduce: the lift of sg at zeta
+    // fails inside the opening.
+    let reduction = KimchiSuccinct::new(relation, Arkworks(SplitMix64(5)));
+    let transcript = || KimchiSponge::new(pallas_base());
+    let result = reduction.prove(transcript(), &statement, &assignment);
+    assert_eq!(
+        result.err(),
+        Some(accumulation::Error::Verify(VerifyError::OpeningProof))
     );
 }

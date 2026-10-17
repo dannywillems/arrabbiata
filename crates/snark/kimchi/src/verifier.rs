@@ -36,7 +36,7 @@ use core::fmt;
 
 use arrabbiata_curve::{Curve, Projective, glv::Glv, msm};
 use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
-use arrabbiata_ipa::{b_poly, b_poly_coefficients};
+use arrabbiata_ipa::{RecursionChallenge, b_poly, b_poly_coefficients};
 use arrabbiata_poly::Domain;
 use arrabbiata_transcript::Transcript;
 
@@ -560,6 +560,97 @@ where
     })
 }
 
+/// The opening, checked up to the commitment of `b`: the round challenges,
+/// and the IPA's Schnorr-like expression, the identity exactly when that
+/// part of the check holds.
+fn opening_check<C, S>(
+    srs: &Srs<C>,
+    proof: &ProverProof<C>,
+    oracles: &Oracles<C, S>,
+) -> Result<(Vec<C::Scalar>, Projective<C>), VerifyError>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    S: Transcript<C::Base> + Clone,
+{
+    let opening = &proof.proof;
+    let size = srs.g.len();
+    if !size.is_power_of_two() || opening.lr.len() != size.trailing_zeros() as usize {
+        return Err(VerifyError::IncorrectRounds);
+    }
+    let mut sponge = oracles.fq_sponge.clone();
+    let cip = oracles.combined_inner_product;
+    sponge.absorb_fr(&[shift_scalar::<C>(cip)]);
+    let group_map = GroupMap::<C>::setup();
+    let u_base = group_map.to_group(sponge.challenge_fq()).to_projective();
+    let mut chals = Vec::with_capacity(opening.lr.len());
+    for (l, r) in &opening.lr {
+        sponge.absorb_g(&[*l]);
+        sponge.absorb_g(&[*r]);
+        chals.push(ScalarChallenge(sponge.challenge()).to_field(C::lambda()));
+    }
+    sponge.absorb_g(&[opening.delta]);
+    let c = ScalarChallenge(sponge.challenge()).to_field(C::lambda());
+    let b0 = b_poly(&chals, oracles.zeta) + oracles.u * b_poly(&chals, oracles.zeta_omega);
+
+    // C: every chunk at the next power of v.
+    let mut combined = Projective::<C>::identity();
+    let mut scale = C::Scalar::ONE;
+    for (comm, _) in &oracles.evaluations {
+        for chunk in &comm.chunks {
+            combined = combined + *chunk * scale;
+            scale = scale * oracles.v;
+        }
+    }
+    let mut rounds = Projective::<C>::identity();
+    for ((l, r), u) in opening.lr.iter().zip(&chals) {
+        let u_inv = u.inverse().ok_or(VerifyError::OpeningProof)?;
+        rounds = rounds + *l * u_inv + *r * *u;
+    }
+    let ipa = (combined + u_base * cip + rounds) * c + opening.delta
+        - (opening.sg + u_base * b0) * opening.z1
+        - srs.h * opening.z2;
+    Ok((chals, ipa))
+}
+
+/// Kimchi's verifier without its decider: everything but the MSM `<s, G>
+/// = sg` of the size of the SRS. It replays the transcript and checks the
+/// IPA's Schnorr-like equation, then outputs the claim it leaves, the
+/// accumulator `(u, sg)`: "`sg` commits to `b_u`", which Halo decides once
+/// for many proofs ([`crate::accumulation`]).
+///
+/// # Errors
+///
+/// A [`VerifyError`]; [`VerifyError::OpeningProof`] when the equation
+/// fails.
+pub fn succinct<C, S, T, G>(
+    index: &VerifierIndex<C>,
+    srs: &Srs<C>,
+    proof: &ProverProof<C>,
+    public: &[C::Scalar],
+    gates: &G,
+    sponges: (&S, &T),
+) -> Result<RecursionChallenge<C>, VerifyError>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    T: Transcript<C::Scalar> + Clone,
+    G: Gates<C::Scalar>,
+{
+    let oracles = oracles(index, srs, proof, public, gates, sponges)?;
+    let (chals, ipa) = opening_check(srs, proof, &oracles)?;
+    if ipa.is_identity() {
+        Ok(RecursionChallenge {
+            chals,
+            comm: proof.proof.sg,
+        })
+    } else {
+        Err(VerifyError::OpeningProof)
+    }
+}
+
 /// Verify `proof` (see the module documentation).
 ///
 /// # Errors
@@ -585,47 +676,11 @@ where
     R: Sampler<C::Scalar>,
 {
     let oracles = oracles(index, srs, proof, public, gates, sponges)?;
-    let opening = &proof.proof;
-    let size = srs.g.len();
-    if !size.is_power_of_two() || opening.lr.len() != size.trailing_zeros() as usize {
-        return Err(VerifyError::IncorrectRounds);
-    }
-    let mut sponge = oracles.fq_sponge.clone();
-    let cip = oracles.combined_inner_product;
-    sponge.absorb_fr(&[shift_scalar::<C>(cip)]);
-    let group_map = GroupMap::<C>::setup();
-    let u_base = group_map.to_group(sponge.challenge_fq()).to_projective();
-    let mut chals = Vec::with_capacity(opening.lr.len());
-    for (l, r) in &opening.lr {
-        sponge.absorb_g(&[*l]);
-        sponge.absorb_g(&[*r]);
-        chals.push(ScalarChallenge(sponge.challenge()).to_field(C::lambda()));
-    }
-    sponge.absorb_g(&[opening.delta]);
-    let c = ScalarChallenge(sponge.challenge()).to_field(C::lambda());
-    let b0 = b_poly(&chals, oracles.zeta) + oracles.u * b_poly(&chals, oracles.zeta_omega);
+    let (chals, ipa) = opening_check(srs, proof, &oracles)?;
     let s = b_poly_coefficients(&chals);
     let rand_base: C::Scalar = rng.sample();
     let sg_rand_base: C::Scalar = rng.sample();
-
-    // C: every chunk at the next power of v.
-    let mut combined = Projective::<C>::identity();
-    let mut scale = C::Scalar::ONE;
-    for (comm, _) in &oracles.evaluations {
-        for chunk in &comm.chunks {
-            combined = combined + *chunk * scale;
-            scale = scale * oracles.v;
-        }
-    }
-    let mut rounds = Projective::<C>::identity();
-    for ((l, r), u) in opening.lr.iter().zip(&chals) {
-        let u_inv = u.inverse().ok_or(VerifyError::OpeningProof)?;
-        rounds = rounds + *l * u_inv + *r * *u;
-    }
-    let ipa = (combined + u_base * cip + rounds) * c + opening.delta
-        - (opening.sg + u_base * b0) * opening.z1
-        - srs.h * opening.z2;
-    let sg_check = msm(&srs.g, &s) - opening.sg;
+    let sg_check = msm(&srs.g, &s) - proof.proof.sg;
     let total = ipa * rand_base + sg_check * sg_rand_base;
     if total.is_identity() {
         Ok(())

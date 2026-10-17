@@ -3,6 +3,10 @@
 use arrabbiata_curve::{Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_kimchi::{
+    accumulation::{
+        self, AccumulateProofs, Assignment, KimchiSuccinct, Satisfied, Statement, Verify,
+        accumulate_proofs, ipa_of,
+    },
     constraints::{
         self, Builder, COLUMNS, CircuitGate, Connect, ConstraintSystem, EvaluationDomains,
         GateTable, GateType, LookupTable, RANGE_CHECK_TABLE_SIZE, RuntimeTableCfg, Wire,
@@ -24,11 +28,12 @@ use arrabbiata_kimchi::{
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
-    verifier::{Claim, Oracles, VerifyError, oracles, verify},
+    verifier::{Claim, Oracles, VerifyError, oracles, succinct, verify},
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
+use arrabbiata_reduction::{Reduction, Relation};
 
 #[test]
 fn challenge_limbs() {
@@ -1039,4 +1044,95 @@ fn lookup_proofs() {
         error,
         prover::Error::Lookup(LookupError::ValueNotInTable { row: 1 })
     );
+}
+
+/// The statement and assignment of [`proved`]'s circuit.
+fn statement_of_two_generic() -> (Statement<Vesta>, Assignment<Fp>) {
+    let columns: [Vec<Fp>; COLUMNS] = core::array::from_fn(|c| {
+        let value = if c < 3 {
+            Fp::from_u64(c as u64 + 1)
+        } else {
+            Fp::ZERO
+        };
+        vec![value; 2]
+    });
+    (
+        Statement {
+            public: vec![],
+            prev_challenges: vec![],
+        },
+        Assignment {
+            columns,
+            runtime_tables: vec![],
+        },
+    )
+}
+
+#[test]
+fn succinct_verifier() {
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let accumulator = succinct(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    assert_eq!(accumulator.comm, proof.proof.sg);
+    let mut bad = proof;
+    bad.proof.delta = bad.proof.delta + index.srs.h;
+    let error = succinct(vi, &index.srs, &bad, &[], &kimchi, (&base, &scalar)).unwrap_err();
+    assert_eq!(error, VerifyError::OpeningProof);
+}
+
+#[test]
+fn accumulation_reductions() {
+    let (index, _, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let ipa = ipa_of(&index.srs, scalar.clone());
+    assert_eq!(ipa.size(), index.srs.max_poly_size());
+    let relation = Satisfied::new(&index, &kimchi, (&base, &scalar), &ipa);
+    let (statement, assignment) = statement_of_two_generic();
+    assert_eq!(relation.check(&statement, &assignment), Ok(()));
+    let mut wrong = assignment.clone();
+    wrong.columns[2][1] = Fp::from_u64(4);
+    let error = relation.check(&statement, &wrong).unwrap_err();
+    assert_eq!(
+        error,
+        accumulation::Error::Prove(prover::Error::QuotientRemainder)
+    );
+    assert_eq!(
+        error.to_string(),
+        "prover: the constraints do not vanish on the domain"
+    );
+    let public = Statement {
+        public: vec![Fp::ONE],
+        prev_challenges: vec![],
+    };
+    assert_eq!(
+        relation.check(&public, &assignment),
+        Err(accumulation::Error::Public)
+    );
+    let reduction = KimchiSuccinct::new(relation, Arkworks(SplitMix64(1)));
+    assert!(reduction.source().check(&statement, &assignment).is_ok());
+    let transcript = || KimchiSponge::new(pallas_base());
+    let out = reduction
+        .prove(transcript(), &statement, &assignment)
+        .unwrap();
+    assert!(reduction.target().check(&out.instance, &()).is_ok());
+    let carrying = Statement {
+        public: vec![],
+        prev_challenges: vec![out.instance.clone()],
+    };
+    let error = reduction
+        .verify(transcript(), &carrying, out.proof.clone())
+        .unwrap_err();
+    assert_eq!(error, accumulation::Error::PrevChallenges);
+    let whole: Verify<'_, Vesta, _, _, _, _> = accumulation::verify(reduction);
+    assert!(whole.prove(transcript(), &statement, &assignment).is_ok());
+    let relation = Satisfied::new(&index, &kimchi, (&base, &scalar), &ipa);
+    let reduction = KimchiSuccinct::new(relation, Arkworks(SplitMix64(2)));
+    let fold: AccumulateProofs<'_, Vesta, _, _, _, _> = accumulate_proofs(reduction);
+    let out = fold
+        .prove(transcript(), &vec![statement], &vec![assignment])
+        .unwrap();
+    assert!(ipa.decide(&out.instance));
 }
