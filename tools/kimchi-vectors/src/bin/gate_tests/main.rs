@@ -14,6 +14,7 @@
 
 mod and;
 mod common;
+mod ec;
 mod endomul;
 mod endomul_scalar;
 mod generic;
@@ -34,4 +35,5 @@ fn main() {
     endomul_scalar::run();
     endomul::run();
     varbasemul::run();
+    ec::run();
 }
