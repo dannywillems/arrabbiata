@@ -11,7 +11,7 @@
 //! - it composes with ForeignFieldAdd: `a b + c mod m`.
 
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Of, TypedGadget, witness};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, witness};
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
     foreign_field::{Limbs, Nat},
@@ -132,16 +132,16 @@ const MUL_ROWS: usize = 19;
 const ADD_ROWS: usize = 13;
 
 impl TypedGadget<Fp> for Mul {
-    type Input = Array<9>;
-    type Output = Array<3>;
+    type Input = Array<Scalar, 9>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "mul";
     const ROWS: usize = MUL_ROWS + ADD_ROWS + 2;
 
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        input: Of<Array<9>, E::Var>,
-    ) -> Of<Array<3>, E::Var> {
+        input: Of<Array<Scalar, 9>, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var> {
         // a and b on one row, c on the next: copies need columns 0-6.
         let row = Self::ROWS - 2;
         let cells: [E::Var; 9] = core::array::from_fn(|c| {

@@ -69,7 +69,7 @@ struct Nibbles {
 }
 
 impl TypedGadget<F> for Nibbles {
-    type Input = Array<4>;
+    type Input = Array<Scalar, 4>;
     type Output = Scalar;
     const NAME: &'static str = "nibbles";
     const ROWS: usize = 5;
@@ -77,7 +77,7 @@ impl TypedGadget<F> for Nibbles {
     fn synthesize<E: Env<F>>(
         &self,
         env: &mut E,
-        input: Of<Array<4>, E::Var>,
+        input: Of<Array<Scalar, 4>, E::Var>,
     ) -> Of<Scalar, E::Var> {
         let gadget = Nibble {
             table: self.table.clone(),

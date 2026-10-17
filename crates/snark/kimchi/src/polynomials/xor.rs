@@ -64,7 +64,7 @@ impl<F, const B: usize> TypedGadget<F> for Words<F, B>
 where
     F: PrimeField,
 {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = Scalar;
     const NAME: &'static str = "kimchi-xor-words";
     const ROWS: usize = Xor::<F, B>::ROWS;
@@ -72,7 +72,7 @@ where
     fn synthesize<E: Env<F>>(
         &self,
         env: &mut E,
-        words: Of<Array<2>, E::Var>,
+        words: Of<Array<Scalar, 2>, E::Var>,
     ) -> Of<Scalar, E::Var> {
         let cells = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&words[i]], |[v]| v));
         env.call(&self.0, cells)

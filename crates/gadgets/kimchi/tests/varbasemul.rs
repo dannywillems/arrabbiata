@@ -45,8 +45,8 @@ const KIMCHI_BITS: usize = 255;
 struct Multiply<const B: usize>;
 
 impl<const B: usize> TypedGadget<Fp> for Multiply<B> {
-    type Input = (Array<2>, Array<2>, Array<B>);
-    type Output = (Array<2>, Scalar);
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Array<Scalar, B>);
+    type Output = (Array<Scalar, 2>, Scalar);
     const NAME: &'static str = "multiply";
     const ROWS: usize = <VarBaseMul<B> as TypedGadget<Fp>>::ROWS;
 
@@ -188,8 +188,12 @@ struct Shifted;
 const PROOF_BITS: usize = 20;
 
 impl TypedGadget<Fp> for Shifted {
-    type Input = (Array<2>, Array<2>, Array<PROOF_BITS>);
-    type Output = Array<2>;
+    type Input = (
+        Array<Scalar, 2>,
+        Array<Scalar, 2>,
+        Array<Scalar, PROOF_BITS>,
+    );
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "shifted";
     const ROWS: usize = <VarBaseMul<PROOF_BITS> as TypedGadget<Fp>>::ROWS + 3;
 
@@ -197,7 +201,7 @@ impl TypedGadget<Fp> for Shifted {
         &self,
         env: &mut E,
         (t, a, bits): Of<Self::Input, E::Var>,
-    ) -> Of<Array<2>, E::Var> {
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let t: [E::Var; 2] =
             core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&t[i]], |[v]| v));
         let a = core::array::from_fn(|i| env.advice(Cell::new(2 + i, 0), [&a[i]], |[v]| v));

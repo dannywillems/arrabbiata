@@ -47,7 +47,7 @@ const LIMIT: u128 = 1 << 88;
 struct Check;
 
 impl TypedGadget<Fp> for Check {
-    type Input = Array<3>;
+    type Input = Array<Scalar, 3>;
     type Output = Unit;
     const NAME: &'static str = "check";
     const ROWS: usize = 4;
@@ -55,7 +55,7 @@ impl TypedGadget<Fp> for Check {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        values: Of<Array<3>, E::Var>,
+        values: Of<Array<Scalar, 3>, E::Var>,
     ) -> Of<Unit, E::Var> {
         let cells = core::array::from_fn(|i| env.advice(Cell::new(0, i), [&values[i]], |[v]| v));
         let gadget = MultiRangeCheck {
@@ -204,7 +204,7 @@ fn only_the_lookup_catches_a_large_limb() {
 struct PublicCheck;
 
 impl TypedGadget<Fp> for PublicCheck {
-    type Input = Array<3>;
+    type Input = Array<Scalar, 3>;
     type Output = Scalar;
     const NAME: &'static str = "public-check";
     const ROWS: usize = 5;
@@ -212,7 +212,7 @@ impl TypedGadget<Fp> for PublicCheck {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        values: Of<Array<3>, E::Var>,
+        values: Of<Array<Scalar, 3>, E::Var>,
     ) -> Of<Scalar, E::Var> {
         let [first, second, third] = values;
         let public = env.advice(Cell::new(0, 4), [&first], |[v]| v);

@@ -134,7 +134,7 @@ impl<F> TypedGadget<F> for GenericRow<F>
 where
     F: Field,
 {
-    type Input = Array<{ 2 * HALF_REGISTERS }>;
+    type Input = Array<Scalar, { 2 * HALF_REGISTERS }>;
     type Output = Unit;
     const NAME: &'static str = "kimchi-generic";
     const ROWS: usize = 1;
@@ -202,12 +202,12 @@ impl<F> TypedGadget<F> for Generic<F>
 where
     F: Field,
 {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = Scalar;
     const NAME: &'static str = "kimchi-generic-operation";
     const ROWS: usize = 1;
 
-    fn synthesize<E>(&self, env: &mut E, input: Of<Array<2>, E::Var>) -> Of<Scalar, E::Var>
+    fn synthesize<E>(&self, env: &mut E, input: Of<Array<Scalar, 2>, E::Var>) -> Of<Scalar, E::Var>
     where
         E: Env<F>,
     {
@@ -238,12 +238,16 @@ impl<F> TypedGadget<F> for GenericPair<F>
 where
     F: Field,
 {
-    type Input = (Array<2>, Array<2>);
-    type Output = Array<2>;
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>);
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "kimchi-generic-pair";
     const ROWS: usize = 1;
 
-    fn synthesize<E>(&self, env: &mut E, (x, y): Of<Self::Input, E::Var>) -> Of<Array<2>, E::Var>
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (x, y): Of<Self::Input, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var>
     where
         E: Env<F>,
     {

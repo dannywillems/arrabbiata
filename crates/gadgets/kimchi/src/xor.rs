@@ -83,12 +83,16 @@ impl<F> TypedGadget<F> for Xor16Gate<F>
 where
     F: PrimeField,
 {
-    type Input = Array<3>;
-    type Output = Array<3>;
+    type Input = Array<Scalar, 3>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "kimchi-xor16";
     const ROWS: usize = 1;
 
-    fn synthesize<E>(&self, env: &mut E, words: Of<Array<3>, E::Var>) -> Of<Array<3>, E::Var>
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        words: Of<Array<Scalar, 3>, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var>
     where
         E: Env<F>,
     {
@@ -130,7 +134,7 @@ impl<F, const B: usize> TypedGadget<F> for Xor<F, B>
 where
     F: PrimeField,
 {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = Scalar;
     const NAME: &'static str = "kimchi-xor";
     const ROWS: usize = {
@@ -141,7 +145,11 @@ where
         B / BITS_PER_ROW + 1
     };
 
-    fn synthesize<E>(&self, env: &mut E, [in1, in2]: Of<Array<2>, E::Var>) -> Of<Scalar, E::Var>
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        [in1, in2]: Of<Array<Scalar, 2>, E::Var>,
+    ) -> Of<Scalar, E::Var>
     where
         E: Env<F>,
     {

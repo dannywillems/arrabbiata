@@ -8,8 +8,12 @@
 //! tuples (of two, three or four shapes).
 //!
 //! Composition is checked on the shape, not on its instances: a gadget whose
-//! output shape is `Array<3>` composes with one whose input shape is
-//! `Array<3>`, for every variable type at once.
+//! output shape is `Array<Scalar, 3>` composes with one whose input shape is
+//! `Array<Scalar, 3>`, for every variable type at once.
+//!
+//! [`Array<S, N>`] holds `N` values of the shape `S`, so its type says what
+//! it holds: `Array<Scalar, 2>` is two variables, `Array<Array<Scalar, 4>, 3>`
+//! three groups of four. As a functor it is the composite `V -> [S(V); N]`.
 
 use alloc::vec::Vec;
 
@@ -67,20 +71,23 @@ impl Shape for Scalar {
     }
 }
 
-/// `N` elements.
+/// `N` values of the shape `S`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Array<const N: usize>;
+pub struct Array<S, const N: usize>(core::marker::PhantomData<S>);
 
-impl<const N: usize> Shape for Array<N> {
-    const SIZE: usize = N;
-    type Of<V: Clone> = [V; N];
+impl<S, const N: usize> Shape for Array<S, N>
+where
+    S: Shape,
+{
+    const SIZE: usize = N * S::SIZE;
+    type Of<V: Clone> = [S::Of<V>; N];
 
-    fn flatten<V: Clone>(value: &[V; N]) -> Vec<V> {
-        value.to_vec()
+    fn flatten<V: Clone>(value: &Self::Of<V>) -> Vec<V> {
+        value.iter().flat_map(S::flatten).collect()
     }
 
-    fn unflatten<V: Clone>(values: &[V]) -> [V; N] {
-        core::array::from_fn(|i| values[i].clone())
+    fn unflatten<V: Clone>(values: &[V]) -> Self::Of<V> {
+        core::array::from_fn(|i| S::unflatten(&values[i * S::SIZE..]))
     }
 }
 

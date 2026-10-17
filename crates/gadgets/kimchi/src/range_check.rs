@@ -169,11 +169,11 @@ where
     F: PrimeField,
 {
     type Input = Scalar;
-    type Output = Array<2>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "kimchi-range-check-0";
     const ROWS: usize = 1;
 
-    fn synthesize<E>(&self, env: &mut E, v: Of<Scalar, E::Var>) -> Of<Array<2>, E::Var>
+    fn synthesize<E>(&self, env: &mut E, v: Of<Scalar, E::Var>) -> Of<Array<Scalar, 2>, E::Var>
     where
         E: Env<F>,
     {
@@ -224,7 +224,7 @@ impl<F> TypedGadget<F> for RangeCheck1Gate<F>
 where
     F: PrimeField,
 {
-    type Input = (Scalar, Array<4>);
+    type Input = (Scalar, Array<Scalar, 4>);
     type Output = Unit;
     const NAME: &'static str = "kimchi-range-check-1";
     const ROWS: usize = 2;
@@ -301,12 +301,16 @@ impl<F> TypedGadget<F> for MultiRangeCheck<F>
 where
     F: PrimeField,
 {
-    type Input = Array<3>;
+    type Input = Array<Scalar, 3>;
     type Output = Unit;
     const NAME: &'static str = "kimchi-multi-range-check";
     const ROWS: usize = 4;
 
-    fn synthesize<E>(&self, env: &mut E, [v0, v1, v2]: Of<Array<3>, E::Var>) -> Of<Unit, E::Var>
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        [v0, v1, v2]: Of<Array<Scalar, 3>, E::Var>,
+    ) -> Of<Unit, E::Var>
     where
         E: Env<F>,
     {
@@ -339,12 +343,16 @@ impl<F> TypedGadget<F> for CompactMultiRangeCheck<F>
 where
     F: PrimeField,
 {
-    type Input = Array<2>;
-    type Output = Array<2>;
+    type Input = Array<Scalar, 2>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "kimchi-compact-multi-range-check";
     const ROWS: usize = 4;
 
-    fn synthesize<E>(&self, env: &mut E, [v01, v2]: Of<Array<2>, E::Var>) -> Of<Array<2>, E::Var>
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        [v01, v2]: Of<Array<Scalar, 2>, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var>
     where
         E: Env<F>,
     {

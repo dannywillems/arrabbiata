@@ -29,7 +29,7 @@
 use core::cmp::Ordering;
 
 use arrabbiata_field::{Field, PrimeField};
-use arrabbiata_gadget::{Array, Cell, Env, Of, Rom, TypedGadget};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Rom, Scalar, TypedGadget};
 
 use crate::{
     foreign_field::{self, LIMB_BITS, Limbs, two_pow},
@@ -123,8 +123,8 @@ impl<F> TypedGadget<F> for ForeignFieldAddGate
 where
     F: PrimeField,
 {
-    type Input = (Array<3>, Array<3>);
-    type Output = Array<4>;
+    type Input = (Array<Scalar, 3>, Array<Scalar, 3>);
+    type Output = Array<Scalar, 4>;
     const NAME: &'static str = "kimchi-foreign-field-add";
     const ROWS: usize = 1;
 
@@ -132,7 +132,7 @@ where
         &self,
         env: &mut E,
         (left, right): Of<Self::Input, E::Var>,
-    ) -> Of<Array<4>, E::Var>
+    ) -> Of<Array<Scalar, 4>, E::Var>
     where
         E: Env<F>,
     {
@@ -193,8 +193,8 @@ impl<F> TypedGadget<F> for ForeignFieldAdd<F>
 where
     F: PrimeField,
 {
-    type Input = (Array<3>, Array<3>);
-    type Output = Array<3>;
+    type Input = (Array<Scalar, 3>, Array<Scalar, 3>);
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "kimchi-ffadd";
     const ROWS: usize = 13;
 
@@ -202,7 +202,7 @@ where
         &self,
         env: &mut E,
         (left, right): Of<Self::Input, E::Var>,
-    ) -> Of<Array<3>, E::Var>
+    ) -> Of<Array<Scalar, 3>, E::Var>
     where
         E: Env<F>,
     {

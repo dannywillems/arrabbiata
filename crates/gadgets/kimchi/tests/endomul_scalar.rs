@@ -13,7 +13,7 @@
 
 use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Error, Of, TypedGadget, evaluate, witness};
+use arrabbiata_gadget::{Array, Cell, Env, Error, Of, Scalar, TypedGadget, evaluate, witness};
 use arrabbiata_generalized_plonk::{max_coefficients, prove, setup, verify};
 use arrabbiata_ipa::Ipa;
 use arrabbiata_kimchi_gadgets::{
@@ -165,16 +165,16 @@ fn a_crumb_out_of_range_is_rejected() {
 struct Challenge;
 
 impl TypedGadget<Fp> for Challenge {
-    type Input = Array<CRUMBS>;
-    type Output = Array<2>;
+    type Input = Array<Scalar, CRUMBS>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "challenge";
     const ROWS: usize = <EndoMulScalar<CRUMBS> as TypedGadget<Fp>>::ROWS + 2;
 
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        crumbs: Of<Array<CRUMBS>, E::Var>,
-    ) -> Of<Array<2>, E::Var> {
+        crumbs: Of<Array<Scalar, CRUMBS>, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let [_, a, b] = env.call(&EndoMulScalar::<CRUMBS>, crumbs);
         let rows = <EndoMulScalar<CRUMBS> as TypedGadget<Fp>>::ROWS;
         let a = env.copy(Cell::new(0, rows), &a);

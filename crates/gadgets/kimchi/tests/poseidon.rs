@@ -72,16 +72,16 @@ struct Permute<'a> {
 }
 
 impl TypedGadget<Fp> for Permute<'_> {
-    type Input = Array<3>;
-    type Output = Array<3>;
+    type Input = Array<Scalar, 3>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "permute";
     const ROWS: usize = ROWS_PER_PERMUTATION + 1;
 
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        input: Of<Array<3>, E::Var>,
-    ) -> Of<Array<3>, E::Var> {
+        input: Of<Array<Scalar, 3>, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var> {
         let state = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&input[i]], |[v]| v));
         let permutation = PoseidonPermutation {
             poseidon: self.poseidon,
@@ -97,7 +97,7 @@ struct Hash<'a> {
 }
 
 impl TypedGadget<Fp> for Hash<'_> {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = Scalar;
     const NAME: &'static str = "kimchi-hash";
     const ROWS: usize = ROWS_PER_PERMUTATION + 1;
@@ -105,7 +105,7 @@ impl TypedGadget<Fp> for Hash<'_> {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        input: Of<Array<2>, E::Var>,
+        input: Of<Array<Scalar, 2>, E::Var>,
     ) -> Of<Scalar, E::Var> {
         let a = env.advice(Cell::new(0, 0), [&input[0]], |[v]| v);
         let b = env.advice(Cell::new(1, 0), [&input[1]], |[v]| v);

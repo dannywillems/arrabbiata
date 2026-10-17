@@ -105,12 +105,16 @@ impl<F> TypedGadget<F> for Multi<F>
 where
     F: PrimeField,
 {
-    type Input = Array<3>;
+    type Input = Array<Scalar, 3>;
     type Output = Unit;
     const NAME: &'static str = "kimchi-multi-range-check-values";
     const ROWS: usize = 4;
 
-    fn synthesize<E: Env<F>>(&self, env: &mut E, values: Of<Array<3>, E::Var>) -> Of<Unit, E::Var> {
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        values: Of<Array<Scalar, 3>, E::Var>,
+    ) -> Of<Unit, E::Var> {
         let cells = core::array::from_fn(|i| env.advice(Cell::new(0, i), [&values[i]], |[v]| v));
         env.call(
             &MultiRangeCheck {
@@ -130,16 +134,16 @@ impl<F> TypedGadget<F> for Compact<F>
 where
     F: PrimeField,
 {
-    type Input = Array<2>;
-    type Output = Array<2>;
+    type Input = Array<Scalar, 2>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "kimchi-compact-multi-range-check-values";
     const ROWS: usize = 4;
 
     fn synthesize<E: Env<F>>(
         &self,
         env: &mut E,
-        [v01, v2]: Of<Array<2>, E::Var>,
-    ) -> Of<Array<2>, E::Var> {
+        [v01, v2]: Of<Array<Scalar, 2>, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let v2 = env.advice(Cell::new(0, 0), [&v2], |[v]| v);
         let v01 = env.advice(Cell::new(1, 2), [&v01], |[v]| v);
         env.call(
@@ -160,11 +164,15 @@ where
     F: PrimeField,
 {
     type Input = Scalar;
-    type Output = Array<2>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "kimchi-range-check-value";
     const ROWS: usize = 1;
 
-    fn synthesize<E: Env<F>>(&self, env: &mut E, v: Of<Scalar, E::Var>) -> Of<Array<2>, E::Var> {
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        v: Of<Scalar, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let v = env.advice(Cell::new(0, 0), [&v], |[x]| x);
         let gate = RangeCheck0Gate {
             table: self.0.clone(),

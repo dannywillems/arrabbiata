@@ -36,7 +36,7 @@
 //! row) and its range check. The inputs are the caller's to range-check.
 
 use arrabbiata_field::{Field, PrimeField};
-use arrabbiata_gadget::{Array, Cell, Env, Of, Rom, TypedGadget};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Rom, Scalar, TypedGadget};
 
 use crate::{
     foreign_field::{LIMB_BITS, Limbs, Nat, field_of, two_pow},
@@ -134,8 +134,8 @@ impl<F> TypedGadget<F> for ForeignFieldMulGate<F>
 where
     F: PrimeField,
 {
-    type Input = (Array<3>, Array<3>);
-    type Output = (Array<2>, Array<3>, Array<3>);
+    type Input = (Array<Scalar, 3>, Array<Scalar, 3>);
+    type Output = (Array<Scalar, 2>, Array<Scalar, 3>, Array<Scalar, 3>);
     const NAME: &'static str = "kimchi-foreign-field-mul";
     const ROWS: usize = 1;
 
@@ -297,8 +297,8 @@ impl<F> TypedGadget<F> for ForeignFieldMul<F>
 where
     F: PrimeField,
 {
-    type Input = (Array<3>, Array<3>);
-    type Output = Array<3>;
+    type Input = (Array<Scalar, 3>, Array<Scalar, 3>);
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "kimchi-ffmul";
     const ROWS: usize = 19;
 
@@ -306,7 +306,7 @@ where
         &self,
         env: &mut E,
         (left, right): Of<Self::Input, E::Var>,
-    ) -> Of<Array<3>, E::Var>
+    ) -> Of<Array<Scalar, 3>, E::Var>
     where
         E: Env<F>,
     {

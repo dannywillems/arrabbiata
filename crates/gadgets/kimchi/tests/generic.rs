@@ -114,7 +114,7 @@ struct KimchiTest {
 }
 
 impl TypedGadget<Fp> for KimchiTest {
-    type Input = Array<PUBLIC>;
+    type Input = Array<Scalar, PUBLIC>;
     type Output = Unit;
     const NAME: &'static str = "kimchi-generic-test";
     const ROWS: usize = PUBLIC + 2 * REPEATS;
@@ -122,7 +122,7 @@ impl TypedGadget<Fp> for KimchiTest {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        public: Of<Array<PUBLIC>, E::Var>,
+        public: Of<Array<Scalar, PUBLIC>, E::Var>,
     ) -> Of<Unit, E::Var> {
         for p in public {
             env.call(&PublicRow, p);
@@ -207,7 +207,7 @@ struct One {
 }
 
 impl TypedGadget<Fp> for One {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = Scalar;
     const NAME: &'static str = "one";
     const ROWS: usize = 1;
@@ -215,7 +215,7 @@ impl TypedGadget<Fp> for One {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        input: Of<Array<2>, E::Var>,
+        input: Of<Array<Scalar, 2>, E::Var>,
     ) -> Of<Scalar, E::Var> {
         let cells = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&input[i]], |[v]| v));
         env.call(&Generic { spec: self.spec }, cells)
@@ -229,16 +229,16 @@ struct Two {
 }
 
 impl TypedGadget<Fp> for Two {
-    type Input = Array<4>;
-    type Output = Array<2>;
+    type Input = Array<Scalar, 4>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "two";
     const ROWS: usize = 1;
 
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        input: Of<Array<4>, E::Var>,
-    ) -> Of<Array<2>, E::Var> {
+        input: Of<Array<Scalar, 4>, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let at = [0, 1, 3, 4];
         let cells: [E::Var; 4] =
             core::array::from_fn(|i| env.advice(Cell::new(at[i], 0), [&input[i]], |[v]| v));

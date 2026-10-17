@@ -19,7 +19,7 @@
 
 use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::{Field, PrimeField};
-use arrabbiata_gadget::{Array, Cell, Env, Of, TypedGadget, Unit, gates, witness};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, Unit, gates, witness};
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
     foreign_field::Limbs,
@@ -153,12 +153,16 @@ fn every_constraint_is_kimchis() {
 struct RangeCheck;
 
 impl TypedGadget<Fp> for RangeCheck {
-    type Input = Array<3>;
+    type Input = Array<Scalar, 3>;
     type Output = Unit;
     const NAME: &'static str = "range-check";
     const ROWS: usize = 4;
 
-    fn synthesize<E: Env<Fp>>(&self, env: &mut E, v: Of<Array<3>, E::Var>) -> Of<Unit, E::Var> {
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        v: Of<Array<Scalar, 3>, E::Var>,
+    ) -> Of<Unit, E::Var> {
         let cells = core::array::from_fn(|i| env.advice(Cell::new(0, i), [&v[i]], |[x]| x));
         let gadget = MultiRangeCheck {
             table: range_check_table(),
@@ -172,7 +176,7 @@ impl TypedGadget<Fp> for RangeCheck {
 struct XorWords;
 
 impl TypedGadget<Fp> for XorWords {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = arrabbiata_gadget::Scalar;
     const NAME: &'static str = "xor-words";
     const ROWS: usize = 5;
@@ -180,7 +184,7 @@ impl TypedGadget<Fp> for XorWords {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        w: Of<Array<2>, E::Var>,
+        w: Of<Array<Scalar, 2>, E::Var>,
     ) -> Of<arrabbiata_gadget::Scalar, E::Var> {
         let cells = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&w[i]], |[x]| x));
         env.call(&Xor::<Fp, 64> { table: xor_table() }, cells)
@@ -233,12 +237,16 @@ struct Foreign(Option<FFOps>);
 const FOREIGN_ROWS: usize = 19;
 
 impl TypedGadget<Fp> for Foreign {
-    type Input = Array<6>;
-    type Output = Array<3>;
+    type Input = Array<Scalar, 6>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "foreign";
     const ROWS: usize = FOREIGN_ROWS + 1;
 
-    fn synthesize<E: Env<Fp>>(&self, env: &mut E, x: Of<Array<6>, E::Var>) -> Of<Array<3>, E::Var> {
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        x: Of<Array<Scalar, 6>, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var> {
         let cells: [E::Var; 6] =
             core::array::from_fn(|c| env.advice(Cell::new(c, FOREIGN_ROWS), [&x[c]], |[v]| v));
         let [a0, a1, a2, b0, b1, b2] = cells;

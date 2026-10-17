@@ -44,8 +44,8 @@ const CHALLENGE_BITS: usize = 128;
 struct Multiply<const B: usize>;
 
 impl<const B: usize> TypedGadget<Fp> for Multiply<B> {
-    type Input = (Array<2>, Array<2>, Array<B>);
-    type Output = (Array<2>, Scalar);
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Array<Scalar, B>);
+    type Output = (Array<Scalar, 2>, Scalar);
     const NAME: &'static str = "multiply";
     const ROWS: usize = <EndoMul<Fp, B> as TypedGadget<Fp>>::ROWS;
 
@@ -202,8 +202,12 @@ proptest! {
 struct Scale;
 
 impl TypedGadget<Fp> for Scale {
-    type Input = (Array<2>, Array<2>, Array<CHALLENGE_BITS>);
-    type Output = Array<2>;
+    type Input = (
+        Array<Scalar, 2>,
+        Array<Scalar, 2>,
+        Array<Scalar, CHALLENGE_BITS>,
+    );
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "scale";
     const ROWS: usize = <EndoMul<Fp, CHALLENGE_BITS> as TypedGadget<Fp>>::ROWS + 3;
 
@@ -211,7 +215,7 @@ impl TypedGadget<Fp> for Scale {
         &self,
         env: &mut E,
         (t, p, bits): Of<Self::Input, E::Var>,
-    ) -> Of<Array<2>, E::Var> {
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let t: [E::Var; 2] =
             core::array::from_fn(|i| env.advice(Cell::new(column::XT + i, 0), [&t[i]], |[v]| v));
         let p =

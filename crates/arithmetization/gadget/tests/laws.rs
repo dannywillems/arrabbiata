@@ -17,8 +17,8 @@
 
 use arrabbiata_field::Field;
 use arrabbiata_gadget::{
-    Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, Shape, TypedGadget, Violation,
-    assign, circuit, evaluate, figures, gates, witness,
+    Array, Cell, Chain, Env, Error, Layout, Of, Repeat, Scalar, Shape, TypedGadget, Unit,
+    Violation, assign, circuit, evaluate, figures, gates, witness,
 };
 use arrabbiata_pasta::Fq as F;
 use proptest::prelude::*;
@@ -238,7 +238,7 @@ impl TypedGadget<F> for Misuse {
     }
 }
 
-type Unit2 = Array<2>;
+type Unit2 = Array<Scalar, 2>;
 
 #[test]
 fn misuses_are_rejected() {
@@ -325,7 +325,7 @@ struct Placing;
 
 impl TypedGadget<F> for Placing {
     type Input = Scalar;
-    type Output = Array<3>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "placing";
     const ROWS: usize = 2;
 
@@ -333,7 +333,7 @@ impl TypedGadget<F> for Placing {
         &self,
         env: &mut E,
         input: Of<Scalar, E::Var>,
-    ) -> Of<Array<3>, E::Var> {
+    ) -> Of<Array<Scalar, 3>, E::Var> {
         let x = env.advice(Cell::new(0, 0), [&input], |[v]| v);
         // A cell of a permuted column into a permuted column: a copy.
         let copied = env.place(Cell::new(1, 1), &x);
@@ -358,7 +358,7 @@ struct PlacingPublic;
 
 impl TypedGadget<F> for PlacingPublic {
     type Input = Scalar;
-    type Output = Array<2>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "placing-public";
     const ROWS: usize = 2;
 
@@ -366,7 +366,7 @@ impl TypedGadget<F> for PlacingPublic {
         &self,
         env: &mut E,
         input: Of<Scalar, E::Var>,
-    ) -> Of<Array<2>, E::Var> {
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let x = env.advice(Cell::new(1, 0), [&input], |[v]| v);
         let copied = env.place(Cell::new(0, 1), &x);
         let doubled = env.place(Cell::new(2, 1), &(x.clone() + x));
@@ -457,15 +457,33 @@ fn copying_in_place_is_the_identity() {
 /// its size is the sum of the sizes.
 #[test]
 fn tuples_of_shapes() {
-    type Four = (Array<2>, Scalar, Array<3>, (Scalar, Array<1>));
+    type Four = (
+        Array<Scalar, 2>,
+        Scalar,
+        Array<Scalar, 3>,
+        (Scalar, Array<Scalar, 1>),
+    );
     let value = ([1u8, 2], 3, [4, 5, 6], (7, [8]));
     let flat = Four::flatten(&value);
     assert_eq!(flat, vec![1, 2, 3, 4, 5, 6, 7, 8]);
     assert_eq!(Four::SIZE, flat.len());
     assert_eq!(Four::unflatten(&flat), value);
-    type Three = (Scalar, Array<2>, Scalar);
+    type Three = (Scalar, Array<Scalar, 2>, Scalar);
     let three = (1u8, [2, 3], 4);
     assert_eq!(Three::unflatten(&Three::flatten(&three)), three);
+}
+
+/// An array of arrays: three groups of two pairs, flattened in order, of
+/// size the product; unflatten after flatten is the identity.
+#[test]
+fn arrays_of_shapes() {
+    type Nested = Array<Array<(Scalar, Scalar), 2>, 3>;
+    let value = [[(1u8, 2), (3, 4)], [(5, 6), (7, 8)], [(9, 10), (11, 12)]];
+    let flat = Nested::flatten(&value);
+    assert_eq!(flat, (1..=12).collect::<Vec<u8>>());
+    assert_eq!(Nested::SIZE, 12);
+    assert_eq!(Nested::unflatten(&flat), value);
+    assert_eq!(<Array<Unit, 5> as Shape>::SIZE, 0);
 }
 
 /// The figures are the compiled circuit's: one gate kind per selector, the
@@ -508,12 +526,16 @@ fn figures_are_the_circuits() {
 struct Connected;
 
 impl TypedGadget<F> for Connected {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = Unit2;
     const NAME: &'static str = "connected";
     const ROWS: usize = 1;
 
-    fn synthesize<E: Env<F>>(&self, env: &mut E, input: Of<Array<2>, E::Var>) -> Of<Unit2, E::Var> {
+    fn synthesize<E: Env<F>>(
+        &self,
+        env: &mut E,
+        input: Of<Array<Scalar, 2>, E::Var>,
+    ) -> Of<Unit2, E::Var> {
         let a = env.advice(Cell::new(0, 0), [&input[0]], |[v]| v);
         let b = env.advice(Cell::new(1, 0), [&input[1]], |[v]| v);
         env.connect(&a, &b);

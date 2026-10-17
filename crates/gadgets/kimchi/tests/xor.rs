@@ -41,7 +41,7 @@ const ROWS: usize = BITS / 16;
 struct Words;
 
 impl TypedGadget<Fp> for Words {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = Scalar;
     const NAME: &'static str = "words";
     const ROWS: usize = ROWS + 1;
@@ -49,7 +49,7 @@ impl TypedGadget<Fp> for Words {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        words: Of<Array<2>, E::Var>,
+        words: Of<Array<Scalar, 2>, E::Var>,
     ) -> Of<Scalar, E::Var> {
         let cells = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&words[i]], |[v]| v));
         env.call(&Xor::<Fp, BITS> { table: xor_table() }, cells)
@@ -125,7 +125,7 @@ fn only_the_lookup_catches_a_wrong_nybble() {
 struct PublicXor;
 
 impl TypedGadget<Fp> for PublicXor {
-    type Input = Array<2>;
+    type Input = Array<Scalar, 2>;
     type Output = Scalar;
     const NAME: &'static str = "public-xor";
     const ROWS: usize = ROWS + 2;
@@ -133,7 +133,7 @@ impl TypedGadget<Fp> for PublicXor {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        words: Of<Array<2>, E::Var>,
+        words: Of<Array<Scalar, 2>, E::Var>,
     ) -> Of<Scalar, E::Var> {
         let out = env.call(&Words, words);
         let public = env.copy(Cell::new(0, ROWS + 1), &out);

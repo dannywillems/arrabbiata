@@ -94,8 +94,13 @@ impl<F> TypedGadget<F> for VarBaseMulGate
 where
     F: Field,
 {
-    type Input = (Array<2>, Array<2>, Scalar, Array<BITS_PER_GATE>);
-    type Output = (Array<2>, Scalar);
+    type Input = (
+        Array<Scalar, 2>,
+        Array<Scalar, 2>,
+        Scalar,
+        Array<Scalar, BITS_PER_GATE>,
+    );
+    type Output = (Array<Scalar, 2>, Scalar);
     const NAME: &'static str = "kimchi-varbasemul";
     const ROWS: usize = ROWS_PER_GATE;
 
@@ -172,8 +177,8 @@ impl<F, const B: usize> TypedGadget<F> for VarBaseMul<B>
 where
     F: Field,
 {
-    type Input = (Array<2>, Array<2>, Array<B>);
-    type Output = (Array<2>, Scalar);
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Array<Scalar, B>);
+    type Output = (Array<Scalar, 2>, Scalar);
     const NAME: &'static str = "kimchi-varbasemul-scalar";
     const ROWS: usize = {
         assert!(

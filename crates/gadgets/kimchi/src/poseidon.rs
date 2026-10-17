@@ -14,7 +14,7 @@
 //! rounds of [`arrabbiata_poseidon::kimchi`], under one selector.
 
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Of, TypedGadget};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget};
 use arrabbiata_poseidon::kimchi::{KimchiPoseidon, ROUNDS, WIDTH};
 
 /// The rounds on one row.
@@ -56,16 +56,16 @@ impl<F> TypedGadget<F> for PoseidonRow<'_, F>
 where
     F: Field,
 {
-    type Input = Array<WIDTH>;
-    type Output = Array<WIDTH>;
+    type Input = Array<Scalar, WIDTH>;
+    type Output = Array<Scalar, WIDTH>;
     const NAME: &'static str = "kimchi-poseidon";
     const ROWS: usize = 1;
 
     fn synthesize<E>(
         &self,
         env: &mut E,
-        input: Of<Array<WIDTH>, E::Var>,
-    ) -> Of<Array<WIDTH>, E::Var>
+        input: Of<Array<Scalar, WIDTH>, E::Var>,
+    ) -> Of<Array<Scalar, WIDTH>, E::Var>
     where
         E: Env<F>,
     {
@@ -102,16 +102,16 @@ impl<F> TypedGadget<F> for PoseidonPermutation<'_, F>
 where
     F: Field,
 {
-    type Input = Array<WIDTH>;
-    type Output = Array<WIDTH>;
+    type Input = Array<Scalar, WIDTH>;
+    type Output = Array<Scalar, WIDTH>;
     const NAME: &'static str = "kimchi-poseidon-permutation";
     const ROWS: usize = ROWS_PER_PERMUTATION;
 
     fn synthesize<E>(
         &self,
         env: &mut E,
-        input: Of<Array<WIDTH>, E::Var>,
-    ) -> Of<Array<WIDTH>, E::Var>
+        input: Of<Array<Scalar, WIDTH>, E::Var>,
+    ) -> Of<Array<Scalar, WIDTH>, E::Var>
     where
         E: Env<F>,
     {

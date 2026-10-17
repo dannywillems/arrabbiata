@@ -15,7 +15,7 @@
 //!   limb is `2^88` or more).
 
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Error, Of, TypedGadget, witness};
+use arrabbiata_gadget::{Array, Cell, Env, Error, Of, Scalar, TypedGadget, witness};
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
     foreign_field::Limbs,
@@ -137,16 +137,16 @@ struct Add {
 }
 
 impl TypedGadget<Fp> for Add {
-    type Input = Array<6>;
-    type Output = Array<3>;
+    type Input = Array<Scalar, 6>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "add";
     const ROWS: usize = INPUT_ROW + 1;
 
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        input: Of<Array<6>, E::Var>,
-    ) -> Of<Array<3>, E::Var> {
+        input: Of<Array<Scalar, 6>, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var> {
         let cells: [E::Var; 6] =
             core::array::from_fn(|c| env.advice(Cell::new(c, INPUT_ROW), [&input[c]], |[v]| v));
         let [a0, a1, a2, b0, b1, b2] = cells;
@@ -275,7 +275,7 @@ struct Bound {
 }
 
 impl TypedGadget<Fp> for Bound {
-    type Input = Array<3>;
+    type Input = Array<Scalar, 3>;
     type Output = arrabbiata_gadget::Unit;
     const NAME: &'static str = "bound";
     const ROWS: usize = 10;
@@ -283,7 +283,7 @@ impl TypedGadget<Fp> for Bound {
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        x: Of<Array<3>, E::Var>,
+        x: Of<Array<Scalar, 3>, E::Var>,
     ) -> Of<arrabbiata_gadget::Unit, E::Var> {
         let two_88 = field(1 << 88);
         let cells: [E::Var; 3] =

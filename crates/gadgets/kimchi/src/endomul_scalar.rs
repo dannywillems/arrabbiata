@@ -21,7 +21,7 @@
 //! as Kimchi's `endomul_scalar::gen_witness`.
 
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Of, TypedGadget};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget};
 
 /// The crumbs of one row.
 pub const CRUMBS_PER_ROW: usize = 8;
@@ -88,8 +88,8 @@ impl<F> TypedGadget<F> for EndoMulScalarGate
 where
     F: Field,
 {
-    type Input = (Array<3>, Array<CRUMBS_PER_ROW>);
-    type Output = Array<3>;
+    type Input = (Array<Scalar, 3>, Array<Scalar, CRUMBS_PER_ROW>);
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "kimchi-endomul-scalar";
     const ROWS: usize = 1;
 
@@ -97,7 +97,7 @@ where
         &self,
         env: &mut E,
         (start, crumbs): Of<Self::Input, E::Var>,
-    ) -> Of<Array<3>, E::Var>
+    ) -> Of<Array<Scalar, 3>, E::Var>
     where
         E: Env<F>,
     {
@@ -173,8 +173,8 @@ impl<F, const C: usize> TypedGadget<F> for EndoMulScalar<C>
 where
     F: Field,
 {
-    type Input = Array<C>;
-    type Output = Array<3>;
+    type Input = Array<Scalar, C>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "kimchi-endomul-scalar-chain";
     const ROWS: usize = {
         assert!(
@@ -184,7 +184,11 @@ where
         C / CRUMBS_PER_ROW
     };
 
-    fn synthesize<E>(&self, env: &mut E, crumbs: Of<Array<C>, E::Var>) -> Of<Array<3>, E::Var>
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        crumbs: Of<Array<Scalar, C>, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var>
     where
         E: Env<F>,
     {

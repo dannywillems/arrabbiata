@@ -95,11 +95,15 @@ where
     F: PrimeField,
 {
     type Input = Scalar;
-    type Output = Array<3>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "kimchi-rot64";
     const ROWS: usize = 1;
 
-    fn synthesize<E>(&self, env: &mut E, word_in: Of<Scalar, E::Var>) -> Of<Array<3>, E::Var>
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        word_in: Of<Scalar, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var>
     where
         E: Env<F>,
     {

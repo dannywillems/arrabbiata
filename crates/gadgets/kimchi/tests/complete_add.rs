@@ -11,7 +11,7 @@
 
 use arrabbiata_curve::{Affine, Projective};
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Of, TypedGadget, witness};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, witness};
 use arrabbiata_generalized_plonk::{max_coefficients, prove, setup, verify};
 use arrabbiata_ipa::Ipa;
 use arrabbiata_kimchi_gadgets::{
@@ -42,16 +42,16 @@ const CELLS: usize = 11;
 struct AddRow;
 
 impl TypedGadget<Fp> for AddRow {
-    type Input = Array<4>;
-    type Output = Array<3>;
+    type Input = Array<Scalar, 4>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "add-row";
     const ROWS: usize = 1;
 
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        input: Of<Array<4>, E::Var>,
-    ) -> Of<Array<3>, E::Var> {
+        input: Of<Array<Scalar, 4>, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var> {
         let cells = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&input[i]], |[v]| v));
         env.call(&CompleteAdd, cells)
     }
@@ -198,16 +198,16 @@ proptest! {
 struct FiniteAdd;
 
 impl TypedGadget<Fp> for FiniteAdd {
-    type Input = Array<4>;
-    type Output = Array<2>;
+    type Input = Array<Scalar, 4>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "finite-add";
     const ROWS: usize = 1;
 
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        input: Of<Array<4>, E::Var>,
-    ) -> Of<Array<2>, E::Var> {
+        input: Of<Array<Scalar, 4>, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let [x3, y3, inf] = env.call(&CompleteAdd, input);
         env.assert_zero(inf);
         [x3, y3]
@@ -219,16 +219,16 @@ impl TypedGadget<Fp> for FiniteAdd {
 struct SumOfFour;
 
 impl TypedGadget<Fp> for SumOfFour {
-    type Input = Array<8>;
-    type Output = Array<2>;
+    type Input = Array<Scalar, 8>;
+    type Output = Array<Scalar, 2>;
     const NAME: &'static str = "sum-of-four";
     const ROWS: usize = 5;
 
     fn synthesize<E: Env<Fp>>(
         &self,
         env: &mut E,
-        points: Of<Array<8>, E::Var>,
-    ) -> Of<Array<2>, E::Var> {
+        points: Of<Array<Scalar, 8>, E::Var>,
+    ) -> Of<Array<Scalar, 2>, E::Var> {
         let mut x = env.advice(Cell::new(column::X1, 0), [&points[0]], |[v]| v);
         let mut y = env.advice(Cell::new(column::Y1, 0), [&points[1]], |[v]| v);
         for row in 0..3 {

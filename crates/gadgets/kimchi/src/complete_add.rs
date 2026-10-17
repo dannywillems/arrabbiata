@@ -23,7 +23,7 @@
 //! The witness is computed as Kimchi's test (`tests/ec.rs`) writes it.
 
 use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Of, TypedGadget};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget};
 
 use self::column::{INF, INF_Z, S, SAME_X, X1, X2, X3, X21_INV, Y1, Y2, Y3};
 
@@ -82,12 +82,16 @@ impl<F> TypedGadget<F> for CompleteAdd
 where
     F: Field,
 {
-    type Input = Array<4>;
-    type Output = Array<3>;
+    type Input = Array<Scalar, 4>;
+    type Output = Array<Scalar, 3>;
     const NAME: &'static str = "kimchi-complete-add";
     const ROWS: usize = 1;
 
-    fn synthesize<E>(&self, env: &mut E, input: Of<Array<4>, E::Var>) -> Of<Array<3>, E::Var>
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        input: Of<Array<Scalar, 4>, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var>
     where
         E: Env<F>,
     {
