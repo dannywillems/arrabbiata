@@ -3,6 +3,7 @@
 //! and its witness, the witness computed by the gadget of
 //! `arrabbiata-kimchi-gadgets` on Kimchi's rows.
 
+pub mod and;
 pub mod generic;
 pub mod not;
 pub mod range_check;

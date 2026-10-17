@@ -23,7 +23,9 @@ use arrabbiata_kimchi::{
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
     polynomials::{
-        self as gadgets, bit_length,
+        self as gadgets,
+        and::{create_and_witness, extend_and_witness},
+        bit_length,
         generic::{
             GenericGateSpec,
             testing::{create_circuit, fill_in_witness},
@@ -1701,4 +1703,33 @@ fn polynomials_not_extend_not_witness_unchecked_length() {
             "Bits must be greater or equal than the inputs length: 4 < 6"
         ))
     );
+}
+
+#[test]
+fn polynomials_and_extend_and() {
+    // The XOR of 16 bits, its zero row, then the Generic AND row.
+    let mut gates = Vec::new();
+    let next = CircuitGate::<Fp>::extend_and(&mut gates, 2);
+    assert_eq!(next, 3);
+    assert_eq!(gates[2].typ, GateType::Generic);
+    assert_eq!(gates[2].coeffs[7], -Fp::from_u64(2));
+}
+
+#[test]
+fn polynomials_and_create_and_witness() {
+    // a + b = xor + 2 and: [a, b, sum, sum, xor, and] on the last row.
+    let (a, b) = (Fp::from_u64(0b1100), Fp::from_u64(0b1010));
+    let witness = create_and_witness(a, b, 1).unwrap();
+    let row = witness[0].len() - 1;
+    assert_eq!(witness[4][row], Fp::from_u64(0b0110));
+    assert_eq!(witness[5][row], Fp::from_u64(0b1000));
+    assert!(create_and_witness(Fp::from_u64(1 << 9), b, 1).is_err());
+}
+
+#[test]
+fn polynomials_and_extend_and_witness() {
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::ZERO]);
+    extend_and_witness(&mut witness, Fp::ONE, Fp::ONE, 2).unwrap();
+    assert_eq!(witness[0].len(), 4);
+    assert_eq!(witness[5][3], Fp::ONE);
 }

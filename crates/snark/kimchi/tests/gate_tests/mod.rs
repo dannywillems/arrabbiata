@@ -6,14 +6,15 @@
 
 #![allow(dead_code)]
 
-use arrabbiata_curve::glv::Glv;
+use arrabbiata_curve::{Projective, glv::Glv};
 use arrabbiata_field::{PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_kimchi::{
     constraints::{COLUMNS, CircuitGate, ConstraintSystem},
     gates::{Gates, KimchiGates},
-    prover::{ProverIndex, prove},
-    rng::{Arkworks, SplitMix64},
-    srs::Srs,
+    lookup::LookupPattern,
+    prover::{PointEvaluations, ProverIndex, ProverProof, prove},
+    rng::{Arkworks, RandomSource, SplitMix64},
+    srs::{PolyComm, Srs},
     verifier::verify,
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
@@ -32,6 +33,8 @@ pub struct Case {
     pub witnesses: Vec<Vec<Vec<String>>>,
     /// The outcomes, by label, as Kimchi's `Debug` prints them.
     pub verdicts: Vec<(String, String)>,
+    /// Kimchi's proof, in the prover tool's lines.
+    pub proof: Vec<String>,
 }
 
 impl Case {
@@ -97,6 +100,7 @@ pub fn case(name: &str) -> Case {
                     .collect();
                 case.witnesses.push(witness);
             }
+            Some("proof") => case.proof.push(line["proof ".len()..].to_string()),
             Some("verdict") => {
                 let label = words.next().unwrap().to_string();
                 let rest = line.splitn(3, ' ').nth(2).unwrap_or("").to_string();
@@ -233,4 +237,150 @@ pub fn prove_and_verify_pallas(
 /// The `Debug` of a result, as the vectors print verdicts.
 pub fn debug<T: core::fmt::Debug>(x: &T) -> String {
     format!("{x:?}")
+}
+
+/// A stream of words replayed: the words Kimchi's prover drew.
+#[derive(Clone, Debug)]
+pub struct Replay(pub Vec<u64>, pub usize);
+
+impl RandomSource for Replay {
+    fn next_u64(&mut self) -> u64 {
+        let word = self.0[self.1];
+        self.1 += 1;
+        word
+    }
+}
+
+fn point(p: &Projective<Vesta>) -> String {
+    let a = p.to_affine();
+    match (a.x(), a.y()) {
+        (Some(x), Some(y)) => format!("{} {}", hex(x), hex(y)),
+        _ => String::from("inf"),
+    }
+}
+
+fn comm(c: &PolyComm<Vesta>) -> String {
+    let chunks: Vec<String> = c.chunks.iter().map(point).collect();
+    format!("{} {}", c.chunks.len(), chunks.join(" "))
+}
+
+fn values(v: &[Fp]) -> String {
+    let hexes: Vec<String> = v.iter().map(|x| hex(*x)).collect();
+    format!("{} {}", v.len(), hexes.join(" "))
+}
+
+fn evaluation(e: &PointEvaluations<Fp>) -> String {
+    format!("{} {}", values(&e.zeta), values(&e.zeta_omega))
+}
+
+/// Our proof in the prover tool's lines, the absent evaluations left out,
+/// sorted (the tool lists the optional selectors in Kimchi's order).
+pub fn proof_lines(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, c) in proof.w_comm.iter().enumerate() {
+        out.push(format!("comm {name} w{i} {}", comm(c)));
+    }
+    out.push(format!("comm {name} z {}", comm(&proof.z_comm)));
+    out.push(format!("comm {name} t {}", comm(&proof.t_comm)));
+    if let Some(l) = &proof.lookup {
+        for (i, c) in l.sorted.iter().enumerate() {
+            out.push(format!("comm {name} sorted{i} {}", comm(c)));
+        }
+        out.push(format!("comm {name} aggreg {}", comm(&l.aggreg)));
+        if let Some(r) = &l.runtime {
+            out.push(format!("comm {name} runtime {}", comm(r)));
+        }
+    }
+    let e = &proof.evals;
+    let mut put = |label: String, p: &PointEvaluations<Fp>| {
+        out.push(format!("eval {name} {label} {}", evaluation(p)));
+    };
+    put("public".into(), &e.public);
+    for (i, w) in e.w.iter().enumerate() {
+        put(format!("w{i}"), w);
+    }
+    put("z".into(), &e.z);
+    for (i, s) in e.s.iter().enumerate() {
+        put(format!("s{i}"), s);
+    }
+    for (i, c) in e.coefficients.iter().enumerate() {
+        put(format!("coefficient{i}"), c);
+    }
+    for (label, p) in [
+        ("Generic", &e.generic_selector),
+        ("Poseidon", &e.poseidon_selector),
+        ("CompleteAdd", &e.complete_add_selector),
+        ("VarBaseMul", &e.mul_selector),
+        ("EndoMul", &e.emul_selector),
+        ("EndoMulScalar", &e.endomul_scalar_selector),
+    ] {
+        put(label.into(), p);
+    }
+    for (typ, p) in &e.optional_selectors {
+        put(format!("{typ:?}"), p);
+    }
+    if let Some(l) = &e.lookup {
+        put("lookup_aggregation".into(), &l.aggregation);
+        put("lookup_table".into(), &l.table);
+        for (i, s) in l.sorted.iter().enumerate() {
+            put(format!("lookup_sorted{i}"), s);
+        }
+        if let Some(r) = &l.runtime_table {
+            put("runtime_lookup_table".into(), r);
+        }
+        if let Some(r) = &l.runtime_selector {
+            put("runtime_lookup_table_selector".into(), r);
+        }
+        for (label, pattern) in [
+            ("xor_lookup_selector", LookupPattern::Xor),
+            ("lookup_gate_lookup_selector", LookupPattern::Lookup),
+            ("range_check_lookup_selector", LookupPattern::RangeCheck),
+            (
+                "foreign_field_mul_lookup_selector",
+                LookupPattern::ForeignFieldMul,
+            ),
+        ] {
+            if let Some((_, p)) = l.selectors.iter().find(|(q, _)| *q == pattern) {
+                put(label.into(), p);
+            }
+        }
+    }
+    out.push(format!("ft_eval1 {name} {}", hex(proof.ft_eval1)));
+    let o = &proof.proof;
+    for (i, (l, r)) in o.lr.iter().enumerate() {
+        out.push(format!("opening {name} lr{i} {} {}", point(l), point(r)));
+    }
+    out.push(format!("opening {name} delta {}", point(&o.delta)));
+    out.push(format!("opening {name} z1 {}", hex(o.z1)));
+    out.push(format!("opening {name} z2 {}", hex(o.z2)));
+    out.push(format!("opening {name} sg {}", point(&o.sg)));
+    out.sort();
+    out
+}
+
+/// Our proof of `witness` for `gates` on Vesta, drawing `words` as Kimchi's
+/// prover drew them.
+pub fn prove_replayed(
+    gates: Vec<CircuitGate<Fp>>,
+    witness: [Vec<Fp>; COLUMNS],
+    words: Vec<u64>,
+) -> ProverProof<Vesta> {
+    let kimchi = vesta_gates();
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    cs.verify_witness(&witness, &[], &kimchi).unwrap();
+    let depth = cs.domain.d1.size();
+    let index: ProverIndex<Vesta> = ProverIndex::create(cs, Srs::create(depth));
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let mut rng = Arkworks(Replay(words, 0));
+    prove(
+        &index,
+        witness,
+        &[],
+        &[],
+        &kimchi,
+        (&base, &scalar),
+        &mut rng,
+    )
+    .unwrap()
 }
