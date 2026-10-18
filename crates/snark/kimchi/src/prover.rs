@@ -671,7 +671,7 @@ pub(crate) fn unnormalized_lagrange<F: Field>(x: F, a: F, n: usize) -> F {
 }
 
 /// The gate types with constraints, in Kimchi's order.
-pub(crate) const CONSTRAINED: [GateType; 12] = [
+pub const CONSTRAINED: [GateType; 12] = [
     GateType::Generic,
     GateType::Poseidon,
     GateType::CompleteAdd,
@@ -932,6 +932,16 @@ pub struct PointEvaluations<F> {
     pub zeta_omega: Vec<F>,
 }
 
+impl<F> PointEvaluations<F> {
+    /// `f` applied to every evaluation, at `zeta` first, chunk by chunk:
+    /// the functor's action on maps.
+    pub fn map<G>(&self, f: &mut impl FnMut(&F) -> G) -> PointEvaluations<G> {
+        let zeta = self.zeta.iter().map(&mut *f).collect();
+        let zeta_omega = self.zeta_omega.iter().map(&mut *f).collect();
+        PointEvaluations { zeta, zeta_omega }
+    }
+}
+
 /// The lookup evaluations a proof carries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LookupEvaluations<F> {
@@ -947,6 +957,28 @@ pub struct LookupEvaluations<F> {
     pub runtime_selector: Option<PointEvaluations<F>>,
     /// The selector of each pattern used, in Kimchi's order.
     pub selectors: Vec<(LookupPattern, PointEvaluations<F>)>,
+}
+
+impl<F> LookupEvaluations<F> {
+    /// `f` applied to every evaluation, in the order of the fields (the
+    /// aggregation, the table, the sorted columns, the runtime table and
+    /// selector, the selectors).
+    pub fn map<G>(&self, f: &mut impl FnMut(&F) -> G) -> LookupEvaluations<G> {
+        let aggregation = self.aggregation.map(f);
+        let table = self.table.map(f);
+        let sorted = self.sorted.iter().map(|p| p.map(f)).collect();
+        let runtime_table = self.runtime_table.as_ref().map(|p| p.map(f));
+        let runtime_selector = self.runtime_selector.as_ref().map(|p| p.map(f));
+        let selectors = self.selectors.iter().map(|(l, p)| (*l, p.map(f))).collect();
+        LookupEvaluations {
+            aggregation,
+            table,
+            sorted,
+            runtime_table,
+            runtime_selector,
+            selectors,
+        }
+    }
 }
 
 /// The evaluations a proof carries (Kimchi's `ProofEvaluations`).
@@ -979,6 +1011,49 @@ pub struct ProofEvaluations<F> {
     pub optional_selectors: Vec<(GateType, PointEvaluations<F>)>,
     /// The lookup evaluations, when the circuit looks something up.
     pub lookup: Option<LookupEvaluations<F>>,
+}
+
+impl<F> ProofEvaluations<F> {
+    /// `f` applied to every evaluation, in the order of the fields: the
+    /// public polynomial, the witness, `z`, the sigmas, the coefficients,
+    /// the six selectors, the optional selectors, the lookups. The
+    /// evaluations are a functor in the field, and this is its action: the
+    /// shape (which selectors, how many chunks) is kept, so a structure of
+    /// field elements and one of circuit variables share their type.
+    pub fn map<G>(&self, f: &mut impl FnMut(&F) -> G) -> ProofEvaluations<G> {
+        let public = self.public.map(f);
+        let w = core::array::from_fn(|i| self.w[i].map(f));
+        let z = self.z.map(f);
+        let s = core::array::from_fn(|i| self.s[i].map(f));
+        let coefficients = core::array::from_fn(|i| self.coefficients[i].map(f));
+        let generic_selector = self.generic_selector.map(f);
+        let poseidon_selector = self.poseidon_selector.map(f);
+        let complete_add_selector = self.complete_add_selector.map(f);
+        let mul_selector = self.mul_selector.map(f);
+        let emul_selector = self.emul_selector.map(f);
+        let endomul_scalar_selector = self.endomul_scalar_selector.map(f);
+        let optional_selectors = self
+            .optional_selectors
+            .iter()
+            .map(|(t, p)| (*t, p.map(f)))
+            .collect();
+        let lookup = self.lookup.as_ref().map(|l| l.map(f));
+        ProofEvaluations {
+            public,
+            w,
+            z,
+            s,
+            coefficients,
+            generic_selector,
+            poseidon_selector,
+            complete_add_selector,
+            mul_selector,
+            emul_selector,
+            endomul_scalar_selector,
+            optional_selectors,
+            lookup,
+        }
+    }
 }
 
 impl<F> ProofEvaluations<F>

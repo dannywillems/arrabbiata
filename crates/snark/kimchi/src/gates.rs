@@ -85,6 +85,15 @@ where
             .collect();
         Ok(Self { kinds })
     }
+
+    /// The constraints of `typ`, as terms; `None` for a gate with no
+    /// constraint of its own. A verifier written in another model of the
+    /// ring signature (a circuit) interprets them there
+    /// ([`GateConstraints::interpret`]).
+    #[must_use]
+    pub fn constraints(&self, typ: GateType) -> Option<&GateConstraints<F>> {
+        self.kinds.iter().find(|(t, _)| *t == typ).map(|(_, k)| k)
+    }
 }
 
 impl<F> Gates<F> for KimchiGates<F>

@@ -1,7 +1,7 @@
 //! The behaviour of each public item, one test per item.
 
 use arrabbiata_curve::{Projective, glv::Glv};
-use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_field::{Field, Native, PrimeField};
 use arrabbiata_gadget::{Cell, Env, Of, Placed, Scalar as Value, TypedGadget, Unit, compile};
 use arrabbiata_ipa::generic::{BaseOracle, ChallengeMap, HashToCurve, IpaOracle, Opening, Schnorr};
 use arrabbiata_kimchi::{
@@ -29,10 +29,11 @@ use arrabbiata_kimchi::{
     oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
     prover::{
-        self, EvaluationRound, Hidden, LOOKUP_ALPHA, LookupCommitments, LookupEvaluations,
-        LookupRound, OpeningProof, PERMUTATION_ALPHA, PermutationRound, PointEvaluations,
-        ProofEvaluations, ProverIndex, ProverProof, QuotientRound, WitnessRound, evaluation_round,
-        opening_round, permutation_round, prove, quotient_round, shift_scalar, witness_round,
+        self, CONSTRAINED, EvaluationRound, Hidden, LOOKUP_ALPHA, LookupCommitments,
+        LookupEvaluations, LookupRound, OpeningProof, PERMUTATION_ALPHA, PermutationRound,
+        PointEvaluations, ProofEvaluations, ProverIndex, ProverProof, QuotientRound, WitnessRound,
+        evaluation_round, opening_round, permutation_round, prove, quotient_round, shift_scalar,
+        witness_round,
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     serialization,
@@ -1301,6 +1302,56 @@ fn verifier_evaluation_shape() {
         evaluation_shape(vi, &stray),
         Err(VerifyError::IncorrectLength)
     );
+}
+
+#[test]
+fn kimchi_gates_constraints() {
+    // The terms the native evaluation evaluates: in the native model, the
+    // same values; a gate with no constraint has none.
+    let kimchi = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let generic = kimchi.constraints(GateType::Generic).unwrap();
+    let witness = |c: usize, _: usize| Fp::from_u64(c as u64 + 1);
+    let coefficient = |c: usize, _: usize| Fp::from_u64(2 * c as u64 + 1);
+    let native = generic.interpret(&mut Native, &witness, &coefficient);
+    assert_eq!(
+        native,
+        kimchi.evaluate(GateType::Generic, &witness, &coefficient)
+    );
+    assert!(kimchi.constraints(GateType::Zero).is_none());
+    assert_eq!(CONSTRAINED[0], GateType::Generic);
+}
+
+#[test]
+fn evaluations_map() {
+    // The functor's action keeps the shape, and maps every value once, in
+    // the order of the fields.
+    let (_, proof, _) = proved();
+    let mut seen = Vec::new();
+    let doubled = proof.evals.map(&mut |x: &Fp| {
+        seen.push(*x);
+        *x + *x
+    });
+    assert_eq!(
+        doubled.w[0].zeta[0],
+        proof.evals.w[0].zeta[0] + proof.evals.w[0].zeta[0]
+    );
+    assert_eq!(seen[0], proof.evals.public.zeta[0]);
+    assert_eq!(seen.len(), 44 * 2);
+    let back = proof.evals.map(&mut |x: &Fp| *x);
+    assert_eq!(back, proof.evals);
+    let point = proof.evals.z.map(&mut |x: &Fp| -*x);
+    assert_eq!(point.zeta_omega[0], -proof.evals.z.zeta_omega[0]);
+    let lookups = LookupEvaluations {
+        aggregation: point.clone(),
+        table: point.clone(),
+        sorted: vec![point.clone()],
+        runtime_table: None,
+        runtime_selector: Some(point.clone()),
+        selectors: vec![(LookupPattern::Xor, point.clone())],
+    };
+    let mut count = 0;
+    let _ = lookups.map(&mut |_: &Fp| count += 1);
+    assert_eq!(count, 5 * 2);
 }
 
 /// The deferred values of an honest run on [`proved`], and what the
