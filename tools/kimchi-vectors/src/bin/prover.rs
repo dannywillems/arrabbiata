@@ -1,7 +1,7 @@
 //! A whole Kimchi proof, reproducibly: Kimchi's generic test circuit
 //! (`generic::testing::create_circuit` with 5 public inputs, then
 //! `fill_in_witness`), proved over Vesta with a SplitMix64 RNG, unchunked
-//! and in chunks of 16 rows. Prints the circuit, the witness, the
+//! and in chunks of 16 rows, and over Pallas too. Prints the circuit, the witness, the
 //! verifier-index digest, every part of the proof, the public commitment
 //! and every oracle; also the first field elements arkworks samples from
 //! SplitMix64(42), to pin the sampling.
@@ -40,10 +40,16 @@ use kimchi::{
     verifier::verify,
     prover_index::ProverIndex,
 };
-use mina_curves::pasta::{Fp, Fq as PallasScalar, Pallas, Vesta, VestaParameters};
+use kimchi::{
+    circuits::polynomials::foreign_field_add::witness::{self as ffadd_witness, FFOps},
+    plonk_sponge::FrSponge,
+};
+use mina_curves::pasta::{Fp, Fq, Fq as PallasScalar, Pallas, PallasParameters, Vesta, VestaParameters};
 use mina_poseidon::{
     constants::PlonkSpongeConstantsKimchi as SC,
+    poseidon::ArithmeticSpongeParams,
     sponge::{DefaultFqSponge, DefaultFrSponge},
+    FqSponge,
 };
 use poly_commitment::{
     commitment::{b_poly_coefficients, CommitmentCurve, PolyComm},
@@ -55,6 +61,8 @@ use rand::{CryptoRng, RngCore};
 
 type BaseSponge = DefaultFqSponge<VestaParameters, SC, 55>;
 type ScalarSponge = DefaultFrSponge<Fp, SC, 55>;
+type PallasBaseSponge = DefaultFqSponge<PallasParameters, SC, 55>;
+type PallasScalarSponge = DefaultFrSponge<Fq, SC, 55>;
 
 /// SplitMix64 (Steele, Lea, Flood 2014), the stream both sides sample from.
 struct SplitMix64(u64);
@@ -88,24 +96,30 @@ fn hex<F: PrimeField>(x: F) -> String {
     x.into_bigint().to_bytes_be().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn point(p: &Vesta) -> String {
+fn point<G: AffineRepr>(p: &G) -> String
+where
+    G::BaseField: PrimeField,
+{
     match p.xy() {
         Some((x, y)) => format!("{} {}", hex(x), hex(y)),
         None => String::from("inf"),
     }
 }
 
-fn comm(c: &PolyComm<Vesta>) -> String {
+fn comm<G: AffineRepr>(c: &PolyComm<G>) -> String
+where
+    G::BaseField: PrimeField,
+{
     let chunks: Vec<String> = c.chunks.iter().map(point).collect();
     format!("{} {}", c.chunks.len(), chunks.join(" "))
 }
 
-fn values(v: &[Fp]) -> String {
+fn values<F: PrimeField>(v: &[F]) -> String {
     let hexes: Vec<String> = v.iter().map(|x| hex(*x)).collect();
     format!("{} {}", v.len(), hexes.join(" "))
 }
 
-fn eval(name: &str, label: &str, e: Option<&PointEvaluations<Vec<Fp>>>) {
+fn eval<F: PrimeField>(name: &str, label: &str, e: Option<&PointEvaluations<Vec<F>>>) {
     match e {
         None => println!("eval {name} {label} none"),
         Some(e) => println!("eval {name} {label} {} {}", values(&e.zeta), values(&e.zeta_omega)),
@@ -117,17 +131,17 @@ fn typ(t: GateType) -> String {
 }
 
 /// A circuit to prove: gates, witness, public inputs, tables.
-struct Circuit {
-    gates: Vec<CircuitGate<Fp>>,
-    witness: [Vec<Fp>; COLUMNS],
-    public: Vec<Fp>,
-    tables: Vec<LookupTable<Fp>>,
-    runtime_cfgs: Option<Vec<RuntimeTableCfg<Fp>>>,
-    runtime: Vec<RuntimeTable<Fp>>,
+struct Circuit<F: PrimeField = Fp> {
+    gates: Vec<CircuitGate<F>>,
+    witness: [Vec<F>; COLUMNS],
+    public: Vec<F>,
+    tables: Vec<LookupTable<F>>,
+    runtime_cfgs: Option<Vec<RuntimeTableCfg<F>>>,
+    runtime: Vec<RuntimeTable<F>>,
 }
 
-impl From<(Vec<CircuitGate<Fp>>, [Vec<Fp>; COLUMNS], Vec<Fp>)> for Circuit {
-    fn from((gates, witness, public): (Vec<CircuitGate<Fp>>, [Vec<Fp>; COLUMNS], Vec<Fp>)) -> Self {
+impl<F: PrimeField> From<(Vec<CircuitGate<F>>, [Vec<F>; COLUMNS], Vec<F>)> for Circuit<F> {
+    fn from((gates, witness, public): (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS], Vec<F>)) -> Self {
         Self { gates, witness, public, tables: vec![], runtime_cfgs: None, runtime: vec![] }
     }
 }
@@ -295,11 +309,63 @@ fn ffmul_circuit() -> Circuit {
     (gates, witness, vec![]).into()
 }
 
+/// A chain of two foreign-field operations modulo secp256k1's base field
+/// (an addition, then a subtraction), its bound, and the multi-range checks
+/// of its inputs, results and bound, as Kimchi's `foreign_field_add`
+/// `full_circuit` and `long_witness`: the public 1 on row 0, the chain from
+/// row 1, inputs from SplitMix64(59).
+fn ffadd_circuit() -> Circuit {
+    let mut rng = SplitMix64(59);
+    let modulus = secp256k1_modulus();
+    let mut below = || {
+        let words: Vec<u32> = (0..8).map(|_| rng.next_u64() as u32).collect();
+        BigUint::new(words) % &modulus
+    };
+    let inputs = vec![below(), below(), below()];
+    let opcodes = [FFOps::Add, FFOps::Sub];
+    let num = opcodes.len();
+    let mut gates = vec![CircuitGate::<Fp>::create_generic_gadget(Wire::for_row(0), GenericGateSpec::Pub, None)];
+    let mut next_row = 1;
+    CircuitGate::<Fp>::extend_chain_ffadd(&mut gates, 0, &mut next_row, &opcodes, &modulus);
+    CircuitGate::extend_multi_range_check(&mut gates, &mut next_row);
+    for _ in 0..num {
+        for _ in 0..2 {
+            CircuitGate::extend_multi_range_check(&mut gates, &mut next_row);
+        }
+    }
+    CircuitGate::extend_multi_range_check(&mut gates, &mut next_row);
+    for i in 0..num {
+        let ffadd_row = i + 1;
+        let left_rc = num + 3 + 8 * i;
+        let right_rc = num + 7 + 8 * i;
+        let out_rc = num + 11 + 8 * i;
+        gates.connect_ffadd_range_checks(ffadd_row, Some(left_rc), Some(right_rc), out_rc);
+    }
+    gates.connect_ffadd_range_checks(num + 1, None, None, 9 * num + 7);
+    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::zero(); 1]);
+    witness[0][0] = Fp::one();
+    let chain = ffadd_witness::create_chain::<Fp>(&inputs, &opcodes, modulus);
+    for col in 0..COLUMNS {
+        witness[col].extend(chain[col].iter());
+    }
+    let left = (witness[0][1], witness[1][1], witness[2][1]);
+    range_check::witness::extend_multi(&mut witness, left.0, left.1, left.2);
+    for i in 1..num + 1 {
+        let right = (witness[3][i], witness[4][i], witness[5][i]);
+        let output = (witness[0][i + 1], witness[1][i + 1], witness[2][i + 1]);
+        range_check::witness::extend_multi(&mut witness, right.0, right.1, right.2);
+        range_check::witness::extend_multi(&mut witness, output.0, output.1, output.2);
+    }
+    let bound = (witness[0][num + 2], witness[1][num + 2], witness[2][num + 2]);
+    range_check::witness::extend_multi(&mut witness, bound.0, bound.1, bound.2);
+    (gates, witness, vec![Fp::one()]).into()
+}
+
 /// Kimchi's generic test circuit with 5 public inputs.
-fn generic() -> (Vec<CircuitGate<Fp>>, [Vec<Fp>; COLUMNS], Vec<Fp>) {
-    let public: Vec<Fp> = (1..=5u64).map(|k| Fp::from(1000 + k)).collect();
-    let gates = create_circuit::<Fp>(0, public.len());
-    let mut witness: [Vec<Fp>; COLUMNS] = core::array::from_fn(|_| vec![Fp::zero(); gates.len()]);
+fn generic<F: PrimeField>() -> (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS], Vec<F>) {
+    let public: Vec<F> = (1..=5u64).map(|k| F::from(1000 + k)).collect();
+    let gates = create_circuit::<F>(0, public.len());
+    let mut witness: [Vec<F>; COLUMNS] = core::array::from_fn(|_| vec![F::zero(); gates.len()]);
     fill_in_witness(0, &mut witness, &public);
     (gates, witness, public)
 }
@@ -423,16 +489,22 @@ fn parse_field<F: PrimeField>(h: &str) -> F {
 }
 
 /// A point from `x y` or `inf`, and the words it took.
-fn parse_point(w: &[&str]) -> (Vesta, usize) {
+fn parse_point<G: KimchiCurve<55>>(w: &[&str]) -> (G, usize)
+where
+    G::BaseField: PrimeField,
+{
     if w[0] == "inf" {
-        (Vesta::zero(), 1)
+        (G::zero(), 1)
     } else {
-        (Vesta::new(parse_field::<PallasScalar>(w[0]), parse_field::<PallasScalar>(w[1])), 2)
+        (G::of_coordinates(parse_field(w[0]), parse_field(w[1])), 2)
     }
 }
 
 /// A commitment from `k x y ...`.
-fn parse_comm(value: &str) -> PolyComm<Vesta> {
+fn parse_comm<G: KimchiCurve<55>>(value: &str) -> PolyComm<G>
+where
+    G::BaseField: PrimeField,
+{
     let w: Vec<&str> = value.split_whitespace().collect();
     let k: usize = w[0].parse().unwrap();
     let mut at = 1;
@@ -447,7 +519,7 @@ fn parse_comm(value: &str) -> PolyComm<Vesta> {
 }
 
 /// Evaluations from `nz z... nw w...`.
-fn parse_evals(value: &str) -> PointEvaluations<Vec<Fp>> {
+fn parse_evals<F: PrimeField>(value: &str) -> PointEvaluations<Vec<F>> {
     let w: Vec<&str> = value.split_whitespace().collect();
     let nz: usize = w[0].parse().unwrap();
     let nw: usize = w[nz + 1].parse().unwrap();
@@ -458,11 +530,14 @@ fn parse_evals(value: &str) -> PointEvaluations<Vec<Fp>> {
 }
 
 /// arrabbiata's proof of `name`, from its dump, as a Kimchi proof.
-fn ours(
+fn ours<G: KimchiCurve<55>>(
     file: &str,
     name: &str,
-    prev_challenges: Vec<RecursionChallenge<Vesta>>,
-) -> ProverProof<Vesta, OpeningProof<Vesta, 55>, 55> {
+    prev_challenges: Vec<RecursionChallenge<G>>,
+) -> ProverProof<G, OpeningProof<G, 55>, 55>
+where
+    G::BaseField: PrimeField,
+{
     let lines = |kind: &str| -> std::collections::BTreeMap<String, String> {
         file.lines()
             .filter_map(|l| {
@@ -546,7 +621,13 @@ fn ours(
     }
 }
 
-fn run(name: &str, circuit: Circuit, max_poly_size: Option<usize>, recursion: bool) {
+fn run<G, EFq, EFr>(name: &str, circuit: Circuit<G::ScalarField>, max_poly_size: Option<usize>, recursion: bool)
+where
+    G: KimchiCurve<55>,
+    G::BaseField: PrimeField,
+    EFq: Clone + FqSponge<G::BaseField, G, G::ScalarField, 55>,
+    EFr: FrSponge<G::ScalarField> + From<&'static ArithmeticSpongeParams<G::ScalarField, 55>>,
+{
     let Circuit { gates, witness, public, tables, runtime_cfgs, runtime } = circuit;
     for t in &tables {
         for (c, column) in t.data.iter().enumerate() {
@@ -579,7 +660,7 @@ fn run(name: &str, circuit: Circuit, max_poly_size: Option<usize>, recursion: bo
             }
         }
     }
-    let cs = ConstraintSystem::<Fp>::create(gates)
+    let cs = ConstraintSystem::<G::ScalarField>::create(gates)
         .public(public.len())
         .prev_challenges(usize::from(recursion))
         .lookup(tables)
@@ -588,18 +669,18 @@ fn run(name: &str, circuit: Circuit, max_poly_size: Option<usize>, recursion: bo
         .build()
         .unwrap();
     let depth = max_poly_size.unwrap_or(cs.domain.d1.size as usize);
-    let srs = Arc::new(SRS::<Vesta>::create(depth));
-    let endo = *Vesta::other_curve_endo();
-    let index: ProverIndex<55, Vesta, SRS<Vesta>> = ProverIndex::create(cs, endo, srs, false);
+    let srs = Arc::new(SRS::<G>::create(depth));
+    let endo = *G::other_curve_endo();
+    let index: ProverIndex<55, G, SRS<G>> = ProverIndex::create(cs, endo, srs, false);
     let vi = index.verifier_index();
-    println!("digest {name} {}", hex(vi.digest::<BaseSponge>()));
+    println!("digest {name} {}", hex(vi.digest::<EFq>()));
 
     // A previous accumulator as Kimchi's test_recursion makes one: random
     // challenges (from SplitMix64(123)) and the commitment to their b.
     let prev_challenges = if recursion {
         let mut chal_rng = SplitMix64(123);
         let k = index.srs.g.len().trailing_zeros() as usize;
-        let chals: Vec<Fp> = (0..k).map(|_| Fp::rand(&mut chal_rng)).collect();
+        let chals: Vec<G::ScalarField> = (0..k).map(|_| G::ScalarField::rand(&mut chal_rng)).collect();
         let b = DensePolynomial::from_coefficients_vec(b_poly_coefficients(&chals));
         let b_comm = index.srs.commit_non_hiding(&b, 1);
         for (i, c) in chals.iter().enumerate() {
@@ -610,13 +691,9 @@ fn run(name: &str, circuit: Circuit, max_poly_size: Option<usize>, recursion: bo
     } else {
         vec![]
     };
-    let group_map = <Vesta as CommitmentCurve>::Map::setup();
+    let group_map = <G as CommitmentCurve>::Map::setup();
     let mut rng = SplitMix64(7);
-    let proof = ProverProof::<Vesta, OpeningProof<Vesta, 55>, 55>::create_recursive::<
-        BaseSponge,
-        ScalarSponge,
-        _,
-    >(&group_map, witness, &runtime, &index, prev_challenges.clone(), None, &mut rng)
+    let proof = ProverProof::<G, OpeningProof<G, 55>, 55>::create_recursive::<EFq, EFr, _>(&group_map, witness, &runtime, &index, prev_challenges.clone(), None, &mut rng)
     .unwrap();
 
     let c = &proof.commitments;
@@ -683,11 +760,11 @@ fn run(name: &str, circuit: Circuit, max_poly_size: Option<usize>, recursion: bo
     // The public commitment, as the verifier computes it.
     let lgr = vi.srs().get_lagrange_basis(vi.domain);
     let bases: Vec<_> = lgr.iter().take(vi.public).collect();
-    let negated: Vec<Fp> = public.iter().map(|s| -*s).collect();
-    let public_comm = PolyComm::<Vesta>::multi_scalar_mul(&bases, &negated);
+    let negated: Vec<G::ScalarField> = public.iter().map(|s| -*s).collect();
+    let public_comm = PolyComm::<G>::multi_scalar_mul(&bases, &negated);
     let public_comm = vi
         .srs()
-        .mask_custom(public_comm.clone(), &public_comm.map(|_| Fp::one()))
+        .mask_custom(public_comm.clone(), &public_comm.map(|_| G::ScalarField::one()))
         .unwrap()
         .commitment;
     println!("comm {name} public {}", comm(&public_comm));
@@ -696,19 +773,19 @@ fn run(name: &str, circuit: Circuit, max_poly_size: Option<usize>, recursion: bo
     if let Some(path) = std::env::args().nth(1) {
         let file = std::fs::read_to_string(path).unwrap();
         if file.lines().any(|l| l.starts_with(&format!("comm {name} "))) {
-            let theirs = ours(&file, name, prev_challenges.clone());
-            let ok = verify::<55, Vesta, BaseSponge, ScalarSponge, OpeningProof<Vesta, 55>>(&group_map, &vi, &theirs, &public);
+            let theirs = ours::<G>(&file, name, prev_challenges.clone());
+            let ok = verify::<55, G, EFq, EFr, OpeningProof<G, 55>>(&group_map, &vi, &theirs, &public);
             eprintln!("verify {name} arrabbiata {:?}", ok.as_ref().map(|_| "accepted"));
             let mut tampered = theirs.clone();
-            tampered.proof.z1 += Fp::one();
-            let bad = verify::<55, Vesta, BaseSponge, ScalarSponge, OpeningProof<Vesta, 55>>(&group_map, &vi, &tampered, &public);
+            tampered.proof.z1 += G::ScalarField::one();
+            let bad = verify::<55, G, EFq, EFr, OpeningProof<G, 55>>(&group_map, &vi, &tampered, &public);
             eprintln!("verify {name} arrabbiata-tampered {}", if bad.is_err() { "refused" } else { "ACCEPTED" });
-            let own = verify::<55, Vesta, BaseSponge, ScalarSponge, OpeningProof<Vesta, 55>>(&group_map, &vi, &proof, &public);
+            let own = verify::<55, G, EFq, EFr, OpeningProof<G, 55>>(&group_map, &vi, &proof, &public);
             eprintln!("verify {name} kimchi {:?}", own.as_ref().map(|_| "accepted"));
         }
     }
     let r = proof
-        .oracles::<BaseSponge, ScalarSponge, _>(&vi, &public_comm, Some(&public))
+        .oracles::<EFq, EFr, _>(&vi, &public_comm, Some(&public))
         .unwrap();
     let k = &r.oracles;
     if let Some((chal, jc)) = &k.joint_combiner {
@@ -740,15 +817,22 @@ fn main() {
     for i in 0..8 {
         println!("rand {i} {}", hex(Fp::rand(&mut rng)));
     }
-    run("generic", generic().into(), None, false);
-    run("chunked", generic().into(), Some(16), false);
-    run("wide", generic().into(), Some(64), false);
-    run("gadgets", gadgets().into(), None, false);
-    run("recursion", generic().into(), None, true);
-    run("xor", xor_circuit(), None, false);
-    run("range_check", range_check_circuit(), None, false);
-    run("lookup", lookup_circuit(), None, false);
-    run("runtime", runtime_circuit(), None, false);
-    run("rot", rot_circuit(), None, false);
-    run("ffmul", ffmul_circuit(), None, false);
+    type V = Vesta;
+    type B = BaseSponge;
+    type S = ScalarSponge;
+    run::<V, B, S>("generic", generic().into(), None, false);
+    run::<V, B, S>("chunked", generic().into(), Some(16), false);
+    run::<V, B, S>("wide", generic().into(), Some(64), false);
+    run::<V, B, S>("gadgets", gadgets().into(), None, false);
+    run::<V, B, S>("recursion", generic().into(), None, true);
+    run::<V, B, S>("xor", xor_circuit(), None, false);
+    run::<V, B, S>("range_check", range_check_circuit(), None, false);
+    run::<V, B, S>("lookup", lookup_circuit(), None, false);
+    run::<V, B, S>("runtime", runtime_circuit(), None, false);
+    run::<V, B, S>("rot", rot_circuit(), None, false);
+    run::<V, B, S>("ffmul", ffmul_circuit(), None, false);
+    run::<V, B, S>("ffadd", ffadd_circuit(), None, false);
+    // Over Pallas: Kimchi's generic test circuit, unchunked and in chunks.
+    run::<Pallas, PallasBaseSponge, PallasScalarSponge>("pallas", generic().into(), None, false);
+    run::<Pallas, PallasBaseSponge, PallasScalarSponge>("pallas_chunked", generic().into(), Some(16), false);
 }

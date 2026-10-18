@@ -1,7 +1,6 @@
-//! Kimchi's prover against Kimchi, round by round: Kimchi's generic test
-//! circuit with five public inputs, proved by the `prover` tool of
-//! `tools/kimchi-vectors` with SplitMix64(7), unchunked and in chunks of 16
-//! rows (`vectors/kimchi_prover.txt`). The tests rebuild the circuit and
+//! Kimchi's prover against Kimchi, round by round: the circuits of the
+//! `prover` tool of `tools/kimchi-vectors`, proved with SplitMix64(7) over
+//! Vesta and over Pallas (`vectors/kimchi_prover.txt`). The tests rebuild the circuit and
 //! the witness from the vectors, run our rounds on the same stream, and
 //! compare each value the round produces.
 
@@ -9,8 +8,8 @@ mod kimchi_runs;
 
 use std::{collections::BTreeMap, sync::LazyLock};
 
-use arrabbiata_curve::{Affine, Projective, glv::Glv};
-use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_curve::{Affine, Curve, Projective, glv::Glv};
+use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_halo::Accumulated;
 use arrabbiata_ipa::RecursionChallenge;
 use arrabbiata_kimchi::{
@@ -46,8 +45,9 @@ static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_pr
 /// lookups: a 64-bit Xor, a multi-range check, Lookup gates over two fixed
 /// tables, over two runtime tables, a 64-bit word rotated left and right
 /// (Rot64), and a foreign-field multiplication modulo secp256k1's base
-/// field with all its external checks (ForeignFieldMul).
-const CIRCUITS: [(&str, Option<usize>, usize); 11] = [
+/// field with all its external checks (ForeignFieldMul), and a chain of
+/// two foreign-field operations with every range check (ForeignFieldAdd).
+const CIRCUITS: [(&str, Option<usize>, usize); 12] = [
     ("generic", None, 5),
     ("chunked", Some(16), 5),
     ("wide", Some(64), 5),
@@ -59,7 +59,49 @@ const CIRCUITS: [(&str, Option<usize>, usize); 11] = [
     ("runtime", None, 0),
     ("rot", None, 0),
     ("ffmul", None, 0),
+    ("ffadd", None, 1),
 ];
+
+/// The tool's circuits over Pallas: Kimchi's generic test circuit,
+/// unchunked and in chunks of 16 rows.
+const PALLAS_CIRCUITS: [(&str, Option<usize>, usize); 2] =
+    [("pallas", None, 5), ("pallas_chunked", Some(16), 5)];
+
+/// A curve Kimchi proves over, with what the tests need of it: Kimchi's
+/// gates over its scalar field, its two sponges, and the tool's circuits on
+/// it.
+trait Kimchi: Glv + Curve<Base: PrimeField + Sqrt, Scalar: TwoAdicField> {
+    const CIRCUITS: &'static [(&'static str, Option<usize>, usize)];
+    fn gates() -> KimchiGates<Self::Scalar>;
+    fn base() -> KimchiSponge<Self::Base>;
+    fn scalar() -> KimchiSponge<Self::Scalar>;
+}
+
+impl Kimchi for Vesta {
+    const CIRCUITS: &'static [(&'static str, Option<usize>, usize)] = &CIRCUITS;
+    fn gates() -> KimchiGates<Fp> {
+        KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap()
+    }
+    fn base() -> KimchiSponge<Fq> {
+        KimchiSponge::new(vesta_base())
+    }
+    fn scalar() -> KimchiSponge<Fp> {
+        KimchiSponge::new(pallas_base())
+    }
+}
+
+impl Kimchi for Pallas {
+    const CIRCUITS: &'static [(&'static str, Option<usize>, usize)] = &PALLAS_CIRCUITS;
+    fn gates() -> KimchiGates<Fq> {
+        KimchiGates::new(&vesta_base(), Vesta::beta()).unwrap()
+    }
+    fn base() -> KimchiSponge<Fp> {
+        KimchiSponge::new(pallas_base())
+    }
+    fn scalar() -> KimchiSponge<Fq> {
+        KimchiSponge::new(vesta_base())
+    }
+}
 
 /// The entry of [`CIRCUITS`] named `name`.
 fn named(name: &str) -> (&'static str, Option<usize>, usize) {
@@ -70,14 +112,14 @@ fn named(name: &str) -> (&'static str, Option<usize>, usize) {
 }
 
 /// Values from `k x1 ... xk`.
-fn values_of(words: &[&str]) -> Vec<Fp> {
+fn values_of<F: PrimeField>(words: &[&str]) -> Vec<F> {
     let k: usize = words[0].parse().unwrap();
-    words[1..=k].iter().map(|h| element(h)).collect()
+    words[1..=k].iter().map(|h| field(h)).collect()
 }
 
 /// The fixed tables of the tool's circuit `name`.
-fn tables(name: &str) -> Vec<LookupTable<Fp>> {
-    let mut tables: Vec<LookupTable<Fp>> = Vec::new();
+fn tables<F: PrimeField>(name: &str) -> Vec<LookupTable<F>> {
+    let mut tables: Vec<LookupTable<F>> = Vec::new();
     for line in VECTORS.lines() {
         let words: Vec<&str> = line.split_whitespace().collect();
         if words[0] != "table" || words[1] != name {
@@ -97,8 +139,8 @@ fn tables(name: &str) -> Vec<LookupTable<Fp>> {
 }
 
 /// The runtime table configuration of the tool's circuit `name`.
-fn runtime_cfgs(name: &str) -> Option<Vec<RuntimeTableCfg<Fp>>> {
-    let cfgs: Vec<RuntimeTableCfg<Fp>> = VECTORS
+fn runtime_cfgs<F: PrimeField>(name: &str) -> Option<Vec<RuntimeTableCfg<F>>> {
+    let cfgs: Vec<RuntimeTableCfg<F>> = VECTORS
         .lines()
         .filter(|l| l.starts_with(&format!("runtime_cfg {name} ")))
         .map(|l| {
@@ -113,7 +155,7 @@ fn runtime_cfgs(name: &str) -> Option<Vec<RuntimeTableCfg<Fp>>> {
 }
 
 /// The runtime tables' data of the tool's circuit `name`.
-fn runtime_tables(name: &str) -> Vec<RuntimeTable<Fp>> {
+fn runtime_tables<F: PrimeField>(name: &str) -> Vec<RuntimeTable<F>> {
     VECTORS
         .lines()
         .filter(|l| l.starts_with(&format!("runtime_data {name} ")))
@@ -142,28 +184,24 @@ fn field<F: PrimeField>(hex: &str) -> F {
     F::from_limbs(&limbs).unwrap()
 }
 
-fn element(hex: &str) -> Fp {
-    field(hex)
-}
-
 /// The previous accumulators of the tool's circuit `name`.
-fn prev_challenges(name: &str) -> Vec<RecursionChallenge<Vesta>> {
+fn prev_challenges<C: Kimchi>(name: &str) -> Vec<RecursionChallenge<C>> {
     let prev = lines("prev", name);
     if prev.is_empty() {
         return vec![];
     }
     let chals = (0..prev.len() - 1)
-        .map(|i| element(&prev[&format!("chal{i}")]))
+        .map(|i| field(&prev[&format!("chal{i}")]))
         .collect();
     let words: Vec<&str> = prev["comm"].split_whitespace().collect();
     assert_eq!(words[0], "1");
-    let comm = Affine::<Vesta>::new(field::<Fq>(words[1]), field::<Fq>(words[2]))
+    let comm = Affine::<C>::new(field(words[1]), field(words[2]))
         .unwrap()
         .to_projective();
     vec![RecursionChallenge { chals, comm }]
 }
 
-fn point(p: &Projective<Vesta>) -> String {
+fn point<C: Kimchi>(p: &Projective<C>) -> String {
     let a = p.to_affine();
     match (a.x(), a.y()) {
         (Some(x), Some(y)) => format!("{} {}", hex(x), hex(y)),
@@ -171,7 +209,7 @@ fn point(p: &Projective<Vesta>) -> String {
     }
 }
 
-fn comm(c: &PolyComm<Vesta>) -> String {
+fn comm<C: Kimchi>(c: &PolyComm<C>) -> String {
     let chunks: Vec<String> = c.chunks.iter().map(point).collect();
     format!("{} {}", c.chunks.len(), chunks.join(" "))
 }
@@ -209,7 +247,7 @@ fn gate_type(name: &str) -> GateType {
 }
 
 /// The circuit and the (unpadded) witness of the tool's circuit `name`.
-fn circuit(name: &str) -> (Vec<CircuitGate<Fp>>, [Vec<Fp>; 15]) {
+fn circuit<F: PrimeField>(name: &str) -> (Vec<CircuitGate<F>>, [Vec<F>; 15]) {
     let mut gates = Vec::new();
     for line in VECTORS.lines() {
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -222,30 +260,30 @@ fn circuit(name: &str) -> (Vec<CircuitGate<Fp>>, [Vec<Fp>; 15]) {
             col: words[5 + 2 * i].parse().unwrap(),
         });
         let count: usize = words[18].parse().unwrap();
-        let coeffs = words[19..19 + count].iter().map(|h| element(h)).collect();
+        let coeffs = words[19..19 + count].iter().map(|h| field(h)).collect();
         gates.push(CircuitGate::new(gate_type(words[3]), wires, coeffs));
     }
-    let mut witness: [Vec<Fp>; 15] = core::array::from_fn(|_| vec![Fp::ZERO; gates.len()]);
+    let mut witness: [Vec<F>; 15] = core::array::from_fn(|_| vec![F::ZERO; gates.len()]);
     for line in VECTORS.lines() {
         let words: Vec<&str> = line.split_whitespace().collect();
         if words[0] == "witness" && words[1] == name {
             let col: usize = words[2].parse().unwrap();
             let row: usize = words[3].parse().unwrap();
-            witness[col][row] = element(words[4]);
+            witness[col][row] = field(words[4]);
         }
     }
     (gates, witness)
 }
 
-fn index(
+fn index<C: Kimchi>(
     name: &str,
     max_poly_size: Option<usize>,
     public: usize,
-) -> (ProverIndex<Vesta>, [Vec<Fp>; 15]) {
+) -> (ProverIndex<C>, [Vec<C::Scalar>; 15]) {
     let (gates, witness) = circuit(name);
     let cs = ConstraintSystem::create(gates)
         .public(public)
-        .prev_challenges(prev_challenges(name).len())
+        .prev_challenges(prev_challenges::<C>(name).len())
         .lookup(tables(name))
         .runtime(runtime_cfgs(name))
         .max_poly_size(max_poly_size)
@@ -270,9 +308,14 @@ fn the_samples_are_arkworks() {
 
 #[test]
 fn the_digests_are_kimchis() {
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, _) = index(name, max_poly_size, public);
-        let sponge = KimchiSponge::new(vesta_base());
+    the_digests_are_kimchis_on::<Vesta>();
+    the_digests_are_kimchis_on::<Pallas>();
+}
+
+fn the_digests_are_kimchis_on<C: Kimchi>() {
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, _) = index::<C>(name, max_poly_size, public);
+        let sponge = C::base();
         let digest = index.verifier_index.digest(sponge);
         let expected = VECTORS
             .lines()
@@ -284,15 +327,20 @@ fn the_digests_are_kimchis() {
 
 #[test]
 fn the_witness_round_is_kimchis() {
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size, public);
-        let sponge = KimchiSponge::new(vesta_base());
+    the_witness_round_is_kimchis_on::<Vesta>();
+    the_witness_round_is_kimchis_on::<Pallas>();
+}
+
+fn the_witness_round_is_kimchis_on<C: Kimchi>() {
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, witness) = index::<C>(name, max_poly_size, public);
+        let sponge = C::base();
         let mut rng = Arkworks(SplitMix64(7));
         let (round, _) = witness_round(
             &index,
             witness,
-            &runtime_tables(name),
-            &prev_challenges(name),
+            &runtime_tables::<C::Scalar>(name),
+            &prev_challenges::<C>(name),
             &sponge,
             &mut rng,
         )
@@ -335,15 +383,20 @@ fn the_witness_round_is_kimchis() {
 
 #[test]
 fn the_permutation_round_is_kimchis() {
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size, public);
-        let sponge = KimchiSponge::new(vesta_base());
+    the_permutation_round_is_kimchis_on::<Vesta>();
+    the_permutation_round_is_kimchis_on::<Pallas>();
+}
+
+fn the_permutation_round_is_kimchis_on<C: Kimchi>() {
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, witness) = index::<C>(name, max_poly_size, public);
+        let sponge = C::base();
         let mut rng = Arkworks(SplitMix64(7));
         let (first, tape) = witness_round(
             &index,
             witness,
-            &runtime_tables(name),
-            &prev_challenges(name),
+            &runtime_tables::<C::Scalar>(name),
+            &prev_challenges::<C>(name),
             &sponge,
             &mut rng,
         )
@@ -363,16 +416,21 @@ fn the_permutation_round_is_kimchis() {
 
 #[test]
 fn the_quotient_round_is_kimchis() {
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size, public);
-        let sponge = KimchiSponge::new(vesta_base());
+    the_quotient_round_is_kimchis_on::<Vesta>();
+    the_quotient_round_is_kimchis_on::<Pallas>();
+}
+
+fn the_quotient_round_is_kimchis_on<C: Kimchi>() {
+    let gates = C::gates();
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, witness) = index::<C>(name, max_poly_size, public);
+        let sponge = C::base();
         let mut rng = Arkworks(SplitMix64(7));
         let (first, tape) = witness_round(
             &index,
             witness,
-            &runtime_tables(name),
-            &prev_challenges(name),
+            &runtime_tables::<C::Scalar>(name),
+            &prev_challenges::<C>(name),
             &sponge,
             &mut rng,
         )
@@ -386,28 +444,33 @@ fn the_quotient_round_is_kimchis() {
     }
 }
 
-fn values(v: &[Fp]) -> String {
+fn values<F: PrimeField>(v: &[F]) -> String {
     let hexes: Vec<String> = v.iter().map(|x| hex(*x)).collect();
     format!("{} {}", v.len(), hexes.join(" "))
 }
 
-fn evaluation(e: &PointEvaluations<Fp>) -> String {
+fn evaluation<F: PrimeField>(e: &PointEvaluations<F>) -> String {
     format!("{} {}", values(&e.zeta), values(&e.zeta_omega))
 }
 
 #[test]
 fn the_evaluation_round_is_kimchis() {
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size, public);
-        let sponge = KimchiSponge::new(vesta_base());
-        let scalar_sponge = KimchiSponge::new(pallas_base());
+    the_evaluation_round_is_kimchis_on::<Vesta>();
+    the_evaluation_round_is_kimchis_on::<Pallas>();
+}
+
+fn the_evaluation_round_is_kimchis_on<C: Kimchi>() {
+    let gates = C::gates();
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, witness) = index::<C>(name, max_poly_size, public);
+        let sponge = C::base();
+        let scalar_sponge = C::scalar();
         let mut rng = Arkworks(SplitMix64(7));
         let (first, tape) = witness_round(
             &index,
             witness,
-            &runtime_tables(name),
-            &prev_challenges(name),
+            &runtime_tables::<C::Scalar>(name),
+            &prev_challenges::<C>(name),
             &sponge,
             &mut rng,
         )
@@ -474,17 +537,22 @@ fn the_evaluation_round_is_kimchis() {
 
 #[test]
 fn the_proofs_are_kimchis() {
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size, public);
-        let base = KimchiSponge::new(vesta_base());
-        let scalar = KimchiSponge::new(pallas_base());
+    the_proofs_are_kimchis_on::<Vesta>();
+    the_proofs_are_kimchis_on::<Pallas>();
+}
+
+fn the_proofs_are_kimchis_on<C: Kimchi>() {
+    let gates = C::gates();
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, witness) = index::<C>(name, max_poly_size, public);
+        let base = C::base();
+        let scalar = C::scalar();
         let mut rng = Arkworks(SplitMix64(7));
         let proof = prove(
             &index,
             witness,
-            &runtime_tables(name),
-            &prev_challenges(name),
+            &runtime_tables::<C::Scalar>(name),
+            &prev_challenges::<C>(name),
             &gates,
             (&base, &scalar),
             &mut rng,
@@ -511,17 +579,17 @@ fn the_proofs_are_kimchis() {
 }
 
 /// A point from its affine coordinates, or the identity for `inf`.
-fn parse_point(words: &[&str]) -> (Projective<Vesta>, usize) {
+fn parse_point<C: Kimchi>(words: &[&str]) -> (Projective<C>, usize) {
     if words[0] == "inf" {
         (Projective::identity(), 1)
     } else {
-        let p = Affine::<Vesta>::new(field::<Fq>(words[0]), field::<Fq>(words[1])).unwrap();
+        let p = Affine::<C>::new(field(words[0]), field(words[1])).unwrap();
         (p.to_projective(), 2)
     }
 }
 
 /// A commitment from `k x y x y ...`.
-fn parse_comm(value: &str) -> PolyComm<Vesta> {
+fn parse_comm<C: Kimchi>(value: &str) -> PolyComm<C> {
     let words: Vec<&str> = value.split_whitespace().collect();
     let k: usize = words[0].parse().unwrap();
     let mut at = 1;
@@ -535,20 +603,20 @@ fn parse_comm(value: &str) -> PolyComm<Vesta> {
 }
 
 /// Evaluations from `nz z... nw w...`.
-fn parse_evaluations(value: &str) -> PointEvaluations<Fp> {
+fn parse_evaluations<F: PrimeField>(value: &str) -> PointEvaluations<F> {
     let words: Vec<&str> = value.split_whitespace().collect();
     let nz: usize = words[0].parse().unwrap();
-    let zeta = words[1..=nz].iter().map(|h| element(h)).collect();
+    let zeta = words[1..=nz].iter().map(|h| field(h)).collect();
     let nw: usize = words[nz + 1].parse().unwrap();
     let zeta_omega = words[nz + 2..nz + 2 + nw]
         .iter()
-        .map(|h| element(h))
+        .map(|h| field(h))
         .collect();
     PointEvaluations { zeta, zeta_omega }
 }
 
 /// Kimchi's proof of the tool's circuit `name`, read from the vectors.
-fn kimchis_proof(name: &str) -> ProverProof<Vesta> {
+fn kimchis_proof<C: Kimchi>(name: &str) -> ProverProof<C> {
     let comms = lines("comm", name);
     let evals = lines("eval", name);
     let e = |label: &str| parse_evaluations(&evals[label]);
@@ -634,60 +702,70 @@ fn kimchis_proof(name: &str) -> ProverProof<Vesta> {
             optional_selectors,
             lookup: lookup_evals,
         },
-        ft_eval1: element(ft_eval1),
+        ft_eval1: field(ft_eval1),
         proof: OpeningProof {
             lr,
             delta: point("delta"),
-            z1: element(&opening["z1"]),
-            z2: element(&opening["z2"]),
+            z1: field(&opening["z1"]),
+            z2: field(&opening["z2"]),
             sg: point("sg"),
         },
-        prev_challenges: prev_challenges(name),
+        prev_challenges: prev_challenges::<C>(name),
     }
 }
 
 /// The public inputs of the tool's circuit `name`: the first rows of column
 /// 0 of its witness.
-fn public_inputs(name: &str, count: usize) -> Vec<Fp> {
+fn public_inputs<F: PrimeField>(name: &str, count: usize) -> Vec<F> {
     circuit(name).1[0][..count].to_vec()
 }
 
 #[test]
 fn kimchis_proofs_are_ours() {
+    kimchis_proofs_are_ours_on::<Vesta>();
+    kimchis_proofs_are_ours_on::<Pallas>();
+}
+
+fn kimchis_proofs_are_ours_on<C: Kimchi>() {
     // Parsing is faithful: Kimchi's proof read back is the proof we make.
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, witness) = index(name, max_poly_size, public);
-        let base = KimchiSponge::new(vesta_base());
-        let scalar = KimchiSponge::new(pallas_base());
+    let gates = C::gates();
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, witness) = index::<C>(name, max_poly_size, public);
+        let base = C::base();
+        let scalar = C::scalar();
         let mut rng = Arkworks(SplitMix64(7));
         let ours = prove(
             &index,
             witness,
-            &runtime_tables(name),
-            &prev_challenges(name),
+            &runtime_tables::<C::Scalar>(name),
+            &prev_challenges::<C>(name),
             &gates,
             (&base, &scalar),
             &mut rng,
         )
         .unwrap();
-        assert_eq!(kimchis_proof(name), ours, "{name}");
+        assert_eq!(kimchis_proof::<C>(name), ours, "{name}");
     }
 }
 
 #[test]
 fn the_verifier_oracles_are_kimchis() {
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, _) = index(name, max_poly_size, public);
-        let base = KimchiSponge::new(vesta_base());
-        let scalar = KimchiSponge::new(pallas_base());
-        let proof = kimchis_proof(name);
+    the_verifier_oracles_are_kimchis_on::<Vesta>();
+    the_verifier_oracles_are_kimchis_on::<Pallas>();
+}
+
+fn the_verifier_oracles_are_kimchis_on<C: Kimchi>() {
+    let gates = C::gates();
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, _) = index::<C>(name, max_poly_size, public);
+        let base = C::base();
+        let scalar = C::scalar();
+        let proof = kimchis_proof::<C>(name);
         let o = oracles(
             &index.verifier_index,
             &index.srs,
             &proof,
-            &public_inputs(name, public),
+            &public_inputs::<C::Scalar>(name, public),
             &gates,
             (&base, &scalar),
         )
@@ -716,17 +794,22 @@ fn the_verifier_oracles_are_kimchis() {
 
 #[test]
 fn kimchis_proofs_verify() {
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, _) = index(name, max_poly_size, public);
-        let base = KimchiSponge::new(vesta_base());
-        let scalar = KimchiSponge::new(pallas_base());
+    kimchis_proofs_verify_on::<Vesta>();
+    kimchis_proofs_verify_on::<Pallas>();
+}
+
+fn kimchis_proofs_verify_on<C: Kimchi>() {
+    let gates = C::gates();
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, _) = index::<C>(name, max_poly_size, public);
+        let base = C::base();
+        let scalar = C::scalar();
         let mut rng = Arkworks(SplitMix64(1));
         let result = verify(
             &index.verifier_index,
             &index.srs,
-            &kimchis_proof(name),
-            &public_inputs(name, public),
+            &kimchis_proof::<C>(name),
+            &public_inputs::<C::Scalar>(name, public),
             &gates,
             (&base, &scalar),
             &mut rng,
@@ -803,7 +886,7 @@ fn tampered_proofs_are_refused() {
 const OURS: &str = include_str!("vectors/arrabbiata_proofs.txt");
 
 /// The lines of our proof of `name`.
-fn dump(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
+fn dump<C: Kimchi>(name: &str, proof: &ProverProof<C>) -> Vec<String> {
     let mut out = Vec::new();
     for (i, c) in proof.w_comm.iter().enumerate() {
         out.push(format!("comm {name} w{i} {}", comm(c)));
@@ -820,7 +903,7 @@ fn dump(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
         }
     }
     let e = &proof.evals;
-    let mut put = |label: String, p: &PointEvaluations<Fp>| {
+    let mut put = |label: String, p: &PointEvaluations<C::Scalar>| {
         out.push(format!("eval {name} {label} {}", evaluation(p)));
     };
     put("public".into(), &e.public);
@@ -866,20 +949,20 @@ fn dump(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
 
 /// Our proofs of the tool's circuits, from another stream than Kimchi's
 /// (SplitMix64(1000)), so that they are ours and not copies of Kimchi's.
-fn our_proofs() -> Vec<(&'static str, ProverProof<Vesta>)> {
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    CIRCUITS
+fn our_proofs<C: Kimchi>() -> Vec<(&'static str, ProverProof<C>)> {
+    let gates = C::gates();
+    C::CIRCUITS
         .iter()
         .map(|(name, max_poly_size, public)| {
-            let (index, witness) = index(name, *max_poly_size, *public);
-            let base = KimchiSponge::new(vesta_base());
-            let scalar = KimchiSponge::new(pallas_base());
+            let (index, witness) = index::<C>(name, *max_poly_size, *public);
+            let base = C::base();
+            let scalar = C::scalar();
             let mut rng = Arkworks(SplitMix64(1000));
             let proof = prove(
                 &index,
                 witness,
                 &runtime_tables(name),
-                &prev_challenges(name),
+                &prev_challenges::<C>(name),
                 &gates,
                 (&base, &scalar),
                 &mut rng,
@@ -892,36 +975,8 @@ fn our_proofs() -> Vec<(&'static str, ProverProof<Vesta>)> {
 
 #[test]
 fn our_proofs_verify_and_are_the_committed_ones() {
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    let mut lines = Vec::new();
-    for (name, proof) in our_proofs() {
-        let (max_poly_size, public) = CIRCUITS
-            .iter()
-            .find(|(n, _, _)| *n == name)
-            .map(|(_, m, p)| (*m, *p))
-            .unwrap();
-        let (index, _) = index(name, max_poly_size, public);
-        let base = KimchiSponge::new(vesta_base());
-        let scalar = KimchiSponge::new(pallas_base());
-        let mut rng = Arkworks(SplitMix64(2));
-        let inputs = public_inputs(name, public);
-        let result = verify(
-            &index.verifier_index,
-            &index.srs,
-            &proof,
-            &inputs,
-            &gates,
-            (&base, &scalar),
-            &mut rng,
-        );
-        assert_eq!(result, Ok(()), "{name}");
-        assert_ne!(
-            proof,
-            kimchis_proof(name),
-            "{name}: another stream, another proof"
-        );
-        lines.extend(dump(name, &proof));
-    }
+    let mut lines = our_proofs_verify::<Vesta>();
+    lines.extend(our_proofs_verify::<Pallas>());
     let ours = lines.join("\n") + "\n";
     if std::env::var_os("REGENERATE").is_some() {
         let path = concat!(
@@ -934,6 +989,42 @@ fn our_proofs_verify_and_are_the_committed_ones() {
         OURS, ours,
         "rerun with REGENERATE=1 after changing the prover"
     );
+}
+
+/// Our proofs over `C` verify with our verifier and are not Kimchi's (they
+/// come from another stream); their lines in the dump.
+fn our_proofs_verify<C: Kimchi>() -> Vec<String> {
+    let gates = C::gates();
+    let mut lines = Vec::new();
+    for (name, proof) in our_proofs::<C>() {
+        let (max_poly_size, public) = C::CIRCUITS
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .map(|(_, m, p)| (*m, *p))
+            .unwrap();
+        let (index, _) = index::<C>(name, max_poly_size, public);
+        let base = C::base();
+        let scalar = C::scalar();
+        let mut rng = Arkworks(SplitMix64(2));
+        let inputs = public_inputs::<C::Scalar>(name, public);
+        let result = verify(
+            &index.verifier_index,
+            &index.srs,
+            &proof,
+            &inputs,
+            &gates,
+            (&base, &scalar),
+            &mut rng,
+        );
+        assert_eq!(result, Ok(()), "{name}");
+        assert_ne!(
+            proof,
+            kimchis_proof::<C>(name),
+            "{name}: another stream, another proof"
+        );
+        lines.extend(dump(name, &proof));
+    }
+    lines
 }
 
 /// What Kimchi's verifier said of our proofs (the `prover` tool run on
@@ -957,7 +1048,7 @@ fn kimchi_verifies_our_proofs() {
         format!("file {digest}"),
         "rerun the tool on the new dump"
     );
-    for (name, _, _) in CIRCUITS {
+    for (name, _, _) in CIRCUITS.iter().chain(&PALLAS_CIRCUITS) {
         for (who, verdict) in [
             ("arrabbiata", "Ok(\"accepted\")"),
             ("arrabbiata-tampered", "refused"),
@@ -970,9 +1061,9 @@ fn kimchi_verifies_our_proofs() {
 }
 
 /// The lookup evaluation lines of `e`, labelled as the vectors label them.
-fn lookup_lines(e: &ProofEvaluations<Fp>) -> Vec<(String, String)> {
+fn lookup_lines<F: PrimeField>(e: &ProofEvaluations<F>) -> Vec<(String, String)> {
     let none = || String::from("none");
-    let shown = |p: Option<&PointEvaluations<Fp>>| p.map_or_else(none, evaluation);
+    let shown = |p: Option<&PointEvaluations<F>>| p.map_or_else(none, evaluation);
     let l = e.lookup.as_ref();
     let mut out = vec![
         (
@@ -1096,17 +1187,22 @@ fn statement(name: &str, public: usize) -> (Statement<Vesta>, Assignment<Fp>) {
 
 #[test]
 fn kimchis_proofs_reduce_to_decided_accumulators() {
-    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
-    for (name, max_poly_size, public) in CIRCUITS {
-        let (index, _) = index(name, max_poly_size, public);
-        let base = KimchiSponge::new(vesta_base());
-        let scalar = KimchiSponge::new(pallas_base());
-        let proof = kimchis_proof(name);
+    kimchis_proofs_reduce_to_decided_accumulators_on::<Vesta>();
+    kimchis_proofs_reduce_to_decided_accumulators_on::<Pallas>();
+}
+
+fn kimchis_proofs_reduce_to_decided_accumulators_on<C: Kimchi>() {
+    let gates = C::gates();
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, _) = index::<C>(name, max_poly_size, public);
+        let base = C::base();
+        let scalar = C::scalar();
+        let proof = kimchis_proof::<C>(name);
         let accumulator = succinct(
             &index.verifier_index,
             &index.srs,
             &proof,
-            &public_inputs(name, public),
+            &public_inputs::<C::Scalar>(name, public),
             &gates,
             (&base, &scalar),
         )
@@ -1118,7 +1214,7 @@ fn kimchis_proofs_reduce_to_decided_accumulators() {
         assert_eq!(accumulator.chals.len(), ipa.rounds(), "{name}");
         assert!(ipa.decide(&accumulator), "{name}");
         let mut wrong = accumulator.clone();
-        wrong.chals[0] = wrong.chals[0] + Fp::ONE;
+        wrong.chals[0] = wrong.chals[0] + C::Scalar::ONE;
         assert!(!ipa.decide(&wrong), "{name}");
     }
 }
