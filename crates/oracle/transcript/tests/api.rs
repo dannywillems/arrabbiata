@@ -8,8 +8,8 @@ use arrabbiata_transcript::{
     hlist::{HCons, HList, HNil, Reverse},
     typed::{
         Branch, Challenge, Draw, Either, End, Label, Labeled, Message, Pattern, Peek, ProofOf,
-        Protocol, Prover, Public, Rounds, Send, Squeeze, Statement, Tape, Then, Verifier, Write,
-        prover_tape, verifier_tape,
+        Protocol, Prover, Public, Rounds, Send, Seq, Sequence, Squeeze, Statement, Tail, Tape,
+        Then, Verifier, Write, prove_within, prover_tape, verifier_tape, verify_within,
     },
 };
 
@@ -598,4 +598,149 @@ fn transcript_borrowed() {
     let through = absorb_then_squeeze(&mut &mut owned, F::new(7));
     assert_eq!(through, absorb_then_squeeze(&mut direct, F::new(7)));
     assert_eq!(owned.squeeze(), direct.squeeze());
+}
+
+/// `Self` then `R`, at the type level: the steps of `P`, then those of `R`.
+fn steps_then<P: Sequence, R>(log: Log) -> Tape<F, Log, P::Tail<R>> {
+    Tape::undescribed(log)
+}
+
+#[test]
+fn typed_sequence() {
+    // A pattern's tail replaced by another pattern: its steps, then the
+    // other's, on one tape.
+    type P = Send<Word, Squeeze<Count, End>>;
+    let tape = steps_then::<P, Send<Word, End>>(Log::default());
+    let (x, tape) = tape.send(&Word(1)).squeeze();
+    assert_eq!(x, 1);
+    assert_eq!(tape.send(&Word(2)).into_inner().written, vec![1, 2]);
+}
+
+#[test]
+fn typed_tail() {
+    // `Tail<P, R>` is `P` followed by `R`; `Tail<P, End>` is `P`.
+    type P = Send<Word, End>;
+    let tape = Tape::<F, Log, Tail<P, Send<Word, End>>>::undescribed(Log::default());
+    let log = tape.send(&Word(1)).send(&Word(2)).into_inner();
+    assert_eq!(log.written, vec![1, 2]);
+    let _: Tape<F, Log, P> = Tape::<F, Log, Tail<P, End>>::undescribed(Log::default());
+}
+
+#[test]
+fn typed_seq() {
+    // A sequence of two patterns: their steps in order, their messages
+    // summed, and the description of the sequence it denotes, so however a
+    // composite is bracketed it is separated alike.
+    type A = Message<F, End>;
+    type B = Challenge<End>;
+    type S = Seq<A, B>;
+    assert_eq!(<S as Pattern>::MESSAGES, 1);
+    assert_eq!(<S as Pattern>::CHALLENGES, 1);
+    let tape = Tape::<F, _, Tail<S, End>>::undescribed(goldilocks_sponge(0));
+    let (x, _) = tape.send(&F::ONE).challenge();
+    let flat = Tape::<F, _, Message<F, Challenge<End>>>::undescribed(goldilocks_sponge(0));
+    let (y, _) = flat.send(&F::ONE).challenge();
+    assert_eq!(x, y);
+    let mut a = goldilocks_sponge(0);
+    let mut b = goldilocks_sponge(0);
+    <S as Pattern>::describe::<F, _>(&mut a);
+    <Message<F, Challenge<End>> as Pattern>::describe::<F, _>(&mut b);
+    assert_eq!(a.squeeze(), b.squeeze());
+    type Left = Seq<Seq<A, B>, A>;
+    type Right = Seq<A, Seq<B, A>>;
+    let mut left = goldilocks_sponge(0);
+    let mut right = goldilocks_sponge(0);
+    <Left as Pattern>::describe::<F, _>(&mut left);
+    <Right as Pattern>::describe::<F, _>(&mut right);
+    assert_eq!(left.squeeze(), right.squeeze());
+}
+
+#[test]
+fn typed_tape_transport() {
+    // The transcript replaced by a view of it, the position kept.
+    let tape = Tape::<F, Log, Send<Word, End>>::undescribed(Log::default());
+    let moved = tape.transport(|mut log| {
+        log.written.push(7);
+        log
+    });
+    assert_eq!(moved.send(&Word(1)).into_inner().written, vec![7, 1]);
+}
+
+#[test]
+fn typed_tape_through() {
+    // Steps run through a borrowed view are steps of this tape: the same
+    // challenge as stepping directly, and the tape moves on.
+    type P = Message<F, Challenge<End>>;
+    let tape = Tape::<F, _, P>::undescribed(goldilocks_sponge(0));
+    let (x, after) = tape.through(
+        |sponge| sponge,
+        |inner| {
+            let (x, inner) = inner.send(&F::ONE).challenge();
+            (x, inner)
+        },
+        |sponge| sponge,
+    );
+    let (y, direct) = Tape::<F, _, P>::undescribed(goldilocks_sponge(0))
+        .send(&F::ONE)
+        .challenge();
+    assert_eq!(x, y);
+    assert_eq!(after.finish().squeeze(), direct.finish().squeeze());
+}
+
+#[test]
+fn typed_tape_try_through() {
+    // A refusal inside the view ends the protocol.
+    type P = Message<F, End>;
+    let tape = Tape::<F, _, P>::undescribed(goldilocks_sponge(0));
+    let refused: Option<((), Tape<F, _, End>)> =
+        tape.try_through(|sponge| sponge, |_| None, |sponge| sponge);
+    assert!(refused.is_none());
+    let tape = Tape::<F, _, P>::undescribed(goldilocks_sponge(0));
+    let accepted = tape.try_through(
+        |sponge| sponge,
+        |inner| Some(((), inner.send(&F::ONE))),
+        |sponge| sponge,
+    );
+    assert!(accepted.is_some());
+}
+
+/// A sub-protocol: a message, then a challenge.
+type Sub = Message<F, Challenge<End>>;
+
+#[test]
+fn typed_prove_within() {
+    // The sub-protocol proved on a longer tape: its proof, its challenge,
+    // and the tape handed back at the rest.
+    let tape = Tape::<F, _, Tail<Sub, Message<F, End>>>::undescribed(goldilocks_sponge(0));
+    let proved = prove_within::<F, _, Sub, _, _, _, ()>(tape, |prover| {
+        Ok(prover.send(F::new(3)).challenge())
+    });
+    let (x, proof, rest) = proved.unwrap();
+    assert_eq!(proof.head, F::new(3));
+    let (y, alone) = Tape::<F, _, Sub>::undescribed(goldilocks_sponge(0))
+        .send(&F::new(3))
+        .challenge();
+    assert_eq!(x, y);
+    let rest = rest.send(&F::ONE).finish();
+    let alone = Tape::<F, _, Message<F, End>>::undescribed(alone.finish());
+    assert_eq!(rest, alone.send(&F::ONE).finish());
+}
+
+#[test]
+fn typed_verify_within() {
+    // The verifier of the sub-protocol on a longer tape reads the proof and
+    // draws the prover's challenge.
+    let tape = Tape::<F, _, Tail<Sub, End>>::undescribed(goldilocks_sponge(0));
+    let proved = prove_within::<F, _, Sub, _, _, _, ()>(tape, |prover| {
+        Ok(prover.send(F::new(3)).challenge())
+    });
+    let (x, proof, _) = proved.unwrap();
+    let tape = Tape::<F, _, Tail<Sub, End>>::undescribed(goldilocks_sponge(0));
+    let verified = verify_within::<F, _, Sub, _, _, ()>(tape, proof, |verifier| {
+        let (m, verifier) = verifier.read();
+        let (y, verifier) = verifier.challenge();
+        Ok(((m, y), verifier))
+    });
+    let ((m, y), _) = verified.unwrap();
+    assert_eq!((m, y), (F::new(3), x));
 }

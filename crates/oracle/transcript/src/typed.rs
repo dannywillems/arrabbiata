@@ -251,35 +251,99 @@ where
     }
 }
 
-/// Sequential composition of patterns: type-level list concatenation.
+/// A pattern as a sequence: `Self` followed by any `R`, for every `R` at
+/// once (a generic associated type).
+///
+/// Every node is a sequence structurally (the step, then the tail followed
+/// by `R`), [`End`] is the unit (`End` followed by `R` is `R`), and
+/// [`Seq`] is the composite whose tail is `P` followed by (`Q` followed by
+/// `R`). So concatenation is associative by definition, which is what lets
+/// a reduction be generic in what follows it: a reduction over the pattern
+/// `P` works on a tape at `Tail<R>` and hands back a tape at `R`, and two
+/// composed reductions need no proof that `(P ++ Q) ++ R = P ++ (Q ++ R)`.
+pub trait Sequence {
+    /// `Self` followed by `R`.
+    type Tail<R>;
+}
+
+impl Sequence for End {
+    type Tail<R> = R;
+}
+
+impl<M, Next> Sequence for Message<M, Next>
+where
+    Next: Sequence,
+{
+    type Tail<R> = Message<M, Next::Tail<R>>;
+}
+
+impl<M, Next> Sequence for Public<M, Next>
+where
+    Next: Sequence,
+{
+    type Tail<R> = Public<M, Next::Tail<R>>;
+}
+
+impl<Next> Sequence for Challenge<Next>
+where
+    Next: Sequence,
+{
+    type Tail<R> = Challenge<Next::Tail<R>>;
+}
+
+/// `P`, then `Q`: the pattern of a composite, kept as a node so that its
+/// concatenation with what follows is `P` followed by (`Q` followed by it).
+#[derive(Debug)]
+pub struct Seq<P, Q>(PhantomData<(P, Q)>);
+
+impl<P, Q> Sequence for Seq<P, Q>
+where
+    P: Sequence,
+    Q: Sequence,
+{
+    type Tail<R> = P::Tail<Q::Tail<R>>;
+}
+
+/// The pattern `P` followed by `R`, as a [`Sequence`].
+pub type Tail<P, R> = <P as Sequence>::Tail<R>;
+
+/// A [`Seq`] described as the sequence it denotes, `P` followed by `Q`:
+/// the description of [`Tail<P, Q>`], so it does not depend on how a
+/// composite is bracketed, as the tape type does not. Its counts are the sum
+/// of its parts', and its proof the pair of their proofs. A tape is never at
+/// a `Seq` (its tail normalizes it away); this describes the body of a
+/// [`Rounds`] that is a composite.
+impl<P, Q> Pattern for Seq<P, Q>
+where
+    P: Pattern + Sequence,
+    Q: Pattern,
+    Tail<P, Q>: Pattern,
+{
+    const MESSAGES: usize = P::MESSAGES + Q::MESSAGES;
+    const CHALLENGES: usize = P::CHALLENGES + Q::CHALLENGES;
+    type Proof = HCons<<P as Pattern>::Proof, HCons<<Q as Pattern>::Proof, HNil>>;
+
+    fn describe<F, T>(transcript: &mut T)
+    where
+        F: Field,
+        T: Transcript<F>,
+    {
+        <Tail<P, Q> as Pattern>::describe(transcript);
+    }
+}
+
+/// Sequential composition of patterns: type-level list concatenation, the
+/// [`Sequence`]'s tail.
 pub trait Concat<Q> {
     /// The pattern `Self` followed by `Q`.
     type Output;
 }
 
-impl<Q> Concat<Q> for End {
-    type Output = Q;
-}
-
-impl<M, Next, Q> Concat<Q> for Message<M, Next>
+impl<P, Q> Concat<Q> for P
 where
-    Next: Concat<Q>,
+    P: Sequence,
 {
-    type Output = Message<M, <Next as Concat<Q>>::Output>;
-}
-
-impl<M, Next, Q> Concat<Q> for Public<M, Next>
-where
-    Next: Concat<Q>,
-{
-    type Output = Public<M, <Next as Concat<Q>>::Output>;
-}
-
-impl<Next, Q> Concat<Q> for Challenge<Next>
-where
-    Next: Concat<Q>,
-{
-    type Output = Challenge<<Next as Concat<Q>>::Output>;
+    type Output = P::Tail<Q>;
 }
 
 /// The pattern `P` followed by `Q`.
@@ -308,13 +372,6 @@ where
             marker: PhantomData,
         }
     }
-
-    const fn advance<Next>(transcript: T) -> Tape<F, T, Next> {
-        Tape {
-            transcript,
-            marker: PhantomData,
-        }
-    }
 }
 
 impl<F, T, M, Next> Tape<F, T, Message<M, Next>>
@@ -322,7 +379,6 @@ where
     F: Field,
     T: Transcript<F>,
     M: Absorb<F> + Label,
-    Next: Pattern,
 {
     /// The prover writes `message` on the tape.
     #[must_use]
@@ -352,7 +408,6 @@ where
     F: Field,
     T: Transcript<F>,
     M: Absorb<F> + Label,
-    Next: Pattern,
 {
     /// Absorb the public value `value`.
     #[must_use]
@@ -369,7 +424,6 @@ impl<F, T, Next> Tape<F, T, Challenge<Next>>
 where
     F: Field,
     T: Transcript<F>,
-    Next: Pattern,
 {
     /// The verifier writes a challenge on the tape.
     #[must_use]
@@ -377,7 +431,10 @@ where
         let challenge = self.transcript.squeeze();
         (
             challenge,
-            Tape::<F, T, Challenge<Next>>::advance(self.transcript),
+            Tape {
+                transcript: self.transcript,
+                marker: PhantomData,
+            },
         )
     }
 }
@@ -589,6 +646,77 @@ where
     pub fn finish(self) -> T {
         self.tape.finish()
     }
+}
+
+/// Prove the sub-protocol `Full` as steps of a longer tape: `run` gets a
+/// [`Prover`] at the start of `Full` on this tape's transcript (no second
+/// description: the longer tape was described), and must hand it back at
+/// [`End`], which only stepping through `Full` can do; the result is
+/// `run`'s, the proof of `Full` (its messages, in order), and the tape at
+/// what follows.
+///
+/// # Errors
+///
+/// `run`'s error.
+#[allow(clippy::type_complexity)]
+pub fn prove_within<F, T, Full, R, W, X, E>(
+    tape: Tape<F, T, Tail<Full, R>>,
+    run: impl FnOnce(Prover<F, T, Full, Full, HNil>) -> Result<(X, Prover<F, T, Full, End, W>), E>,
+) -> Result<(X, <Full as Pattern>::Proof, Tape<F, T, R>), E>
+where
+    F: Field,
+    T: Transcript<F>,
+    Full: Pattern + Sequence,
+    W: Reverse<HNil, Output = <Full as Pattern>::Proof>,
+{
+    let prover = Prover {
+        tape: Tape {
+            transcript: tape.transcript,
+            marker: PhantomData,
+        },
+        written: HNil,
+        full: PhantomData,
+    };
+    let (x, finished) = run(prover)?;
+    let proof = finished.written.reverse_onto(HNil);
+    let tape = Tape {
+        transcript: finished.tape.transcript,
+        marker: PhantomData,
+    };
+    Ok((x, proof, tape))
+}
+
+/// Verify the sub-protocol `Full` as steps of a longer tape, reading
+/// `proof`: `run` gets a [`Verifier`] at the start of `Full` and must hand
+/// it back at [`End`], the proof fully read; the result is `run`'s and the
+/// tape at what follows.
+///
+/// # Errors
+///
+/// `run`'s error.
+pub fn verify_within<F, T, Full, R, X, E>(
+    tape: Tape<F, T, Tail<Full, R>>,
+    proof: <Full as Pattern>::Proof,
+    run: impl FnOnce(Verifier<F, T, Full>) -> Result<(X, Verifier<F, T, End>), E>,
+) -> Result<(X, Tape<F, T, R>), E>
+where
+    F: Field,
+    T: Transcript<F>,
+    Full: Pattern + Sequence,
+{
+    let verifier = Verifier {
+        tape: Tape {
+            transcript: tape.transcript,
+            marker: PhantomData,
+        },
+        unread: proof,
+    };
+    let (x, finished) = run(verifier)?;
+    let tape = Tape {
+        transcript: finished.tape.transcript,
+        marker: PhantomData,
+    };
+    Ok((x, tape))
 }
 
 /// A non-interactive protocol, identified by its transcript.
@@ -816,47 +944,47 @@ where
     }
 }
 
-impl<M, Next, Q> Concat<Q> for Statement<M, Next>
+impl<M, Next> Sequence for Statement<M, Next>
 where
-    Next: Concat<Q>,
+    Next: Sequence,
 {
-    type Output = Statement<M, <Next as Concat<Q>>::Output>;
+    type Tail<R> = Statement<M, Next::Tail<R>>;
 }
 
-impl<M, Next, Q> Concat<Q> for Send<M, Next>
+impl<M, Next> Sequence for Send<M, Next>
 where
-    Next: Concat<Q>,
+    Next: Sequence,
 {
-    type Output = Send<M, <Next as Concat<Q>>::Output>;
+    type Tail<R> = Send<M, Next::Tail<R>>;
 }
 
-impl<K, Next, Q> Concat<Q> for Squeeze<K, Next>
+impl<K, Next> Sequence for Squeeze<K, Next>
 where
-    Next: Concat<Q>,
+    Next: Sequence,
 {
-    type Output = Squeeze<K, <Next as Concat<Q>>::Output>;
+    type Tail<R> = Squeeze<K, Next::Tail<R>>;
 }
 
-impl<K, Next, Q> Concat<Q> for Peek<K, Next>
+impl<K, Next> Sequence for Peek<K, Next>
 where
-    Next: Concat<Q>,
+    Next: Sequence,
 {
-    type Output = Peek<K, <Next as Concat<Q>>::Output>;
+    type Tail<R> = Peek<K, Next::Tail<R>>;
 }
 
-impl<Body, Next, Q> Concat<Q> for Rounds<Body, Next>
+impl<Body, Next> Sequence for Rounds<Body, Next>
 where
-    Next: Concat<Q>,
+    Next: Sequence,
 {
-    type Output = Rounds<Body, <Next as Concat<Q>>::Output>;
+    type Tail<R> = Rounds<Body, Next::Tail<R>>;
 }
 
-impl<A, B, Q> Concat<Q> for Branch<A, B>
+impl<A, B> Sequence for Branch<A, B>
 where
-    A: Concat<Q>,
-    B: Concat<Q>,
+    A: Sequence,
+    B: Sequence,
 {
-    type Output = Branch<<A as Concat<Q>>::Output, <B as Concat<Q>>::Output>;
+    type Tail<R> = Branch<A::Tail<R>, B::Tail<R>>;
 }
 
 impl<F, T, P> Tape<F, T, P> {
@@ -964,6 +1092,70 @@ impl<F, T, A, B> Tape<F, T, Branch<A, B>> {
     #[must_use]
     pub fn right(self) -> Tape<F, T, B> {
         self.moved()
+    }
+}
+
+impl<F, T, P> Tape<F, T, P> {
+    /// The same position of the protocol, the transcript seen through
+    /// `view`: an adapter that writes and draws through it (an IPA's
+    /// oracle over a sponge), so a sub-protocol whose steps are written for
+    /// the adapter continues this tape. The position is the type, so it
+    /// does not change.
+    #[must_use]
+    pub fn transport<U>(self, view: impl FnOnce(T) -> U) -> Tape<F, U, P> {
+        Tape {
+            transcript: view(self.transcript),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<F, T, P> Tape<F, T, P> {
+    /// Continue this tape through an adapter of its transcript: `adapt`
+    /// makes a view `U` that writes and draws through the transcript (an
+    /// IPA's oracle over a sponge); `run` takes the tape at this position
+    /// over the view, borrowed, and must hand it back further on, at `Q`,
+    /// which only stepping can do; `restore` gives the transcript back. So a
+    /// sub-protocol whose steps are written for the adapter is checked as
+    /// steps of this tape.
+    pub fn through<U, Q, X>(
+        self,
+        adapt: impl FnOnce(T) -> U,
+        run: impl FnOnce(Tape<F, &mut U, P>) -> (X, Tape<F, &mut U, Q>),
+        restore: impl FnOnce(U) -> T,
+    ) -> (X, Tape<F, T, Q>) {
+        let mut view = adapt(self.transcript);
+        let inner = Tape {
+            transcript: &mut view,
+            marker: PhantomData,
+        };
+        let (x, _) = run(inner);
+        let tape = Tape {
+            transcript: restore(view),
+            marker: PhantomData,
+        };
+        (x, tape)
+    }
+
+    /// [`Tape::through`] for a sub-protocol that may refuse (a verifier):
+    /// `None` ends the protocol here.
+    pub fn try_through<U, Q, X>(
+        self,
+        adapt: impl FnOnce(T) -> U,
+        run: impl FnOnce(Tape<F, &mut U, P>) -> Option<(X, Tape<F, &mut U, Q>)>,
+        restore: impl FnOnce(U) -> T,
+    ) -> Option<(X, Tape<F, T, Q>)> {
+        let mut view = adapt(self.transcript);
+        let inner = Tape {
+            transcript: &mut view,
+            marker: PhantomData,
+        };
+        let (x, _) = run(inner)?;
+        let tape = Tape {
+            transcript: restore(view),
+            marker: PhantomData,
+        };
+        Some((x, tape))
     }
 }
 
