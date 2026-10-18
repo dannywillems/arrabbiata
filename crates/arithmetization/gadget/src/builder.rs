@@ -8,7 +8,7 @@ use alloc::{
 };
 use core::fmt;
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, FieldModel};
 use arrabbiata_generalized_plonk::{self as generalized, Argument, Circuit, Failure, Gate, Lookup};
 use arrabbiata_permutation::Permutation;
 
@@ -919,7 +919,7 @@ where
         if let Some(frame) = self.frames.pop() {
             self.close(&frame);
         }
-        let end = base + G::ROWS;
+        let end = base + gadget.rows();
         if self.cursor > end {
             self.fail(Error::Rows { gadget: G::NAME });
         }
@@ -1076,6 +1076,35 @@ where
         .map(|w| w.value.unwrap_or(F::ZERO))
         .collect();
     Ok(G::Output::unflatten(&values))
+}
+
+/// The rows `gadget`'s synthesis lays out, from its first row to the last
+/// row a gadget it calls takes: what [`TypedGadget::rows`] returns for a
+/// gadget whose layout depends on its parameters. The gadget is run
+/// symbolically and not called, so its own `rows` is not consulted.
+///
+/// # Errors
+///
+/// An [`Error`] the synthesis raises.
+pub fn measure<F, G>(gadget: &G, layout: Layout) -> Result<usize, Error>
+where
+    F: Field,
+    G: TypedGadget<F>,
+{
+    let mut builder = Builder::new(layout, false);
+    let input = inputs::<F, G::Input>(None);
+    builder.frames.push(Frame {
+        gadget: G::NAME,
+        base: 0,
+        id: 0,
+        seen: BTreeMap::new(),
+    });
+    builder.instances = 1;
+    let _ = gadget.synthesize(&mut builder, input);
+    match builder.error {
+        Some(e) => Err(e),
+        None => Ok(builder.cursor),
+    }
 }
 
 /// The figures of one gate kind: the constraints one gadget asserts on one
@@ -1295,6 +1324,30 @@ where
             .iter()
             .map(|c| c.evaluate(&w, &f).unwrap_or(F::ZERO))
             .collect()
+    }
+
+    /// The image of each constraint, in the order asserted, in the model
+    /// `ring`, the witness cells sent to `witness(column, rotation)` and the
+    /// fixed cells to `fixed(column, rotation)`. In
+    /// [`arrabbiata_field::Native`] it is [`GateConstraints::evaluate`].
+    pub fn interpret<R>(
+        &self,
+        ring: &mut R,
+        witness: &dyn Fn(usize, usize) -> R::Value,
+        fixed: &dyn Fn(usize, usize) -> R::Value,
+    ) -> Vec<R::Value>
+    where
+        R: FieldModel<F>,
+    {
+        let mut out = Vec::with_capacity(self.constraints.len());
+        for c in &self.constraints {
+            let value = match c.interpret(ring, witness, fixed) {
+                Some(v) => v,
+                None => ring.constant(F::ZERO),
+            };
+            out.push(value);
+        }
+        out
     }
 
     /// The tuple each read looks up, in order, with its table, at the same

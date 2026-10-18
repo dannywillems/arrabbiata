@@ -18,7 +18,7 @@
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::ops::{Add, Mul, Neg, Sub};
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, FieldModel};
 use arrabbiata_generalized_plonk::Variable;
 use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
 use arrabbiata_poly::Rotation;
@@ -104,6 +104,41 @@ where
             Self::Add(a, b) => Some(a.evaluate(witness, fixed)? + b.evaluate(witness, fixed)?),
             Self::Mul(a, b) => Some(a.evaluate(witness, fixed)? * b.evaluate(witness, fixed)?),
             Self::Neg(a) => Some(-a.evaluate(witness, fixed)?),
+        }
+    }
+
+    /// The expression in the model `ring`: the term's image under the
+    /// unique homomorphism of the term algebra that sends each cell where
+    /// `witness` and `fixed` say. `None` when it reads an input never
+    /// placed.
+    pub(crate) fn interpret<R>(
+        &self,
+        ring: &mut R,
+        witness: &dyn Fn(usize, usize) -> R::Value,
+        fixed: &dyn Fn(usize, usize) -> R::Value,
+    ) -> Option<R::Value>
+    where
+        R: FieldModel<F>,
+    {
+        match self {
+            Self::Constant(c) => Some(ring.constant(*c)),
+            Self::Input(_) => None,
+            Self::Witness { column, row } => Some(witness(*column, *row)),
+            Self::Fixed { column, row } => Some(fixed(*column, *row)),
+            Self::Add(a, b) => {
+                let a = a.interpret(ring, witness, fixed)?;
+                let b = b.interpret(ring, witness, fixed)?;
+                Some(ring.add(&a, &b))
+            }
+            Self::Mul(a, b) => {
+                let a = a.interpret(ring, witness, fixed)?;
+                let b = b.interpret(ring, witness, fixed)?;
+                Some(ring.mul(&a, &b))
+            }
+            Self::Neg(a) => {
+                let a = a.interpret(ring, witness, fixed)?;
+                Some(ring.neg(&a))
+            }
         }
     }
 

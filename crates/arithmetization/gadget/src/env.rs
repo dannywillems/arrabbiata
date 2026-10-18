@@ -134,9 +134,17 @@ where
     /// The name, which identifies the gadget's gates.
     const NAME: &'static str;
 
-    /// The number of rows the gadget takes; its cells may also reach into
-    /// the rows after, which the next gadget then reads.
+    /// The number of rows every gadget of this type takes; its cells may
+    /// also reach into the rows after, which the next gadget then reads.
     const ROWS: usize;
+
+    /// The number of rows this gadget takes: [`TypedGadget::ROWS`], unless
+    /// the gadget is a family whose layout depends on its parameters (a
+    /// verifier of a given index), which then says how many
+    /// ([`crate::measure`] counts them).
+    fn rows(&self) -> usize {
+        Self::ROWS
+    }
 
     /// The constraints and the witness of one instance.
     fn synthesize<E>(
@@ -168,6 +176,10 @@ where
     const NAME: &'static str = "chain";
     const ROWS: usize = A::ROWS + B::ROWS;
 
+    fn rows(&self) -> usize {
+        self.first.rows() + self.second.rows()
+    }
+
     fn synthesize<E>(&self, env: &mut E, input: Of<Self::Input, E::Var>) -> Of<Self::Output, E::Var>
     where
         E: Env<F>,
@@ -197,6 +209,10 @@ where
     type Output = G::Output;
     const NAME: &'static str = "placed";
     const ROWS: usize = G::ROWS;
+
+    fn rows(&self) -> usize {
+        self.gadget.rows()
+    }
 
     fn synthesize<E>(&self, env: &mut E, input: Of<Self::Input, E::Var>) -> Of<Self::Output, E::Var>
     where
@@ -228,6 +244,10 @@ where
     type Output = G::Output;
     const NAME: &'static str = "repeat";
     const ROWS: usize = G::ROWS * N;
+
+    fn rows(&self) -> usize {
+        self.gadget.rows() * N
+    }
 
     fn synthesize<E>(&self, env: &mut E, input: Of<Self::Input, E::Var>) -> Of<Self::Output, E::Var>
     where
