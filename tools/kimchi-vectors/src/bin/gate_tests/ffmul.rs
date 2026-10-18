@@ -199,17 +199,20 @@ where
         EFr: FrSponge<G::ScalarField> + From<&'static ArithmeticSpongeParams<G::ScalarField, R>>,
     {
         let result = (|| {
+            let k = attempt();
             let index = self.index.clone().unwrap();
             let witness = self.witness.clone().unwrap();
             if !self.disable_gates_checks {
                 index.verify(&witness, &[]).map_err(|e| format!("{e:?}"))?;
             }
             let group_map = <G as CommitmentCurve>::Map::setup();
-            let mut rng = rng(250);
+            let mut rng = Recording { inner: rng(250), words: vec![], other: 0 };
             let proof = ProverProof::<G, OpeningProof<G, R>, R>::create_recursive::<EFq, EFr, _>(
                 &group_map, witness, &[], &index, vec![], None, &mut rng,
             )
             .map_err(|e| e.to_string())?;
+            println!("pinned_srs {k} {}", index.srs.g.len());
+            pinned::<R, G>(k, &proof, &rng.words, rng.other);
             verify::<R, G, EFq, EFr, OpeningProof<G, R>>(&group_map, &index.verifier_index(), &proof, &[])
                 .map_err(|e| e.to_string())
         })();

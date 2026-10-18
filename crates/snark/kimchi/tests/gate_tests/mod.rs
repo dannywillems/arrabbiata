@@ -6,9 +6,9 @@
 
 #![allow(dead_code)]
 
-use std::{collections::BTreeSet, sync::LazyLock};
+use std::{cell::RefCell, collections::BTreeSet, sync::LazyLock};
 
-use arrabbiata_curve::{Projective, glv::Glv};
+use arrabbiata_curve::{Curve, Projective, glv::Glv};
 use arrabbiata_field::{PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_kimchi::{
     constraints::{COLUMNS, CircuitGate, ConstraintSystem, GateType, Wire},
@@ -40,6 +40,43 @@ pub struct Case {
     pub proof: Vec<String>,
     /// Kimchi's rows, each block as printed, padding left out.
     pub gates: Vec<Vec<KimchiRow>>,
+    /// The proofs Kimchi's test framework made, pinned.
+    pub pinned: Vec<Pinned>,
+}
+
+/// A proof Kimchi's test framework made: which attempt of the test it was,
+/// the digest of its lines, and the words its prover drew, which ours
+/// replays to make the same proof.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Pinned {
+    /// The attempt, counted from 0 in the test.
+    pub attempt: usize,
+    /// The Blake2b-512 digest of the proof's lines, sorted.
+    pub digest: String,
+    /// The words the prover drew.
+    pub words: Vec<u64>,
+    /// The size of the key, when it is not the domain's.
+    pub srs: Option<usize>,
+    /// The block of [`Case::gates`] the proof was made on: Kimchi's
+    /// presentation of the circuit.
+    pub rows: Vec<KimchiRow>,
+}
+
+thread_local! {
+    /// The pinned proofs of the test running on this thread, and how many
+    /// proofs it has attempted.
+    static PINNED: RefCell<(Vec<Pinned>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+}
+
+/// The next proof attempt of the running test, and Kimchi's proof of it
+/// when Kimchi made one.
+fn next_pinned() -> (usize, Option<Pinned>) {
+    PINNED.with(|p| {
+        let mut p = p.borrow_mut();
+        let k = p.1;
+        p.1 += 1;
+        (k, p.0.iter().find(|x| x.attempt == k).cloned())
+    })
 }
 
 /// One of Kimchi's rows as the tool prints it.
@@ -88,6 +125,7 @@ impl Case {
 /// Kimchi's run of the test `name`.
 pub fn case(name: &str) -> Case {
     let mut found = None;
+    let mut pinned_srs: Vec<(usize, usize)> = Vec::new();
     let mut lines = VECTORS.lines();
     while let Some(line) = lines.next() {
         if let Some(n) = line.strip_prefix("test ") {
@@ -117,6 +155,28 @@ pub fn case(name: &str) -> Case {
                 case.witnesses.push(witness);
             }
             Some("proof") => case.proof.push(line["proof ".len()..].to_string()),
+            Some("pinned") => {
+                let attempt = words.next().unwrap().parse().unwrap();
+                let digest = words.next().unwrap().to_string();
+                let other: usize = words.next().unwrap().parse().unwrap();
+                assert_eq!(other, 0, "Kimchi's prover drew only u64 words");
+                let count: usize = words.next().unwrap().parse().unwrap();
+                let drawn: Vec<u64> = words.map(|w| w.parse().unwrap()).collect();
+                assert_eq!(drawn.len(), count);
+                let rows = case.gates.last().cloned().unwrap_or_default();
+                case.pinned.push(Pinned {
+                    attempt,
+                    digest,
+                    words: drawn,
+                    srs: None,
+                    rows,
+                });
+            }
+            Some("pinned_srs") => {
+                let attempt: usize = words.next().unwrap().parse().unwrap();
+                let size = words.next().unwrap().parse().unwrap();
+                pinned_srs.push((attempt, size));
+            }
             Some("gates") => {
                 let count: usize = words.next().unwrap().parse().unwrap();
                 let block = (0..count)
@@ -146,7 +206,14 @@ pub fn case(name: &str) -> Case {
             _ => {}
         }
     }
-    found.unwrap_or_else(|| panic!("no test {name}"))
+    let mut case = found.unwrap_or_else(|| panic!("no test {name}"));
+    for (attempt, size) in pinned_srs {
+        if let Some(p) = case.pinned.iter_mut().find(|p| p.attempt == attempt) {
+            p.srs = Some(size);
+        }
+    }
+    PINNED.with(|p| *p.borrow_mut() = (case.pinned.clone(), 0));
+    case
 }
 
 /// A field element from 64 hex digits, big-endian.
@@ -220,17 +287,68 @@ where
     S: Transcript<C::Base> + Clone,
     T: Transcript<C::Scalar> + Clone,
 {
-    let cs = ConstraintSystem::create(gates)
+    let cs = ConstraintSystem::create(gates.clone())
         .public(public.len())
         .build()
         .map_err(|e| format!("{e:?}"))?;
+    let (attempt, pinned) = next_pinned();
+    // Kimchi's proof of this attempt, reproduced: a proof reads the copy
+    // permutation itself, not only its cycles, so it is made on Kimchi's
+    // presentation of the circuit (its rows, then our padding), with the
+    // words Kimchi's prover drew, and is Kimchi's value for value.
+    let mut reproduced = None;
+    if let Some(p) = &pinned {
+        let mut rows: Vec<CircuitGate<C::Scalar>> = kimchi_gates(&p.rows);
+        rows.extend(gates[rows.len()..].iter().cloned());
+        let kimchis = ConstraintSystem::create(rows)
+            .public(public.len())
+            .build()
+            .map_err(|e| format!("{e:?}"))?;
+        let depth = p.srs.unwrap_or_else(|| kimchis.domain.d1.size());
+        let index: ProverIndex<C> = ProverIndex::create(kimchis, Srs::create(depth));
+        let mut rng = Arkworks(Replay(p.words.clone(), 0));
+        let proof = prove(
+            &index,
+            witness.clone(),
+            &[],
+            &[],
+            kimchi,
+            (base, scalar),
+            &mut rng,
+        )
+        .map_err(|e| e.to_string())?;
+        assert_eq!(
+            proof_digest(&proof_lines("pinned", &proof)),
+            p.digest,
+            "proof {attempt} is not Kimchi's"
+        );
+        // When our rows have Kimchi's partition, they are the same circuit
+        // and that proof is ours too; otherwise (a copy Kimchi's wiring
+        // drops and ours keeps) ours is checked and proved on its own.
+        let (missing, extra) = kimchi_rows_difference(&gates, &p.rows);
+        if missing.is_empty() && extra.is_empty() {
+            reproduced = Some((index, proof));
+        }
+    }
+    // Our verdict is on our circuit: Kimchi's proof above is reproduced
+    // even when our circuit refuses the witness (Kimchi's wiring drops a
+    // copy ours keeps).
     cs.verify_witness(&witness, &public, kimchi)
         .map_err(|e| format!("{e:?}"))?;
-    let depth = cs.domain.d1.size();
-    let index: ProverIndex<C> = ProverIndex::create(cs, Srs::create(depth));
-    let mut rng = Arkworks(SplitMix64(250));
-    let proof = prove(&index, witness, &[], &[], kimchi, (base, scalar), &mut rng)
-        .map_err(|e| e.to_string())?;
+    let (index, proof) = match reproduced {
+        Some(both) => both,
+        None => {
+            let depth = cs.domain.d1.size();
+            let index: ProverIndex<C> = ProverIndex::create(cs, Srs::create(depth));
+            let mut rng = Arkworks(SplitMix64(250));
+            let proof = prove(&index, witness, &[], &[], kimchi, (base, scalar), &mut rng)
+                .map_err(|e| e.to_string())?;
+            (index, proof)
+        }
+    };
+    // The verifier's own randomness (its batching) does not change its
+    // verdict.
+    let mut rng = Arkworks(SplitMix64(251));
     verify(
         &index.verifier_index,
         &index.srs,
@@ -288,7 +406,16 @@ impl RandomSource for Replay {
     }
 }
 
-fn point(p: &Projective<Vesta>) -> String {
+/// The Blake2b-512 digest of sorted proof lines, as the tool pins a proof.
+pub fn proof_digest(lines: &[String]) -> String {
+    use blake2::{Blake2b512, Digest};
+    Blake2b512::digest(lines.join("\n").as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn point<C: Curve<Base: PrimeField>>(p: &Projective<C>) -> String {
     let a = p.to_affine();
     match (a.x(), a.y()) {
         (Some(x), Some(y)) => format!("{} {}", hex(x), hex(y)),
@@ -296,23 +423,23 @@ fn point(p: &Projective<Vesta>) -> String {
     }
 }
 
-fn comm(c: &PolyComm<Vesta>) -> String {
+fn comm<C: Curve<Base: PrimeField>>(c: &PolyComm<C>) -> String {
     let chunks: Vec<String> = c.chunks.iter().map(point).collect();
     format!("{} {}", c.chunks.len(), chunks.join(" "))
 }
 
-fn values(v: &[Fp]) -> String {
+fn values<F: PrimeField>(v: &[F]) -> String {
     let hexes: Vec<String> = v.iter().map(|x| hex(*x)).collect();
     format!("{} {}", v.len(), hexes.join(" "))
 }
 
-fn evaluation(e: &PointEvaluations<Fp>) -> String {
+fn evaluation<F: PrimeField>(e: &PointEvaluations<F>) -> String {
     format!("{} {}", values(&e.zeta), values(&e.zeta_omega))
 }
 
 /// Our proof in the prover tool's lines, the absent evaluations left out,
 /// sorted (the tool lists the optional selectors in Kimchi's order).
-pub fn proof_lines(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
+pub fn proof_lines<C: Curve<Base: PrimeField>>(name: &str, proof: &ProverProof<C>) -> Vec<String> {
     let mut out = Vec::new();
     for (i, c) in proof.w_comm.iter().enumerate() {
         out.push(format!("comm {name} w{i} {}", comm(c)));
@@ -329,7 +456,7 @@ pub fn proof_lines(name: &str, proof: &ProverProof<Vesta>) -> Vec<String> {
         }
     }
     let e = &proof.evals;
-    let mut put = |label: String, p: &PointEvaluations<Fp>| {
+    let mut put = |label: String, p: &PointEvaluations<C::Scalar>| {
         out.push(format!("eval {name} {label} {}", evaluation(p)));
     };
     put("public".into(), &e.public);

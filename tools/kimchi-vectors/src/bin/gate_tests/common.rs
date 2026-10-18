@@ -1,6 +1,10 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
-use ark_ff::{BigInteger, PrimeField, Zero};
+use ark_ec::AffineRepr;
+use ark_ff::{BigInteger, PrimeField};
 use groupmap::GroupMap;
 use kimchi::{
     circuits::{constraints::ConstraintSystem, gate::CircuitGate, wires::{Wire, COLUMNS}},
@@ -39,8 +43,40 @@ pub fn hex<F: PrimeField>(x: F) -> String {
         .collect()
 }
 
+/// The proof attempts of the current test, counted from 0.
+static ATTEMPT: AtomicUsize = AtomicUsize::new(0);
+
 pub fn test(name: &str) {
+    ATTEMPT.store(0, Ordering::SeqCst);
     println!("test {name}");
+}
+
+/// The next proof attempt of the current test.
+pub fn attempt() -> usize {
+    ATTEMPT.fetch_add(1, Ordering::SeqCst)
+}
+
+/// Proof `k` of the current test, pinned: the Blake2b-512 digest of its
+/// lines (sorted), how many draws were not `next_u64`, and the words the
+/// prover drew, which our prover replays.
+pub fn pinned<const R: usize, G: KimchiCurve<R>>(
+    k: usize,
+    proof: &ProverProof<G, OpeningProof<G, R>, R>,
+    words: &[u64],
+    other: usize,
+) where
+    G::BaseField: PrimeField,
+    G::ScalarField: PrimeField,
+{
+    use blake2::{Blake2b512, Digest};
+    let mut lines = proof_lines("pinned", proof);
+    lines.sort();
+    let digest: String = Blake2b512::digest(lines.join("\n").as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let items: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    println!("pinned {k} {digest} {other} {} {}", words.len(), items.join(" "));
 }
 
 pub fn input<F: PrimeField>(key: &str, xs: &[F]) {
@@ -120,15 +156,17 @@ where
     let srs = Arc::new(SRS::<G>::create(cs.domain.d1.size as usize));
     let endo = *G::other_curve_endo();
     let index: ProverIndex<FULL_ROUNDS, G, SRS<G>> = ProverIndex::create(cs, endo, srs, false);
+    let k = attempt();
     index.verify(&witness, &public).map_err(|e| format!("{e:?}"))?;
     let group_map = <G as CommitmentCurve>::Map::setup();
-    let mut rng = rng(250);
+    let mut rng = Recording { inner: rng(250), words: vec![], other: 0 };
     let proof = ProverProof::<G, OpeningProof<G, FULL_ROUNDS>, FULL_ROUNDS>::create_recursive::<
         EFq,
         EFr,
         _,
     >(&group_map, witness, &[], &index, vec![], None, &mut rng)
     .map_err(|e| e.to_string())?;
+    pinned(k, &proof, &rng.words, rng.other);
     let vi = index.verifier_index();
     verify::<FULL_ROUNDS, G, EFq, EFr, OpeningProof<G, FULL_ROUNDS>>(&group_map, &vi, &proof, &public)
         .map_err(|e| e.to_string())
@@ -182,45 +220,58 @@ impl<R: rand::RngCore> rand::RngCore for Recording<R> {
 
 impl<R: rand::CryptoRng> rand::CryptoRng for Recording<R> {}
 
-fn point_hex(p: &Vesta) -> String {
-    use ark_ec::AffineRepr;
+fn point_hex<G: AffineRepr>(p: &G) -> String
+where
+    G::BaseField: PrimeField,
+{
     match p.xy() {
         Some((x, y)) => format!("{} {}", hex(x), hex(y)),
         None => String::from("inf"),
     }
 }
 
-fn comm_hex(c: &poly_commitment::commitment::PolyComm<Vesta>) -> String {
+fn comm_hex<G: AffineRepr>(c: &poly_commitment::commitment::PolyComm<G>) -> String
+where
+    G::BaseField: PrimeField,
+{
     let chunks: Vec<String> = c.chunks.iter().map(point_hex).collect();
     format!("{} {}", c.chunks.len(), chunks.join(" "))
 }
 
-fn values(v: &[Fp]) -> String {
+fn values<F: PrimeField>(v: &[F]) -> String {
     let hexes: Vec<String> = v.iter().map(|x| hex(*x)).collect();
     format!("{} {}", v.len(), hexes.join(" "))
 }
 
 /// A proof in the prover tool's lines, the absent evaluations left out.
-pub fn print_proof(name: &str, proof: &ProverProof<Vesta, OpeningProof<Vesta, FULL_ROUNDS>, FULL_ROUNDS>) {
+pub fn proof_lines<const R: usize, G: KimchiCurve<R>>(
+    name: &str,
+    proof: &ProverProof<G, OpeningProof<G, R>, R>,
+) -> Vec<String>
+where
+    G::BaseField: PrimeField,
+    G::ScalarField: PrimeField,
+{
+    let mut out = Vec::new();
     let c = &proof.commitments;
     for (i, w) in c.w_comm.iter().enumerate() {
-        println!("proof comm {name} w{i} {}", comm_hex(w));
+        out.push(format!("comm {name} w{i} {}", comm_hex(w)));
     }
-    println!("proof comm {name} z {}", comm_hex(&c.z_comm));
-    println!("proof comm {name} t {}", comm_hex(&c.t_comm));
+    out.push(format!("comm {name} z {}", comm_hex(&c.z_comm)));
+    out.push(format!("comm {name} t {}", comm_hex(&c.t_comm)));
     if let Some(l) = &c.lookup {
         for (i, s) in l.sorted.iter().enumerate() {
-            println!("proof comm {name} sorted{i} {}", comm_hex(s));
+            out.push(format!("comm {name} sorted{i} {}", comm_hex(s)));
         }
-        println!("proof comm {name} aggreg {}", comm_hex(&l.aggreg));
+        out.push(format!("comm {name} aggreg {}", comm_hex(&l.aggreg)));
         if let Some(r) = &l.runtime {
-            println!("proof comm {name} runtime {}", comm_hex(r));
+            out.push(format!("comm {name} runtime {}", comm_hex(r)));
         }
     }
     let e = &proof.evals;
-    let eval = |label: &str, p: Option<&kimchi::proof::PointEvaluations<Vec<Fp>>>| {
+    let mut eval = |label: &str, p: Option<&kimchi::proof::PointEvaluations<Vec<G::ScalarField>>>| {
         if let Some(p) = p {
-            println!("proof eval {name} {label} {} {}", values(&p.zeta), values(&p.zeta_omega));
+            out.push(format!("eval {name} {label} {} {}", values(&p.zeta), values(&p.zeta_omega)));
         }
     };
     eval("public", e.public.as_ref());
@@ -257,15 +308,23 @@ pub fn print_proof(name: &str, proof: &ProverProof<Vesta, OpeningProof<Vesta, FU
     eval("lookup_gate_lookup_selector", e.lookup_gate_lookup_selector.as_ref());
     eval("range_check_lookup_selector", e.range_check_lookup_selector.as_ref());
     eval("foreign_field_mul_lookup_selector", e.foreign_field_mul_lookup_selector.as_ref());
-    println!("proof ft_eval1 {name} {}", hex(proof.ft_eval1));
+    out.push(format!("ft_eval1 {name} {}", hex(proof.ft_eval1)));
     let o = &proof.proof;
     for (i, (l, r)) in o.lr.iter().enumerate() {
-        println!("proof opening {name} lr{i} {} {}", point_hex(l), point_hex(r));
+        out.push(format!("opening {name} lr{i} {} {}", point_hex(l), point_hex(r)));
     }
-    println!("proof opening {name} delta {}", point_hex(&o.delta));
-    println!("proof opening {name} z1 {}", hex(o.z1));
-    println!("proof opening {name} z2 {}", hex(o.z2));
-    println!("proof opening {name} sg {}", point_hex(&o.sg));
+    out.push(format!("opening {name} delta {}", point_hex(&o.delta)));
+    out.push(format!("opening {name} z1 {}", hex(o.z1)));
+    out.push(format!("opening {name} z2 {}", hex(o.z2)));
+    out.push(format!("opening {name} sg {}", point_hex(&o.sg)));
+    out
+}
+
+/// A proof in the prover tool's lines, the absent evaluations left out.
+pub fn print_proof(name: &str, proof: &ProverProof<Vesta, OpeningProof<Vesta, FULL_ROUNDS>, FULL_ROUNDS>) {
+    for line in proof_lines(name, proof) {
+        println!("proof {line}");
+    }
 }
 
 /// Kimchi's `prove_and_check_serialization_regression` up to the proof:
