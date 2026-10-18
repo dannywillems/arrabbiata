@@ -42,11 +42,13 @@ use arrabbiata_poseidon::kimchi::WIDTH;
 use arrabbiata_transcript::{PermutationIn, Transcript};
 
 use crate::{
-    constraints::GateType,
+    constraints::{COLUMNS, GateType},
     gates::Gates,
     ipa::kimchi_ipa,
     lookup::{LookupPattern, LookupPoint, constraint_count, constraints as lookup_constraints},
-    oracle::{ChallengeModel, FqSponge, FrSponge, ScalarChallenge, SpongeIn, Value},
+    oracle::{
+        BaseReading, ChallengeModel, Duplexed, FqSponge, FrSponge, ScalarChallenge, SpongeIn, Value,
+    },
     permutation::PERMUTS,
     prover::{
         CONSTRAINED, LOOKUP_ALPHA, LookupEvaluations, PERMUTATION_ALPHA, PointEvaluations,
@@ -54,7 +56,7 @@ use crate::{
     },
     rng::Sampler,
     srs::{PolyComm, Srs, num_chunks},
-    transcript::{self, Base, Message, Scalar},
+    transcript::{self, Base, BaseElements, Message, Point, Scalar},
     verifier_index::VerifierIndex,
 };
 
@@ -419,51 +421,174 @@ where
     };
 
     let previous: Vec<Projective<C>> = proof.prev_challenges.iter().map(|p| p.comm).collect();
-    let tape = transcript::piop::<C, S>(base_sponge.clone())
-        .statement(&Message::new(Base(index.digest(base_sponge.clone()))))
-        .statement(&Message::new(previous))
-        .statement(&Message::new(public_comm.clone()))
-        .receive(&Message::new(proof.w_comm.clone()));
     let lookup = index.lookup_index.as_ref().zip(proof.lookup.as_ref());
-    let (joint_combiner_chal, beta, gamma, tape) = match lookup {
+    let inputs = PiopInputs {
+        index_digest: index.digest(base_sponge.clone()),
+        previous,
+        public: public_comm.clone(),
+        witness: proof.w_comm.clone(),
+        lookup: lookup.map(|(li, comms)| LookupInputs {
+            runtime: comms.runtime.clone(),
+            joint: li.joint_lookup_used,
+            sorted: comms.sorted.clone(),
+            aggregation: comms.aggreg.clone(),
+        }),
+        z: proof.z_comm.clone(),
+        t: proof.t_comm.clone(),
+    };
+    let (drawn, fq_sponge) = piop_transcript_on(FqSponge::new(base_sponge.clone()), &inputs);
+    let joint_combiner_chal = inputs
+        .lookup
+        .as_ref()
+        .map(|_| ScalarChallenge(drawn.joint_combiner.unwrap_or(C::Scalar::ZERO)));
+    Ok(BaseTranscript {
+        beta: drawn.beta,
+        gamma: drawn.gamma,
+        joint_combiner_chal,
+        alpha_chal: ScalarChallenge(drawn.alpha),
+        zeta_chal: ScalarChallenge(drawn.zeta),
+        digest: drawn.digest,
+        public_comm,
+        fq_sponge,
+    })
+}
+
+/// What the base-field half of the transcript absorbs, at the carriers `B`
+/// of a base element, `P` of a point and `G` of a commitment: natively
+/// `PolyComm<C>`s, in a circuit the chunks' coordinates.
+#[derive(Clone, Debug)]
+pub struct PiopInputs<B, P, G> {
+    /// The verifier index's digest.
+    pub index_digest: B,
+    /// The previous accumulators' commitments.
+    pub previous: Vec<P>,
+    /// The public input's commitment.
+    pub public: G,
+    /// The witness columns' commitments.
+    pub witness: [G; COLUMNS],
+    /// With lookups, their commitments.
+    pub lookup: Option<LookupInputs<G>>,
+    /// The permutation's commitment.
+    pub z: G,
+    /// The quotient's commitment.
+    pub t: G,
+}
+
+/// The lookups' part of [`PiopInputs`].
+#[derive(Clone, Debug)]
+pub struct LookupInputs<G> {
+    /// With runtime tables, the runtime table's commitment.
+    pub runtime: Option<G>,
+    /// Whether a lookup is joint, so a joint combiner is drawn.
+    pub joint: bool,
+    /// The sorted columns' commitments.
+    pub sorted: Vec<G>,
+    /// The aggregation's commitment.
+    pub aggregation: G,
+}
+
+/// The draws of the base-field half, as the sponge's model reads them
+/// (natively scalars, in a circuit base-field values): the 128-bit
+/// challenges come unmapped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PiopChallenges<R> {
+    /// The 128-bit challenge of the joint combiner, when it is drawn.
+    pub joint_combiner: Option<R>,
+    /// `beta`.
+    pub beta: R,
+    /// `gamma`.
+    pub gamma: R,
+    /// The 128-bit challenge `alpha` comes from.
+    pub alpha: R,
+    /// The 128-bit challenge `zeta` comes from.
+    pub zeta: R,
+    /// The digest the scalar sponge starts from.
+    pub digest: R,
+}
+
+/// The base-field half of the transcript, as `transcript::PiopOf` says, on
+/// `sponge` in whichever model it computes: one definition for
+/// [`base_transcript`] and [`base_transcript_in`]. Returns the draws and
+/// the sponge after `zeta`, where the opening continues.
+pub fn piop_transcript_on<C, S, H, P, G>(
+    sponge: FqSponge<C, S, H>,
+    inputs: &PiopInputs<Value<C::Base, H>, P, G>,
+) -> (PiopChallenges<H::Read>, FqSponge<C, S, H>)
+where
+    C: Curve,
+    H: SpongeIn<C::Base, S> + BaseReading<C>,
+    S: Clone,
+    Value<C::Base, H>: Clone,
+    P: BaseElements<Value<C::Base, H>> + Clone,
+    G: BaseElements<Value<C::Base, H>> + Clone,
+{
+    let tape = transcript::piop_on::<C, S, H, P, G>(sponge)
+        .statement(&Message::new(Base(inputs.index_digest.clone())))
+        .statement(&Message::new(inputs.previous.clone()))
+        .statement(&Message::new(inputs.public.clone()))
+        .receive(&Message::new(inputs.witness.clone()));
+    let (joint_combiner, beta, gamma, tape) = match &inputs.lookup {
         None => {
             let (beta, tape) = tape.left().squeeze();
             let (gamma, tape) = tape.squeeze();
             (None, beta, gamma, tape)
         }
-        Some((li, comms)) => {
+        Some(lookup) => {
             let tape = tape.right();
-            let tape = match &comms.runtime {
+            let tape = match &lookup.runtime {
                 Some(r) => tape.left().receive(&Message::new(r.clone())),
                 None => tape.right(),
             };
-            let (raw, tape) = if li.joint_lookup_used {
-                tape.left().squeeze()
+            let (joint, tape) = if lookup.joint {
+                let (j, tape) = tape.left().squeeze();
+                (Some(j), tape)
             } else {
-                (C::Scalar::ZERO, tape.right())
+                (None, tape.right())
             };
-            let tape = tape.receive(&Message::new(comms.sorted.clone()));
+            let tape = tape.receive(&Message::new(lookup.sorted.clone()));
             let (beta, tape) = tape.squeeze();
             let (gamma, tape) = tape.squeeze();
-            let tape = tape.receive(&Message::new(comms.aggreg.clone()));
-            (Some(ScalarChallenge(raw)), beta, gamma, tape)
+            let tape = tape.receive(&Message::new(lookup.aggregation.clone()));
+            (joint, beta, gamma, tape)
         }
     };
-    let tape = tape.receive(&Message::new(proof.z_comm.clone()));
-    let (alpha_raw, tape) = tape.squeeze();
-    let tape = tape.receive(&Message::new(proof.t_comm.clone()));
-    let (zeta_raw, tape) = tape.squeeze();
+    let tape = tape.receive(&Message::new(inputs.z.clone()));
+    let (alpha, tape) = tape.squeeze();
+    let tape = tape.receive(&Message::new(inputs.t.clone()));
+    let (zeta, tape) = tape.squeeze();
     let (digest, tape) = tape.peek();
-    Ok(BaseTranscript {
+    let drawn = PiopChallenges {
+        joint_combiner,
         beta,
         gamma,
-        joint_combiner_chal,
-        alpha_chal: ScalarChallenge(alpha_raw),
-        zeta_chal: ScalarChallenge(zeta_raw),
+        alpha,
+        zeta,
         digest,
-        public_comm,
-        fq_sponge: tape.into_inner(),
-    })
+    };
+    (drawn, tape.into_inner())
+}
+
+/// The base-field half of the transcript in a model of the base field, on
+/// Kimchi's sponge over `permutation` in that model: [`piop_transcript_on`]
+/// at the model's carrier, the commitments their chunks' coordinates. The
+/// verifier of a circuit over the base field (Pickles' group half) draws
+/// `beta`, `gamma`, `alpha`, `zeta` and the digest by the protocol the
+/// native verifier follows; the 128-bit challenges come unmapped.
+#[allow(clippy::type_complexity)]
+pub fn base_transcript_in<'m, C, M, P>(
+    model: &'m RefCell<M>,
+    permutation: &'m P,
+    inputs: &PiopInputs<M::Value, Point<M::Value>, Vec<Point<M::Value>>>,
+) -> (
+    PiopChallenges<M::Value>,
+    FqSponge<C, Duplexed<'m, M::Value, P>, &'m RefCell<M>>,
+)
+where
+    C: Curve,
+    M: ChallengeModel<C::Base>,
+    P: PermutationIn<M, C::Base, WIDTH>,
+{
+    piop_transcript_on(FqSponge::in_model(model, permutation), inputs)
 }
 
 /// The scalar-field half of the transcript, as `transcript::Evaluation`

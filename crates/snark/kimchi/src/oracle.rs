@@ -13,9 +13,12 @@
 //! - [`FrSponge`], over the scalar field: it absorbs evaluations; its
 //!   challenges are 128-bit [`ScalarChallenge`]s.
 //!
-//! Each squeezed element yields two 64-bit limbs, buffered: a challenge
-//! takes two, so every challenge is one fresh squeeze, and any absorption
-//! empties the buffer.
+//! Kimchi buffers two 64-bit limbs of each squeezed element and a
+//! challenge takes two, so the buffer is empty between draws: every
+//! challenge is the lowest 128 bits of one fresh squeeze, which is how both
+//! sponges compute it, without a buffer. Both run in a model of the field
+//! signature too (the field itself by default, a circuit for Pickles), so
+//! each message and each draw is defined once.
 //!
 //! [`ScalarChallenge::to_field`] maps 128 bits `r` to `a lambda + b`, with
 //! `a, b` accumulated two bits at a time (Kimchi's `to_field_with_length`):
@@ -37,10 +40,6 @@ use arrabbiata_transcript::{PermutationIn, Transcript};
 
 /// The limbs of a challenge (Kimchi's `CHALLENGE_LENGTH_IN_LIMBS`).
 pub const CHALLENGE_LIMBS: usize = 2;
-
-/// The limbs kept from each squeezed element (Kimchi's
-/// `HIGH_ENTROPY_LIMBS`).
-const KEPT_LIMBS: usize = 2;
 
 /// The element of `F` with the given limbs, which must fit.
 fn pack<F: PrimeField>(limbs: &[u64]) -> F {
@@ -163,16 +162,122 @@ where
     }
 }
 
-/// Kimchi's `DefaultFqSponge` for the curve `C`, over the sponge `S` on its
-/// base field.
+/// Kimchi's `DefaultFqSponge` for the curve `C`: the sponge `S` on its base
+/// field, with its arithmetic where `H` says, the field itself by default.
+/// As for [`FrSponge`], Kimchi's limb buffer never holds anything between
+/// draws (two limbs per squeeze, two per challenge, and a full squeeze
+/// empties it), so a challenge is the lowest 128 bits of one squeeze. How a
+/// draw is read is the model's ([`BaseReading`]): natively as a scalar
+/// (Kimchi's), in a circuit as the base-field value it is (Pickles').
 #[derive(Clone, Debug)]
-pub struct FqSponge<C, S>
+pub struct FqSponge<C, S, H = Native>
 where
     C: Curve,
 {
+    model: H,
     sponge: S,
-    buffer: Vec<u64>,
     curve: core::marker::PhantomData<fn() -> C>,
+}
+
+/// How a model reads the base sponge's draws, a challenge (the lowest 128
+/// bits of a squeeze) and the digest (a squeeze): natively as scalars of
+/// `C`, Kimchi's reading; in a shared model as the base-field values they
+/// are, the reading of a circuit over the base field, which hands them to
+/// the other field later.
+pub trait BaseReading<C>: ModelHandle<C::Base>
+where
+    C: Curve,
+{
+    /// A draw, as read.
+    type Read;
+
+    /// The 128-bit challenge of the squeeze `x`.
+    fn read_challenge(&self, x: &Value<C::Base, Self>) -> Self::Read;
+
+    /// The digest `x`.
+    fn read_digest(&self, x: &Value<C::Base, Self>) -> Self::Read;
+}
+
+impl<C> BaseReading<C> for Native
+where
+    C: Curve,
+    C::Base: PrimeField,
+{
+    type Read = C::Scalar;
+
+    fn read_challenge(&self, x: &C::Base) -> C::Scalar {
+        pack(&[x.limb(0), x.limb(1)])
+    }
+
+    /// A squeezed element read as a scalar, zero when it does not fit.
+    fn read_digest(&self, x: &C::Base) -> C::Scalar {
+        C::Scalar::from_limbs(&limbs(*x)).unwrap_or(C::Scalar::ZERO)
+    }
+}
+
+impl<C, M> BaseReading<C> for &RefCell<M>
+where
+    C: Curve,
+    M: ChallengeModel<C::Base>,
+{
+    type Read = M::Value;
+
+    fn read_challenge(&self, x: &M::Value) -> M::Value {
+        self.borrow_mut().lowest_128_bits(x)
+    }
+
+    fn read_digest(&self, x: &M::Value) -> M::Value {
+        x.clone()
+    }
+}
+
+impl<C, S, H> FqSponge<C, S, H>
+where
+    C: Curve,
+    H: SpongeIn<C::Base, S>,
+{
+    /// A sponge over `sponge`, in the model `model` handles.
+    pub const fn with_model(model: H, sponge: S) -> Self {
+        Self {
+            model,
+            sponge,
+            curve: core::marker::PhantomData,
+        }
+    }
+
+    /// Absorb `value`.
+    pub fn absorb_value(&mut self, value: &Value<C::Base, H>) {
+        self.model.absorb_into(&mut self.sponge, value);
+    }
+
+    /// Squeeze an element.
+    pub fn squeeze_value(&mut self) -> Value<C::Base, H> {
+        self.model.squeeze_from(&mut self.sponge)
+    }
+
+    /// A 128-bit challenge, as the model reads it.
+    pub fn challenge_read(&mut self) -> H::Read
+    where
+        H: BaseReading<C>,
+    {
+        let x = self.squeeze_value();
+        self.model.read_challenge(&x)
+    }
+
+    /// The digest, as the model reads it.
+    #[must_use]
+    pub fn digest_read(mut self) -> H::Read
+    where
+        H: BaseReading<C>,
+    {
+        let x = self.squeeze_value();
+        self.model.read_digest(&x)
+    }
+
+    /// The model's handle.
+    pub fn model(&self) -> &H {
+        &self.model
+    }
 }
 
 impl<C, S> FqSponge<C, S>
@@ -181,47 +286,36 @@ where
     C::Base: PrimeField,
     S: Transcript<C::Base>,
 {
-    /// A sponge over `sponge`, nothing buffered.
+    /// A sponge over `sponge`, in the field itself.
     #[must_use]
     pub const fn new(sponge: S) -> Self {
-        Self {
-            sponge,
-            buffer: Vec::new(),
-            curve: core::marker::PhantomData,
-        }
+        Self::with_model(Native, sponge)
     }
 
     /// Absorb points: `x` then `y`, the identity as `(0, 0)`.
     pub fn absorb_g(&mut self, points: &[Projective<C>]) {
-        self.buffer.clear();
         for p in points {
-            let a = p.to_affine();
-            let (x, y) = match (a.x(), a.y()) {
-                (Some(x), Some(y)) => (x, y),
-                _ => (C::Base::ZERO, C::Base::ZERO),
-            };
-            self.sponge.absorb(x);
-            self.sponge.absorb(y);
+            let (x, y) = coordinates(p);
+            self.absorb_value(&x);
+            self.absorb_value(&y);
         }
     }
 
     /// Absorb base-field elements.
     pub fn absorb_fq(&mut self, values: &[C::Base]) {
-        self.buffer.clear();
         for v in values {
-            self.sponge.absorb(*v);
+            self.absorb_value(v);
         }
     }
 
     /// Absorb scalars: as they are when the scalar modulus is the smaller,
     /// otherwise as their high bits then their low bit.
     pub fn absorb_fr(&mut self, values: &[C::Scalar]) {
-        self.buffer.clear();
         let fits = compare_moduli::<C::Scalar, C::Base>() == Ordering::Less;
         for v in values {
             let l = limbs(*v);
             if fits {
-                self.sponge.absorb(pack(&l));
+                self.absorb_value(&pack(&l));
             } else {
                 let low = if l[0] & 1 == 1 {
                     C::Base::ONE
@@ -232,45 +326,60 @@ where
                 for i in 0..l.len() {
                     high[i] = (l[i] >> 1) | l.get(i + 1).map_or(0, |w| w << 63);
                 }
-                self.sponge.absorb(pack(&high));
-                self.sponge.absorb(low);
+                self.absorb_value(&pack(&high));
+                self.absorb_value(&low);
             }
         }
     }
 
-    /// `n` limbs: from the buffer, refilled with the two low limbs of a
-    /// fresh squeeze when it runs short.
-    fn squeeze_limbs(&mut self, n: usize) -> Vec<u64> {
-        while self.buffer.len() < n {
-            let x = self.sponge.squeeze();
-            self.buffer.extend((0..KEPT_LIMBS).map(|i| x.limb(i)));
-        }
-        self.buffer.drain(..n).collect()
-    }
-
     /// A 128-bit challenge, as a scalar.
     pub fn challenge(&mut self) -> C::Scalar {
-        pack(&self.squeeze_limbs(CHALLENGE_LIMBS))
+        self.challenge_read()
     }
 
     /// A full base-field element.
     pub fn challenge_fq(&mut self) -> C::Base {
-        self.buffer.clear();
-        self.sponge.squeeze()
+        self.squeeze_value()
     }
 
     /// The digest as a scalar: a squeezed element read as a scalar, zero
     /// when it does not fit.
     #[must_use]
-    pub fn digest(mut self) -> C::Scalar {
-        let x = self.challenge_fq();
-        C::Scalar::from_limbs(&limbs(x)).unwrap_or(C::Scalar::ZERO)
+    pub fn digest(self) -> C::Scalar {
+        self.digest_read()
     }
 
     /// The digest in the base field.
     #[must_use]
     pub fn digest_fq(mut self) -> C::Base {
-        self.challenge_fq()
+        self.squeeze_value()
+    }
+}
+
+impl<'m, C, M, P> FqSponge<C, Duplexed<'m, M::Value, P>, &'m RefCell<M>>
+where
+    C: Curve,
+    M: FieldModel<C::Base>,
+    P: PermutationIn<M, C::Base, WIDTH>,
+{
+    /// Kimchi's base sponge in `model`, over `permutation`, fresh.
+    pub fn in_model(model: &'m RefCell<M>, permutation: &'m P) -> Self {
+        let duplex = Duplexed::new(&mut *model.borrow_mut(), permutation);
+        Self::with_model(model, duplex)
+    }
+}
+
+/// The affine coordinates of `p` as the base sponge absorbs them, the
+/// identity as `(0, 0)`.
+#[must_use]
+pub fn coordinates<C>(p: &Projective<C>) -> (C::Base, C::Base)
+where
+    C: Curve,
+{
+    let a = p.to_affine();
+    match (a.x(), a.y()) {
+        (Some(x), Some(y)) => (x, y),
+        _ => (C::Base::ZERO, C::Base::ZERO),
     }
 }
 

@@ -28,8 +28,8 @@ use arrabbiata_kimchi::{
         combine_entry, constraint_count, id_to_field, lookup_value, range_check_table, xor_table,
     },
     oracle::{
-        CHALLENGE_LIMBS, ChallengeModel, Duplexed, FqSponge, FrSponge, ModelHandle,
-        ScalarChallenge, SpongeIn, Value as ModelValue,
+        BaseReading, CHALLENGE_LIMBS, ChallengeModel, Duplexed, FqSponge, FrSponge, ModelHandle,
+        ScalarChallenge, SpongeIn, Value as ModelValue, coordinates,
     },
     permutation::{PERMUTS, shifts},
     prover::{
@@ -43,15 +43,17 @@ use arrabbiata_kimchi::{
     serialization,
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
     transcript::{
-        self, AfterGamma, Base, Beta, Challenge, Digest, DigestOf, FqTape, FrSpongeIn, FrTapeIn,
-        FrTapeOn, Message, Piop, Scalar, VerifierIndexDigest, evaluation_in, evaluation_on,
+        self, AfterGamma, Base, BaseElements, Beta, Challenge, Digest, DigestOf, FqTape, FqTapeIn,
+        FqTapeOn, FrSpongeIn, FrTapeIn, FrTapeOn, Message, Piop, PiopIn, PiopOf, Point, Scalar,
+        VerifierIndexDigest, evaluation_in, evaluation_on, piop_in, piop_on,
         previous_challenges_digest_in, previous_challenges_digest_on,
     },
     verifier::{
-        BaseTranscript, Challenges, Claim, Linearization, Oracles, VerifyError, base_transcript,
-        combined_commitment, combined_inner_product, commitments, evaluation_shape, evaluations,
-        ft_comm, linearization, oracles, scalar_transcript, scalar_transcript_in,
-        scalar_transcript_on, succinct, verify,
+        BaseTranscript, Challenges, Claim, Linearization, LookupInputs, Oracles, PiopChallenges,
+        PiopInputs, VerifyError, base_transcript, base_transcript_in, combined_commitment,
+        combined_inner_product, commitments, evaluation_shape, evaluations, ft_comm, linearization,
+        oracles, piop_transcript_on, scalar_transcript, scalar_transcript_in, scalar_transcript_on,
+        succinct, verify,
     },
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
@@ -2110,4 +2112,235 @@ fn transcript_fr_tape_on() {
     let tape: FrTapeOn<Fp, KimchiSponge<Fp>, Native, transcript::Evaluation<Fp>> =
         transcript::evaluation(KimchiSponge::new(pallas_base()));
     let _: transcript::FrTape<Fp, KimchiSponge<Fp>, transcript::Evaluation<Fp>> = tape;
+}
+
+/// The base transcript's inputs of `proof`, natively.
+fn piop_inputs(
+    index: &ProverIndex<Vesta>,
+    proof: &ProverProof<Vesta>,
+) -> PiopInputs<Fq, Projective<Vesta>, PolyComm<Vesta>> {
+    let base = KimchiSponge::new(vesta_base());
+    let vi = &index.verifier_index;
+    let t = base_transcript(vi, &index.srs, proof, &[], &base).unwrap();
+    PiopInputs {
+        index_digest: vi.digest(base.clone()),
+        previous: proof.prev_challenges.iter().map(|p| p.comm).collect(),
+        public: t.public_comm,
+        witness: proof.w_comm.clone(),
+        lookup: None,
+        z: proof.z_comm.clone(),
+        t: proof.t_comm.clone(),
+    }
+}
+
+/// A commitment as a circuit holds it: its chunks' coordinates.
+fn chunks_of(c: &PolyComm<Vesta>) -> Vec<Point<Fq>> {
+    c.chunks.iter().map(Point::from).collect()
+}
+
+/// A 128-bit value of the base field, as the scalar it is.
+fn as_scalar(x: Fq) -> Fp {
+    Fp::from_limbs(&[x.limb(0), x.limb(1)]).unwrap()
+}
+
+/// The inputs of [`piop_inputs`] as a circuit holds them.
+fn piop_inputs_in(
+    native: &PiopInputs<Fq, Projective<Vesta>, PolyComm<Vesta>>,
+) -> PiopInputs<Fq, Point<Fq>, Vec<Point<Fq>>> {
+    PiopInputs {
+        index_digest: native.index_digest,
+        previous: native.previous.iter().map(Point::from).collect(),
+        public: chunks_of(&native.public),
+        witness: core::array::from_fn(|i| chunks_of(&native.witness[i])),
+        lookup: None,
+        z: chunks_of(&native.z),
+        t: chunks_of(&native.t),
+    }
+}
+
+#[test]
+fn verifier_base_transcript_in() {
+    // The one definition, in a model of the base field over Kimchi's
+    // duplex: the native draws, read in the base field.
+    let (index, proof, _) = proved();
+    let inputs = piop_inputs_in(&piop_inputs(&index, &proof));
+    let poseidon = vesta_base();
+    let model = core::cell::RefCell::new(Native);
+    let (drawn, _) = base_transcript_in::<Vesta, _, _>(&model, &poseidon, &inputs);
+    let base = KimchiSponge::new(vesta_base());
+    let t = base_transcript(&index.verifier_index, &index.srs, &proof, &[], &base).unwrap();
+    assert_eq!(as_scalar(drawn.beta), t.beta);
+    assert_eq!(as_scalar(drawn.gamma), t.gamma);
+    assert_eq!(ScalarChallenge(as_scalar(drawn.alpha)), t.alpha_chal);
+    assert_eq!(ScalarChallenge(as_scalar(drawn.zeta)), t.zeta_chal);
+    assert_eq!(
+        BaseReading::<Vesta>::read_digest(&Native, &drawn.digest),
+        t.digest
+    );
+    assert_eq!(drawn.joint_combiner, None);
+}
+
+#[test]
+fn verifier_piop_transcript_on() {
+    // Natively: the draws `base_transcript` reports, and the sponge after
+    // `zeta` it continues with.
+    let (index, proof, _) = proved();
+    let inputs = piop_inputs(&index, &proof);
+    let (drawn, sponge): (PiopChallenges<Fp>, _) = piop_transcript_on(
+        FqSponge::<Vesta, _>::new(KimchiSponge::new(vesta_base())),
+        &inputs,
+    );
+    let base = KimchiSponge::new(vesta_base());
+    let t = base_transcript(&index.verifier_index, &index.srs, &proof, &[], &base).unwrap();
+    assert_eq!(
+        (drawn.beta, drawn.gamma, drawn.digest),
+        (t.beta, t.gamma, t.digest)
+    );
+    assert_eq!(sponge.digest(), t.fq_sponge.digest());
+}
+
+#[test]
+fn verifier_piop_inputs() {
+    let (index, proof, _) = proved();
+    let inputs = piop_inputs(&index, &proof);
+    assert!(inputs.lookup.is_none());
+    assert_eq!(inputs.witness.len(), COLUMNS);
+}
+
+#[test]
+fn verifier_lookup_inputs() {
+    let g = Projective::<Vesta>::generator();
+    let lookup = LookupInputs {
+        runtime: None,
+        joint: false,
+        sorted: vec![g; 2],
+        aggregation: g,
+    };
+    assert_eq!(lookup.sorted.len(), 2);
+}
+
+#[test]
+fn verifier_piop_challenges() {
+    let c = PiopChallenges {
+        joint_combiner: None,
+        beta: 1u8,
+        gamma: 2,
+        alpha: 3,
+        zeta: 4,
+        digest: 5,
+    };
+    assert_eq!((c.alpha, c.zeta), (3, 4));
+}
+
+#[test]
+fn oracle_base_reading() {
+    // Natively, a challenge is the scalar of the low 128 bits, the digest
+    // the scalar of the element; in a shared model, the base-field values.
+    let x = Fq::from_limbs(&[1, 2, 3, 0]).unwrap();
+    assert_eq!(
+        BaseReading::<Vesta>::read_challenge(&Native, &x),
+        Fp::from_limbs(&[1, 2]).unwrap()
+    );
+    assert_eq!(
+        BaseReading::<Vesta>::read_digest(&Native, &x),
+        Fp::from_limbs(&[1, 2, 3, 0]).unwrap()
+    );
+    let model = core::cell::RefCell::new(Native);
+    assert_eq!(
+        BaseReading::<Vesta>::read_challenge(&&model, &x),
+        Fq::from_limbs(&[1, 2]).unwrap()
+    );
+    assert_eq!(BaseReading::<Vesta>::read_digest(&&model, &x), x);
+}
+
+#[test]
+fn oracle_coordinates() {
+    // A point's affine coordinates, the identity as (0, 0).
+    assert_eq!(
+        coordinates(&Projective::<Vesta>::identity()),
+        (Fq::ZERO, Fq::ZERO)
+    );
+    assert_eq!(
+        coordinates(&Projective::<Vesta>::generator()),
+        <Vesta as arrabbiata_curve::Curve>::generator()
+    );
+}
+
+#[test]
+fn oracle_fq_sponge_with_model() {
+    // One base sponge, two models: the same squeezes, read each way.
+    let poseidon = vesta_base();
+    let model = core::cell::RefCell::new(Native);
+    let mut native = FqSponge::<Vesta, _>::new(KimchiSponge::new(vesta_base()));
+    let mut in_model = FqSponge::<Vesta, _, _>::in_model(&model, &poseidon);
+    native.absorb_value(&Fq::from_u64(3));
+    in_model.absorb_value(&Fq::from_u64(3));
+    assert_eq!(
+        native.challenge_read(),
+        as_scalar(in_model.challenge_read())
+    );
+    assert_eq!(native.squeeze_value(), in_model.squeeze_value());
+    let _: &Native = native.model();
+    let digest = in_model.digest_read();
+    assert_eq!(
+        native.digest_read(),
+        BaseReading::<Vesta>::read_digest(&Native, &digest)
+    );
+}
+
+#[test]
+fn transcript_point() {
+    // A native point as a circuit holds it, the identity as (0, 0).
+    let g = Projective::<Vesta>::generator();
+    let p = Point::from(&g);
+    assert_eq!((p.x, p.y), <Vesta as arrabbiata_curve::Curve>::generator());
+    assert_eq!(
+        Point::from(&Projective::<Vesta>::identity()),
+        Point {
+            x: Fq::ZERO,
+            y: Fq::ZERO
+        }
+    );
+}
+
+#[test]
+fn transcript_base_elements() {
+    // A message is the base elements it absorbs: a point its coordinates,
+    // a list its elements in turn, natively and as a circuit holds it.
+    let g = Projective::<Vesta>::generator();
+    let mut native = vec![];
+    vec![g, g + g].each_element(&mut |v: &Fq| native.push(*v));
+    let mut held = vec![];
+    vec![Point::from(&g), Point::from(&(g + g))].each_element(&mut |v: &Fq| held.push(*v));
+    assert_eq!(native, held);
+    let mut one = vec![];
+    Base(Fq::ONE).each_element(&mut |v: &Fq| one.push(*v));
+    assert_eq!(one, vec![Fq::ONE]);
+}
+
+#[test]
+fn transcript_piop_on() {
+    // The pattern at a carrier: natively it is `piop`'s tape.
+    let tape: FqTapeOn<Vesta, KimchiSponge<Fq>, Native, Piop<Vesta>> =
+        piop_on(FqSponge::new(KimchiSponge::new(vesta_base())));
+    let _: FqTape<Vesta, KimchiSponge<Fq>, Piop<Vesta>> = tape;
+}
+
+#[test]
+fn transcript_piop_in() {
+    // In a model, the pattern at its carrier: a statement absorbs as the
+    // native one does.
+    let poseidon = vesta_base();
+    let model = core::cell::RefCell::new(Native);
+    let tape: FqTapeIn<'_, Vesta, Native, _, PiopIn<Fq>> = piop_in(&model, &poseidon);
+    let native = transcript::piop::<Vesta, _>(KimchiSponge::new(vesta_base()));
+    let a = tape.statement(&Message::new(Base(Fq::ONE)));
+    let b = native.statement(&Message::new(Base(Fq::ONE)));
+    let _: core::marker::PhantomData<PiopOf<Fq, Point<Fq>, Vec<Point<Fq>>>> = unreachable_pattern();
+    let _ = (a, b);
+}
+
+/// A pattern is a type; this names one without a value.
+fn unreachable_pattern<P>() -> core::marker::PhantomData<P> {
+    core::marker::PhantomData
 }

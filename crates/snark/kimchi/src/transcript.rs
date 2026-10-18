@@ -48,7 +48,10 @@ use arrabbiata_transcript::{
 
 use crate::{
     constraints::COLUMNS,
-    oracle::{ChallengeModel, Duplexed, FqSponge, FrSponge, ScalarChallenge, SpongeIn, Value},
+    oracle::{
+        BaseReading, ChallengeModel, Duplexed, FqSponge, FrSponge, ScalarChallenge, SpongeIn,
+        Value, coordinates,
+    },
     prover::ProofEvaluations,
     srs::PolyComm,
 };
@@ -186,79 +189,116 @@ pub struct Base<F>(pub F);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scalar<F>(pub F);
 
-impl<C, S, Name> Write<FqSponge<C, S>> for Message<Base<C::Base>, Name>
+/// A point as a circuit holds it: its affine coordinates, values of a
+/// model. The base sponge absorbs `x` then `y`, as it does a native point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Point<V> {
+    /// The first coordinate.
+    pub x: V,
+    /// The second coordinate.
+    pub y: V,
+}
+
+impl<C> From<&Projective<C>> for Point<C::Base>
 where
-    C: Glv,
-    C::Base: PrimeField,
-    S: Transcript<C::Base>,
+    C: arrabbiata_curve::Curve,
 {
-    fn write(&self, sponge: &mut FqSponge<C, S>) {
-        sponge.absorb_fq(&[self.0.0]);
+    /// The coordinates the base sponge absorbs: the identity as `(0, 0)`.
+    fn from(p: &Projective<C>) -> Self {
+        let (x, y) = coordinates(p);
+        Self { x, y }
     }
 }
 
-impl<C, S, Name> Write<FqSponge<C, S>> for Message<Vec<Projective<C>>, Name>
+/// What a message of the base sponge is: a sequence of base-field
+/// elements, the ones it absorbs, in order. A base element is one; a point
+/// is its coordinates, `x` then `y` (the identity `(0, 0)`); a commitment
+/// is its chunks; a list or an array is its elements in turn. So one writer
+/// serves every message of the base sponge, natively and in a model.
+pub trait BaseElements<V> {
+    /// Call `f` on each element, in order.
+    fn each_element(&self, f: &mut impl FnMut(&V));
+}
+
+impl<V> BaseElements<V> for Base<V> {
+    fn each_element(&self, f: &mut impl FnMut(&V)) {
+        f(&self.0);
+    }
+}
+
+impl<V> BaseElements<V> for Point<V> {
+    fn each_element(&self, f: &mut impl FnMut(&V)) {
+        f(&self.x);
+        f(&self.y);
+    }
+}
+
+impl<C> BaseElements<C::Base> for Projective<C>
 where
-    C: Glv,
-    C::Base: PrimeField,
-    S: Transcript<C::Base>,
+    C: arrabbiata_curve::Curve,
 {
-    fn write(&self, sponge: &mut FqSponge<C, S>) {
-        for p in &self.0 {
-            sponge.absorb_g(&[*p]);
+    fn each_element(&self, f: &mut impl FnMut(&C::Base)) {
+        let (x, y) = coordinates(self);
+        f(&x);
+        f(&y);
+    }
+}
+
+impl<C> BaseElements<C::Base> for PolyComm<C>
+where
+    C: arrabbiata_curve::Curve,
+{
+    fn each_element(&self, f: &mut impl FnMut(&C::Base)) {
+        self.chunks.each_element(f);
+    }
+}
+
+impl<V, T> BaseElements<V> for Vec<T>
+where
+    T: BaseElements<V>,
+{
+    fn each_element(&self, f: &mut impl FnMut(&V)) {
+        for t in self {
+            t.each_element(f);
         }
     }
 }
 
-impl<C, S, Name> Write<FqSponge<C, S>> for Message<PolyComm<C>, Name>
+impl<V, T, const N: usize> BaseElements<V> for [T; N]
 where
-    C: Glv,
-    C::Base: PrimeField,
-    S: Transcript<C::Base>,
+    T: BaseElements<V>,
 {
-    fn write(&self, sponge: &mut FqSponge<C, S>) {
-        sponge.absorb_g(&self.0.chunks);
-    }
-}
-
-impl<C, S, Name> Write<FqSponge<C, S>> for Message<Vec<PolyComm<C>>, Name>
-where
-    C: Glv,
-    C::Base: PrimeField,
-    S: Transcript<C::Base>,
-{
-    fn write(&self, sponge: &mut FqSponge<C, S>) {
-        for c in &self.0 {
-            sponge.absorb_g(&c.chunks);
+    fn each_element(&self, f: &mut impl FnMut(&V)) {
+        for t in self {
+            t.each_element(f);
         }
     }
 }
 
-impl<C, S, Name> Write<FqSponge<C, S>> for Message<[PolyComm<C>; COLUMNS], Name>
+/// Every message of the base sponge: its elements, absorbed in order.
+impl<C, S, H, T, Name> Write<FqSponge<C, S, H>> for Message<T, Name>
 where
-    C: Glv,
-    C::Base: PrimeField,
-    S: Transcript<C::Base>,
+    C: arrabbiata_curve::Curve,
+    H: SpongeIn<C::Base, S>,
+    T: BaseElements<Value<C::Base, H>>,
 {
-    fn write(&self, sponge: &mut FqSponge<C, S>) {
-        for c in &self.0 {
-            sponge.absorb_g(&c.chunks);
-        }
+    fn write(&self, sponge: &mut FqSponge<C, S, H>) {
+        self.0.each_element(&mut |v| sponge.absorb_value(v));
     }
 }
 
-/// A 128-bit challenge of the base-field sponge, as the scalar its limbs
-/// are (the caller maps it through the endomorphism).
-impl<C, S, Name> Draw<FqSponge<C, S>> for Challenge<Name>
+/// A 128-bit challenge of the base-field sponge, as its model reads it
+/// ([`BaseReading`]): natively the scalar its limbs are (the caller maps it
+/// through the endomorphism), in a circuit the base-field value.
+impl<C, S, H, Name> Draw<FqSponge<C, S, H>> for Challenge<Name>
 where
-    C: Glv,
-    C::Base: PrimeField,
-    S: Transcript<C::Base>,
+    C: arrabbiata_curve::Curve,
+    H: SpongeIn<C::Base, S> + BaseReading<C>,
 {
-    type Value = C::Scalar;
+    type Value = H::Read;
 
-    fn draw(sponge: &mut FqSponge<C, S>) -> C::Scalar {
-        sponge.challenge()
+    fn draw(sponge: &mut FqSponge<C, S, H>) -> H::Read {
+        sponge.challenge_read()
     }
 }
 
@@ -273,16 +313,17 @@ where
     const LABEL: u64 = Name::LABEL;
 }
 
-impl<C, S, Name> Draw<FqSponge<C, S>> for DigestOf<Name>
+/// The base-field sponge's digest, from a copy, as its model reads it.
+impl<C, S, H, Name> Draw<FqSponge<C, S, H>> for DigestOf<Name>
 where
-    C: Glv,
-    C::Base: PrimeField,
-    S: Transcript<C::Base> + Clone,
+    C: arrabbiata_curve::Curve,
+    H: SpongeIn<C::Base, S> + BaseReading<C>,
+    S: Clone,
 {
-    type Value = C::Scalar;
+    type Value = H::Read;
 
-    fn draw(sponge: &mut FqSponge<C, S>) -> C::Scalar {
-        sponge.clone().digest()
+    fn draw(sponge: &mut FqSponge<C, S, H>) -> H::Read {
+        sponge.clone().digest_read()
     }
 }
 
@@ -357,21 +398,75 @@ where
 /// A commitment message.
 pub type Commitment<C, Name> = Message<PolyComm<C>, Name>;
 
+// The base-field sponge's patterns, written once over the carrier `G` of a
+// commitment (`PolyComm<C>` natively, its chunks `Vec<Point<V>>` in a
+// model); the native names below are their readings at `PolyComm<C>`.
+
 /// After the sorted columns: `beta`, `gamma`, the aggregation, then
-/// [`Rest`].
-pub type WithLookup<C> =
-    Squeeze<Challenge<Beta>, Squeeze<Challenge<Gamma>, Send<Commitment<C, Aggregation>, Rest<C>>>>;
+/// [`RestOf`].
+pub type WithLookupOf<G> =
+    Squeeze<Challenge<Beta>, Squeeze<Challenge<Gamma>, Send<Message<G, Aggregation>, RestOf<G>>>>;
 
 /// After the witness columns, without lookups: `beta`, `gamma`, then
-/// [`Rest`].
-pub type WithoutLookup<C> = Squeeze<Challenge<Beta>, Squeeze<Challenge<Gamma>, Rest<C>>>;
+/// [`RestOf`].
+pub type WithoutLookupOf<G> = Squeeze<Challenge<Beta>, Squeeze<Challenge<Gamma>, RestOf<G>>>;
 
 /// From `t`: `zeta`, and the digest from a copy.
-pub type AfterAlpha<C> =
-    Send<Commitment<C, Quotient>, Squeeze<Challenge<Zeta>, Peek<DigestOf<Digest>, End>>>;
+pub type AfterAlphaOf<G> =
+    Send<Message<G, Quotient>, Squeeze<Challenge<Zeta>, Peek<DigestOf<Digest>, End>>>;
 
-/// From `z`: `alpha`, then [`AfterAlpha`].
-pub type Rest<C> = Send<Commitment<C, Permutation>, Squeeze<Challenge<Alpha>, AfterAlpha<C>>>;
+/// From `z`: `alpha`, then [`AfterAlphaOf`].
+pub type RestOf<G> = Send<Message<G, Permutation>, Squeeze<Challenge<Alpha>, AfterAlphaOf<G>>>;
+
+/// The sorted columns, then [`WithLookupOf`].
+pub type SortedOf<G> = Send<Message<Vec<G>, SortedColumns>, WithLookupOf<G>>;
+
+/// The joint combiner when a lookup is joint, or none: then [`SortedOf`].
+pub type JointOf<G> = Branch<Squeeze<Challenge<JointCombiner>, SortedOf<G>>, SortedOf<G>>;
+
+/// The lookups: the runtime table's commitment or none, then [`JointOf`].
+pub type LookupsOf<G> = Branch<Send<Message<G, RuntimeTable>, JointOf<G>>, JointOf<G>>;
+
+/// The base-field sponge's part of Kimchi's PIOP, at the carriers `B` of a
+/// base element, `P` of a point and `G` of a commitment.
+pub type PiopOf<B, P, G> = Statement<
+    Message<Base<B>, VerifierIndexDigest>,
+    Statement<
+        Message<Vec<P>, PreviousCommitments>,
+        Statement<
+            Message<G, PublicInput>,
+            Send<Message<[G; COLUMNS], WitnessColumns>, Branch<WithoutLookupOf<G>, LookupsOf<G>>>,
+        >,
+    >,
+>;
+
+/// [`WithLookupOf`] natively.
+pub type WithLookup<C> = WithLookupOf<PolyComm<C>>;
+
+/// [`WithoutLookupOf`] natively.
+pub type WithoutLookup<C> = WithoutLookupOf<PolyComm<C>>;
+
+/// [`AfterAlphaOf`] natively.
+pub type AfterAlpha<C> = AfterAlphaOf<PolyComm<C>>;
+
+/// [`RestOf`] natively.
+pub type Rest<C> = RestOf<PolyComm<C>>;
+
+/// [`SortedOf`] natively.
+pub type Sorted<C> = SortedOf<PolyComm<C>>;
+
+/// [`JointOf`] natively.
+pub type Joint<C> = JointOf<PolyComm<C>>;
+
+/// [`LookupsOf`] natively.
+pub type Lookups<C> = LookupsOf<PolyComm<C>>;
+
+/// [`PiopOf`] natively: base elements, points and commitments of `C`.
+pub type Piop<C> = PiopOf<<C as arrabbiata_curve::Curve>::Base, Projective<C>, PolyComm<C>>;
+
+/// [`PiopOf`] in a model: its values `V`, points their coordinates, a
+/// commitment its chunks.
+pub type PiopIn<V> = PiopOf<V, Point<V>, Vec<Point<V>>>;
 
 /// The base-field sponge's tape after `gamma`: at `z` without lookups, at
 /// the aggregation's commitment with them.
@@ -385,30 +480,6 @@ where
     /// With lookups.
     WithLookup(FqTape<C, S, Send<Commitment<C, Aggregation>, Rest<C>>>),
 }
-
-/// The sorted columns, then [`WithLookup`].
-pub type Sorted<C> = Send<Message<Vec<PolyComm<C>>, SortedColumns>, WithLookup<C>>;
-
-/// The joint combiner when a lookup is joint, or none: then [`Sorted`].
-pub type Joint<C> = Branch<Squeeze<Challenge<JointCombiner>, Sorted<C>>, Sorted<C>>;
-
-/// The lookups: the runtime table's commitment or none, then [`Joint`].
-pub type Lookups<C> = Branch<Send<Commitment<C, RuntimeTable>, Joint<C>>, Joint<C>>;
-
-/// The base-field sponge's part of Kimchi's PIOP.
-pub type Piop<C> = Statement<
-    Message<Base<<C as arrabbiata_curve::Curve>::Base>, VerifierIndexDigest>,
-    Statement<
-        Message<Vec<Projective<C>>, PreviousCommitments>,
-        Statement<
-            Commitment<C, PublicInput>,
-            Send<
-                Message<[PolyComm<C>; COLUMNS], WitnessColumns>,
-                Branch<WithoutLookup<C>, Lookups<C>>,
-            >,
-        >,
-    >,
->;
 
 /// The digest of the previous accumulators' challenges, on its own sponge.
 pub type PreviousChallengesDigest<F> =
@@ -430,8 +501,21 @@ pub type Evaluation<F> = Statement<
     >,
 >;
 
-/// A tape of the base-field sponge at the step `P`.
-pub type FqTape<C, S, P> = Tape<<C as arrabbiata_curve::Curve>::Base, FqSponge<C, S>, P>;
+/// A tape of the base-field sponge at the step `P`, in the field itself.
+pub type FqTape<C, S, P> = FqTapeOn<C, S, Native, P>;
+
+/// A tape of the base-field sponge in the model `H` handles, at the step
+/// `P`.
+pub type FqTapeOn<C, S, H, P> = Tape<<C as arrabbiata_curve::Curve>::Base, FqSponge<C, S, H>, P>;
+
+/// A tape of Kimchi's base-field sponge in `M`, over the permutation `P`,
+/// at the step `Pattern`.
+pub type FqTapeIn<'m, C, M, P, Pattern> = FqTapeOn<
+    C,
+    Duplexed<'m, <M as FieldModel<<C as arrabbiata_curve::Curve>::Base>>::Value, P>,
+    &'m RefCell<M>,
+    Pattern,
+>;
 
 /// A tape of the scalar-field sponge at the step `P`, in the field itself.
 pub type FrTape<F, S, P> = FrTapeOn<F, S, Native, P>;
@@ -448,7 +532,37 @@ where
     C::Base: PrimeField,
     S: Transcript<C::Base>,
 {
-    Tape::undescribed(FqSponge::new(sponge))
+    piop_on(FqSponge::new(sponge))
+}
+
+/// The tape of `sponge` at the start of [`PiopOf`], at the carriers `P` of
+/// a point and `G` of a commitment: the one definition [`piop`] and
+/// [`piop_in`] read.
+#[must_use]
+#[allow(clippy::type_complexity)]
+pub fn piop_on<C, S, H, P, G>(
+    sponge: FqSponge<C, S, H>,
+) -> FqTapeOn<C, S, H, PiopOf<Value<C::Base, H>, P, G>>
+where
+    C: arrabbiata_curve::Curve,
+    H: SpongeIn<C::Base, S>,
+{
+    Tape::undescribed(sponge)
+}
+
+/// The tape of Kimchi's base-field sponge in `model`, over `permutation`,
+/// at the start of [`PiopIn`]: [`piop`] at the model's carrier.
+#[must_use]
+pub fn piop_in<'m, C, M, P>(
+    model: &'m RefCell<M>,
+    permutation: &'m P,
+) -> FqTapeIn<'m, C, M, P, PiopIn<M::Value>>
+where
+    C: arrabbiata_curve::Curve,
+    M: FieldModel<C::Base>,
+    P: PermutationIn<M, C::Base, WIDTH>,
+{
+    piop_on(FqSponge::in_model(model, permutation))
 }
 
 /// The scalar-field sponge's tape at the start of [`Evaluation`].
