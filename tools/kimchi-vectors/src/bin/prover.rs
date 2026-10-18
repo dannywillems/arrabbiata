@@ -361,6 +361,15 @@ fn ffadd_circuit() -> Circuit {
     (gates, witness, vec![Fp::one()]).into()
 }
 
+/// Kimchi's generic test circuit with its 5 public inputs, then a 64-bit
+/// Xor: public inputs and lookups in one circuit.
+fn public_lookup_circuit() -> Circuit {
+    let (mut gates, mut witness, public) = generic::<Fp>();
+    let xor = xor_circuit();
+    append(&mut gates, &mut witness, xor.gates, xor.witness);
+    (gates, witness, public).into()
+}
+
 /// Kimchi's generic test circuit with 5 public inputs.
 fn generic<F: PrimeField>() -> (Vec<CircuitGate<F>>, [Vec<F>; COLUMNS], Vec<F>) {
     let public: Vec<F> = (1..=5u64).map(|k| F::from(1000 + k)).collect();
@@ -621,7 +630,7 @@ where
     }
 }
 
-fn run<G, EFq, EFr>(name: &str, circuit: Circuit<G::ScalarField>, max_poly_size: Option<usize>, recursion: bool)
+fn run<G, EFq, EFr>(name: &str, circuit: Circuit<G::ScalarField>, max_poly_size: Option<usize>, accumulators: usize)
 where
     G: KimchiCurve<55>,
     G::BaseField: PrimeField,
@@ -662,7 +671,7 @@ where
     }
     let cs = ConstraintSystem::<G::ScalarField>::create(gates)
         .public(public.len())
-        .prev_challenges(usize::from(recursion))
+        .prev_challenges(accumulators)
         .lookup(tables)
         .runtime(runtime_cfgs)
         .max_poly_size(max_poly_size)
@@ -675,22 +684,24 @@ where
     let vi = index.verifier_index();
     println!("digest {name} {}", hex(vi.digest::<EFq>()));
 
-    // A previous accumulator as Kimchi's test_recursion makes one: random
-    // challenges (from SplitMix64(123)) and the commitment to their b.
-    let prev_challenges = if recursion {
-        let mut chal_rng = SplitMix64(123);
-        let k = index.srs.g.len().trailing_zeros() as usize;
-        let chals: Vec<G::ScalarField> = (0..k).map(|_| G::ScalarField::rand(&mut chal_rng)).collect();
-        let b = DensePolynomial::from_coefficients_vec(b_poly_coefficients(&chals));
-        let b_comm = index.srs.commit_non_hiding(&b, 1);
-        for (i, c) in chals.iter().enumerate() {
-            println!("prev {name} chal{i} {}", hex(*c));
-        }
-        println!("prev {name} comm {}", comm(&b_comm));
-        vec![RecursionChallenge::new(chals, b_comm)]
-    } else {
-        vec![]
-    };
+    // Previous accumulators as Kimchi's test_recursion makes one: random
+    // challenges (accumulator j from SplitMix64(123 + j)) and the
+    // commitment to their b.
+    let prev_challenges: Vec<RecursionChallenge<G>> = (0..accumulators)
+        .map(|j| {
+            let mut chal_rng = SplitMix64(123 + j as u64);
+            let k = index.srs.g.len().trailing_zeros() as usize;
+            let chals: Vec<G::ScalarField> = (0..k).map(|_| G::ScalarField::rand(&mut chal_rng)).collect();
+            let b = DensePolynomial::from_coefficients_vec(b_poly_coefficients(&chals));
+            let b_comm = index.srs.commit_non_hiding(&b, 1);
+            let suffix = if j == 0 { String::new() } else { format!("_{j}") };
+            for (i, c) in chals.iter().enumerate() {
+                println!("prev {name} chal{i}{suffix} {}", hex(*c));
+            }
+            println!("prev {name} comm{suffix} {}", comm(&b_comm));
+            RecursionChallenge::new(chals, b_comm)
+        })
+        .collect();
     let group_map = <G as CommitmentCurve>::Map::setup();
     let mut rng = SplitMix64(7);
     let proof = ProverProof::<G, OpeningProof<G, 55>, 55>::create_recursive::<EFq, EFr, _>(&group_map, witness, &runtime, &index, prev_challenges.clone(), None, &mut rng)
@@ -757,16 +768,22 @@ where
     println!("opening {name} z2 {}", hex(o.z2));
     println!("opening {name} sg {}", point(&o.sg));
 
-    // The public commitment, as the verifier computes it.
-    let lgr = vi.srs().get_lagrange_basis(vi.domain);
-    let bases: Vec<_> = lgr.iter().take(vi.public).collect();
-    let negated: Vec<G::ScalarField> = public.iter().map(|s| -*s).collect();
-    let public_comm = PolyComm::<G>::multi_scalar_mul(&bases, &negated);
-    let public_comm = vi
-        .srs()
-        .mask_custom(public_comm.clone(), &public_comm.map(|_| G::ScalarField::one()))
-        .unwrap()
-        .commitment;
+    // The public commitment, as Kimchi's verifier computes it (with no
+    // public input, `h` in each chunk).
+    let d1_size = vi.domain.size as usize;
+    let chunk_size = if d1_size < vi.max_poly_size { 1 } else { d1_size / vi.max_poly_size };
+    let public_comm = if public.is_empty() {
+        PolyComm::new(vec![vi.srs().blinding_commitment(); chunk_size])
+    } else {
+        let lgr = vi.srs().get_lagrange_basis(vi.domain);
+        let bases: Vec<_> = lgr.iter().take(vi.public).collect();
+        let negated: Vec<G::ScalarField> = public.iter().map(|s| -*s).collect();
+        let public_comm = PolyComm::<G>::multi_scalar_mul(&bases, &negated);
+        vi.srs()
+            .mask_custom(public_comm.clone(), &public_comm.map(|_| G::ScalarField::one()))
+            .unwrap()
+            .commitment
+    };
     println!("comm {name} public {}", comm(&public_comm));
 
     // With a dump of arrabbiata's proofs as argument, Kimchi verifies ours.
@@ -820,19 +837,25 @@ fn main() {
     type V = Vesta;
     type B = BaseSponge;
     type S = ScalarSponge;
-    run::<V, B, S>("generic", generic().into(), None, false);
-    run::<V, B, S>("chunked", generic().into(), Some(16), false);
-    run::<V, B, S>("wide", generic().into(), Some(64), false);
-    run::<V, B, S>("gadgets", gadgets().into(), None, false);
-    run::<V, B, S>("recursion", generic().into(), None, true);
-    run::<V, B, S>("xor", xor_circuit(), None, false);
-    run::<V, B, S>("range_check", range_check_circuit(), None, false);
-    run::<V, B, S>("lookup", lookup_circuit(), None, false);
-    run::<V, B, S>("runtime", runtime_circuit(), None, false);
-    run::<V, B, S>("rot", rot_circuit(), None, false);
-    run::<V, B, S>("ffmul", ffmul_circuit(), None, false);
-    run::<V, B, S>("ffadd", ffadd_circuit(), None, false);
+    run::<V, B, S>("generic", generic().into(), None, 0);
+    run::<V, B, S>("chunked", generic().into(), Some(16), 0);
+    run::<V, B, S>("wide", generic().into(), Some(64), 0);
+    run::<V, B, S>("gadgets", gadgets().into(), None, 0);
+    run::<V, B, S>("recursion", generic().into(), None, 1);
+    run::<V, B, S>("xor", xor_circuit(), None, 0);
+    run::<V, B, S>("range_check", range_check_circuit(), None, 0);
+    run::<V, B, S>("lookup", lookup_circuit(), None, 0);
+    run::<V, B, S>("runtime", runtime_circuit(), None, 0);
+    run::<V, B, S>("rot", rot_circuit(), None, 0);
+    run::<V, B, S>("ffmul", ffmul_circuit(), None, 0);
+    run::<V, B, S>("ffadd", ffadd_circuit(), None, 0);
+    // Features together: lookups in chunks, two previous accumulators,
+    // public inputs with lookups.
+    run::<V, B, S>("lookup_chunked", lookup_circuit(), Some(8), 0);
+    run::<V, B, S>("xor_chunked", xor_circuit(), Some(16), 0);
+    run::<V, B, S>("recursion2", generic().into(), None, 2);
+    run::<V, B, S>("public_lookup", public_lookup_circuit(), None, 0);
     // Over Pallas: Kimchi's generic test circuit, unchunked and in chunks.
-    run::<Pallas, PallasBaseSponge, PallasScalarSponge>("pallas", generic().into(), None, false);
-    run::<Pallas, PallasBaseSponge, PallasScalarSponge>("pallas_chunked", generic().into(), Some(16), false);
+    run::<Pallas, PallasBaseSponge, PallasScalarSponge>("pallas", generic().into(), None, 0);
+    run::<Pallas, PallasBaseSponge, PallasScalarSponge>("pallas_chunked", generic().into(), Some(16), 0);
 }

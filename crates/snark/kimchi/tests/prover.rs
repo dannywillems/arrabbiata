@@ -46,8 +46,11 @@ static VECTORS: LazyLock<String> = LazyLock::new(|| kimchi_runs::read("kimchi_pr
 /// tables, over two runtime tables, a 64-bit word rotated left and right
 /// (Rot64), and a foreign-field multiplication modulo secp256k1's base
 /// field with all its external checks (ForeignFieldMul), and a chain of
-/// two foreign-field operations with every range check (ForeignFieldAdd).
-const CIRCUITS: [(&str, Option<usize>, usize); 12] = [
+/// two foreign-field operations with every range check (ForeignFieldAdd);
+/// then features together: lookups in chunks (Lookup gates, the Xor), two
+/// previous accumulators, and the generic circuit's public inputs followed
+/// by a Xor.
+const CIRCUITS: [(&str, Option<usize>, usize); 16] = [
     ("generic", None, 5),
     ("chunked", Some(16), 5),
     ("wide", Some(64), 5),
@@ -60,6 +63,10 @@ const CIRCUITS: [(&str, Option<usize>, usize); 12] = [
     ("rot", None, 0),
     ("ffmul", None, 0),
     ("ffadd", None, 1),
+    ("lookup_chunked", Some(8), 0),
+    ("xor_chunked", Some(16), 0),
+    ("recursion2", None, 5),
+    ("public_lookup", None, 5),
 ];
 
 /// The tool's circuits over Pallas: Kimchi's generic test circuit,
@@ -187,18 +194,31 @@ fn field<F: PrimeField>(hex: &str) -> F {
 /// The previous accumulators of the tool's circuit `name`.
 fn prev_challenges<C: Kimchi>(name: &str) -> Vec<RecursionChallenge<C>> {
     let prev = lines("prev", name);
-    if prev.is_empty() {
-        return vec![];
-    }
-    let chals = (0..prev.len() - 1)
-        .map(|i| field(&prev[&format!("chal{i}")]))
-        .collect();
-    let words: Vec<&str> = prev["comm"].split_whitespace().collect();
-    assert_eq!(words[0], "1");
-    let comm = Affine::<C>::new(field(words[1]), field(words[2]))
-        .unwrap()
-        .to_projective();
-    vec![RecursionChallenge { chals, comm }]
+    // Accumulator 0 is labelled `chal<i>`, `comm`; accumulator j > 0 with
+    // the suffix `_<j>`.
+    (0..)
+        .map(|j: usize| {
+            if j == 0 {
+                String::new()
+            } else {
+                format!("_{j}")
+            }
+        })
+        .map_while(|suffix| {
+            let words: Vec<&str> = prev
+                .get(&format!("comm{suffix}"))?
+                .split_whitespace()
+                .collect();
+            assert_eq!(words[0], "1");
+            let chals = (0..)
+                .map_while(|i| prev.get(&format!("chal{i}{suffix}")).map(|h| field(h)))
+                .collect();
+            let comm = Affine::<C>::new(field(words[1]), field(words[2]))
+                .unwrap()
+                .to_projective();
+            Some(RecursionChallenge { chals, comm })
+        })
+        .collect()
 }
 
 fn point<C: Kimchi>(p: &Projective<C>) -> String {
