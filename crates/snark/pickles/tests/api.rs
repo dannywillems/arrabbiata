@@ -10,8 +10,9 @@ use arrabbiata_kimchi::{
     srs::Srs,
 };
 use arrabbiata_kimchi_gadgets::LAYOUT;
-use arrabbiata_pasta::{Fp, Vesta};
+use arrabbiata_pasta::{Fp, Fq, Vesta};
 use arrabbiata_pickles::{
+    group::{self, GroupModel},
     model::{Affine, Basic, Circuit, Constant, Inverse, LOAD, Load, load},
     scalar::{
         Constants, Inputs, OUTPUTS, Outputs, ScalarError, b_poly, combine, combined_inner_product,
@@ -372,4 +373,64 @@ fn transcript_circuit_challenges() {
         ChallengeModel::<Fp>::endo(&mut Native, &low, Vesta::lambda()),
         scalar
     );
+}
+
+#[test]
+fn group_group_model() {
+    // Natively: points of the curve, scalars of its field; the endomorphism
+    // scaling of a 128-bit challenge and its inverse undo each other.
+    let g = arrabbiata_curve::Projective::<Vesta>::generator();
+    let m = &mut Native;
+    let two = GroupModel::<Vesta>::scale_point(m, &g, &Fp::from_u64(2));
+    assert_eq!(GroupModel::<Vesta>::add_points(m, &g, &g), two);
+    assert_eq!(GroupModel::<Vesta>::sub_points(m, &two, &g), g);
+    let chal = Fq::from_u64(0x1234_5678);
+    let there = GroupModel::<Vesta>::endo_scale(m, &g, &chal);
+    assert_eq!(GroupModel::<Vesta>::endo_inv_scale(m, &there, &chal), g);
+    let c = GroupModel::<Vesta>::coordinates_of(m, &g);
+    assert_eq!(GroupModel::<Vesta>::point_of(m, &c.x, &c.y), g);
+    assert_eq!(GroupModel::<Vesta>::constant_point(m, &g), g);
+    assert_eq!(GroupModel::<Vesta>::neg_point(m, &g), -g);
+    assert!(!GroupModel::<Vesta>::shifted_elements(m, &Fp::ONE).is_empty());
+}
+
+#[test]
+fn group_constants() {
+    // Of an index without lookups: its digest, no Lagrange commitment
+    // without public input, one chunk.
+    let index = index();
+    let base =
+        arrabbiata_poseidon::kimchi::KimchiSponge::new(arrabbiata_poseidon::kimchi::vesta_base());
+    let c = group::Constants::new(&index.verifier_index, &index.srs, &base).unwrap();
+    assert_eq!(c.index_digest, index.verifier_index.digest(base.clone()));
+    assert_eq!((c.lagrange.len(), c.chunks), (0, 1));
+    assert_eq!(c.before_witness.len(), 6);
+}
+
+#[test]
+fn group_proof_in_deferred_in_outputs() {
+    // The shapes the group half reads and returns; their behaviour is
+    // tests/group.rs's.
+    let g = arrabbiata_curve::Projective::<Vesta>::generator();
+    let proof = group::ProofIn {
+        previous: vec![],
+        witness: core::array::from_fn(|_| vec![g]),
+        z: vec![g],
+        t: vec![g],
+        rounds: vec![(g, g)],
+        delta: g,
+        z1: Fp::ONE,
+        z2: Fp::ONE,
+        sg: g,
+    };
+    let deferred = group::DeferredIn {
+        public: vec![],
+        perm: Fp::ONE,
+        zeta_to_srs_length: Fp::ONE,
+        zeta_to_domain_size: Fp::ONE,
+        xi: Fq::ONE,
+        combined_inner_product: Fp::ONE,
+        b: Fp::ONE,
+    };
+    assert_eq!((proof.rounds.len(), deferred.public.len()), (1, 0));
 }

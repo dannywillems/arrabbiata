@@ -12,6 +12,7 @@ authors.workspace = true
 arrabbiata-curve = { workspace = true }
 arrabbiata-field = { workspace = true }
 arrabbiata-gadget = { workspace = true }
+arrabbiata-ipa = { workspace = true }
 arrabbiata-kimchi = { workspace = true }
 arrabbiata-kimchi-gadgets = { workspace = true }
 arrabbiata-poly = { workspace = true }
@@ -19,7 +20,6 @@ arrabbiata-poseidon = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 
 [dev-dependencies]
-arrabbiata-ipa = { workspace = true }
 arrabbiata-pasta = { workspace = true }
 
 [lints]
