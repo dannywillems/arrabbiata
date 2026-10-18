@@ -29,7 +29,7 @@
 use alloc::vec::Vec;
 
 use arrabbiata_curve::{Affine, Curve, Projective, msm};
-use arrabbiata_field::{Field, PrimeField, Sqrt};
+use arrabbiata_field::{Field, FieldModel, Native, PrimeField, Sqrt};
 use arrabbiata_poly::{Chunking, UniPoly};
 use blake2::{Blake2b512, Digest};
 
@@ -95,14 +95,7 @@ where
     /// The three candidate abscissas of `t`.
     #[must_use]
     pub fn potential_xs(&self, t: C::Base) -> [C::Base; 3] {
-        let t2 = t.square();
-        let alpha = ((t2 + self.fu) * t2).inverse().unwrap_or(C::Base::ZERO);
-        let x1 = self.sqrt_neg_three_u_squared_minus_u_over_2
-            - t2.square() * alpha * self.sqrt_neg_three_u_squared;
-        let x2 = -self.u - x1;
-        let t2_plus_fu = t2 + self.fu;
-        let x3 = self.u - t2_plus_fu.square() * (alpha * t2_plus_fu) * self.inv_three_u_squared;
-        [x1, x2, x3]
+        self.potential_xs_in(&mut Native, &t)
     }
 
     /// The point of `t`: the first candidate on the curve.
@@ -112,14 +105,91 @@ where
     /// Never for a valid map: one of the three `f(x_i)` is always a square.
     #[must_use]
     pub fn to_group(&self, t: C::Base) -> Affine<C> {
-        for x in self.potential_xs(t) {
-            if let Some(y) = curve_eqn::<C>(x).sqrt()
-                && let Some(p) = Affine::new(x, y)
-            {
-                return p;
+        let (x, y) = self.to_group_in(&mut Native, &t);
+        match Affine::new(x, y) {
+            Some(p) => p,
+            None => panic!("no candidate abscissa is on the curve"),
+        }
+    }
+
+    /// The three candidate abscissas of `t` in a model of the base field:
+    /// the arithmetic of the map, written once. The inverse of zero is zero,
+    /// as the model's is.
+    pub fn potential_xs_in<M>(&self, m: &mut M, t: &M::Value) -> [M::Value; 3]
+    where
+        M: FieldModel<C::Base>,
+    {
+        let t2 = m.square(t);
+        let fu = m.constant(self.fu);
+        let t2_plus_fu = m.add(&t2, &fu);
+        let denominator = m.mul(&t2_plus_fu, &t2);
+        let alpha = m.inverse(&denominator);
+        let t4 = m.square(&t2);
+        let t4_alpha = m.mul(&t4, &alpha);
+        let scaled = m.scale(&t4_alpha, self.sqrt_neg_three_u_squared);
+        let first = m.constant(self.sqrt_neg_three_u_squared_minus_u_over_2);
+        let x1 = m.sub(&first, &scaled);
+        let minus_u = m.constant(-self.u);
+        let x2 = m.sub(&minus_u, &x1);
+        let square = m.square(&t2_plus_fu);
+        let alpha_t2_plus_fu = m.mul(&alpha, &t2_plus_fu);
+        let product = m.mul(&square, &alpha_t2_plus_fu);
+        let scaled = m.scale(&product, self.inv_three_u_squared);
+        let u = m.constant(self.u);
+        let x3 = m.sub(&u, &scaled);
+        [x1, x2, x3]
+    }
+
+    /// The point of `t` in a model of the base field: the candidates of
+    /// [`GroupMap::potential_xs_in`], then the model's choice of the first on
+    /// the curve ([`GroupMapModel::first_on_curve`]).
+    pub fn to_group_in<M>(&self, m: &mut M, t: &M::Value) -> (M::Value, M::Value)
+    where
+        M: GroupMapModel<C::Base>,
+    {
+        let xs = self.potential_xs_in(m, t);
+        m.first_on_curve(&xs, C::b())
+    }
+}
+
+/// The choice the group map makes after its arithmetic: of three candidate
+/// abscissas, the first `x` with `x^3 + b` a square, and its ordinate. In
+/// the field itself, a square root; in a circuit, a witnessed choice that
+/// the circuit constrains (Pickles' `group_map`).
+pub trait GroupMapModel<F>: FieldModel<F>
+where
+    F: Field,
+{
+    /// The first of `xs` on the curve `y^2 = x^3 + b`, with its ordinate.
+    fn first_on_curve(&mut self, xs: &[Self::Value; 3], b: F) -> (Self::Value, Self::Value);
+}
+
+impl<F> GroupMapModel<F> for Native
+where
+    F: Field + Sqrt,
+{
+    /// The ordinate is the field's square root, as Kimchi's.
+    ///
+    /// # Panics
+    ///
+    /// Never for a valid map: one of the three `f(x_i)` is always a square.
+    fn first_on_curve(&mut self, xs: &[F; 3], b: F) -> (F, F) {
+        for x in xs {
+            if let Some(y) = (x.square() * *x + b).sqrt() {
+                return (*x, y);
             }
         }
         panic!("no candidate abscissa is on the curve")
+    }
+}
+
+impl<F, M> GroupMapModel<F> for &mut M
+where
+    F: Field,
+    M: GroupMapModel<F>,
+{
+    fn first_on_curve(&mut self, xs: &[Self::Value; 3], b: F) -> (Self::Value, Self::Value) {
+        (**self).first_on_curve(xs, b)
     }
 }
 

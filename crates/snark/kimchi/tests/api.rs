@@ -41,7 +41,7 @@ use arrabbiata_kimchi::{
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
     serialization,
-    srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
+    srs::{GroupMap, GroupMapModel, PolyComm, Srs, packed, point_of_random_bytes},
     transcript::{
         self, AfterGamma, Base, BaseElements, Beta, Challenge, Digest, DigestOf, FqTape, FqTapeIn,
         FqTapeOn, FrSpongeIn, FrTapeIn, FrTapeOn, Message, Piop, PiopIn, PiopOf, Point, Scalar,
@@ -2343,4 +2343,40 @@ fn transcript_piop_in() {
 /// A pattern is a type; this names one without a value.
 fn unreachable_pattern<P>() -> core::marker::PhantomData<P> {
     core::marker::PhantomData
+}
+
+#[test]
+fn srs_group_map_potential_xs_in() {
+    // In the field itself, the candidates of the native map.
+    let map = GroupMap::<Vesta>::setup();
+    let t = Fq::from_u64(12345);
+    assert_eq!(map.potential_xs_in(&mut Native, &t), map.potential_xs(t));
+}
+
+#[test]
+fn srs_group_map_to_group_in() {
+    // In the field itself, the native point; through a borrowed model, the
+    // same.
+    let map = GroupMap::<Vesta>::setup();
+    let t = Fq::from_u64(777);
+    let p = map.to_group(t);
+    assert_eq!(
+        map.to_group_in(&mut Native, &t),
+        (p.x().unwrap(), p.y().unwrap())
+    );
+    let mut native = Native;
+    assert_eq!(
+        map.to_group_in(&mut &mut native, &t),
+        (p.x().unwrap(), p.y().unwrap())
+    );
+}
+
+#[test]
+fn srs_group_map_model() {
+    // The first candidate on the curve, with the field's square root: the
+    // generator's abscissa gives an ordinate of the generator's square.
+    let b = <Vesta as arrabbiata_curve::Curve>::b();
+    let (gx, gy) = <Vesta as arrabbiata_curve::Curve>::generator();
+    let (x, y) = GroupMapModel::<Fq>::first_on_curve(&mut Native, &[gx, gx, gx], b);
+    assert_eq!((x, y.square()), (gx, gy.square()));
 }
