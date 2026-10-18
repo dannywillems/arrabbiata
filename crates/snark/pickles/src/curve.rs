@@ -49,8 +49,9 @@ use arrabbiata_kimchi_gadgets::{
 use arrabbiata_poseidon::kimchi::KimchiPoseidon;
 
 use crate::{
-    group::{Constants, DeferredIn, GroupModel, ProofIn, group_half_in},
+    group::{Constants, DeferredIn, GroupModel, ProofIn, PublicWord, group_half_in},
     model::{Affine, Circuit, load},
+    statement::Word,
 };
 
 /// The bits of a 128-bit challenge.
@@ -261,6 +262,37 @@ where
     fn shifted_elements(&mut self, s: &Self::Scalar) -> Vec<Self::Value> {
         s.elements()
     }
+
+    /// The word split as `w = 2 high + low` (asserted), `high` bounded below
+    /// `2^(n - 1)` for a word of bound `n`, so that `2 high + low` is the
+    /// integer of `w` and not `w` plus the modulus; then Type2's action,
+    /// `[2 high + low + 2^255] p`. Without a bound the split holds only modulo
+    /// the field, which the word's sort must tolerate (descent).
+    fn act_shifted(&mut self, p: &Projective<C>, w: &PublicWord<Self::Value>) -> [E::Var; 2] {
+        let high = self.witness([&w.value], |[v]| Word::of(v).halve().0.reduce());
+        let low = self.witness([&w.value], |[v]| {
+            if Word::of(v).halve().1 {
+                C::Base::ONE
+            } else {
+                C::Base::ZERO
+            }
+        });
+        let two = C::Base::ONE + C::Base::ONE;
+        let twice = self.scale(&high, two);
+        let sum = self.add(&twice, &low);
+        self.assert_equal(&sum, &w.value);
+        match w.bound {
+            Some(1) => self.assert_equal(&high, &Affine::constant(C::Base::ZERO)),
+            Some(n) => self.assert_below(&high, n - 1),
+            None => {}
+        }
+        let base = GroupModel::<C>::constant_point(self, p);
+        let scalar = Shifted {
+            high,
+            low: Some(low),
+        };
+        GroupModel::<C>::scale_point(self, &base, &scalar)
+    }
 }
 
 /// A scalar of the other field as a circuit holds it, in the cells Kimchi
@@ -359,7 +391,7 @@ impl Shape {
     /// coordinates, scalars as their shifted value.
     #[must_use]
     pub const fn inputs(&self) -> usize {
-        2 * self.points() + self.width * (2 + self.public + 5) + 1
+        2 * self.points() + self.width * (2 + 5) + self.public + 1
     }
 
     /// The size of the output: the five draws, the prechallenges and `sg`.
@@ -398,7 +430,7 @@ where
     let mut out: Vec<V> = points.into_iter().flat_map(&point).collect();
     out.extend(scalar(&proof.z1));
     out.extend(scalar(&proof.z2));
-    out.extend(deferred.public.iter().flat_map(&scalar));
+    out.extend(deferred.public.iter().map(|w| w.value.clone()));
     out.extend(scalar(&deferred.perm));
     out.extend(scalar(&deferred.zeta_to_srs_length));
     out.extend(scalar(&deferred.zeta_to_domain_size));
@@ -469,7 +501,12 @@ fn unflatten<V: Clone>(
         sg,
     };
     let deferred = DeferredIn {
-        public: (0..shape.public).map(|_| r.scalar(w)).collect(),
+        public: (0..shape.public)
+            .map(|_| PublicWord {
+                value: r.value(),
+                bound: None,
+            })
+            .collect(),
         perm: r.scalar(w),
         zeta_to_srs_length: r.scalar(w),
         zeta_to_domain_size: r.scalar(w),
@@ -493,6 +530,7 @@ where
     constants: Constants<C>,
     poseidon: &'a KimchiPoseidon<C::Base>,
     shape: Shape,
+    bounds: Vec<Option<u32>>,
 }
 
 /// The input or output size does not match the shape.
@@ -509,17 +547,20 @@ where
     C: Glv,
 {
     /// The circuit for `constants` and proofs of `shape`, with Kimchi's
-    /// `poseidon` for the base sponge.
+    /// `poseidon` for the base sponge, the public input's words of the
+    /// bounds `bounds` (see [`PublicWord`]).
     ///
     /// # Errors
     ///
-    /// [`SizeError`] when `N` or `M` is not the shape's.
+    /// [`SizeError`] when `N` or `M` is not the shape's, or the bounds are
+    /// not one per public word.
     pub fn new(
         constants: Constants<C>,
         poseidon: &'a KimchiPoseidon<C::Base>,
         shape: Shape,
+        bounds: Vec<Option<u32>>,
     ) -> Result<Self, SizeError> {
-        if shape.inputs() != N || shape.outputs() != M {
+        if shape.inputs() != N || shape.outputs() != M || bounds.len() != shape.public {
             return Err(SizeError {
                 inputs: shape.inputs(),
                 outputs: shape.outputs(),
@@ -529,6 +570,7 @@ where
             constants,
             poseidon,
             shape,
+            bounds,
         })
     }
 }
@@ -570,7 +612,15 @@ where
             sg: cell_proof.sg,
         };
         let deferred = DeferredIn {
-            public: cell_deferred.public.iter().map(scalar).collect(),
+            public: cell_deferred
+                .public
+                .iter()
+                .zip(&self.bounds)
+                .map(|(w, bound)| PublicWord {
+                    value: value(&w.value),
+                    bound: *bound,
+                })
+                .collect(),
             perm: scalar(&cell_deferred.perm),
             zeta_to_srs_length: scalar(&cell_deferred.zeta_to_srs_length),
             zeta_to_domain_size: scalar(&cell_deferred.zeta_to_domain_size),

@@ -48,9 +48,10 @@ use arrabbiata_poseidon::kimchi::{KimchiPoseidon, KimchiSponge, pallas_base, ves
 
 use crate::{
     curve::Shifted,
-    group::{Constants, DeferredIn, ProofIn, group_half_in},
+    group::{Constants, DeferredIn, ProofIn, PublicWord, group_half_in},
     model::{Affine, Circuit, load},
     scalar::{self, Inputs, scalar_half},
+    statement::{WINDOW_BITS, Word},
 };
 
 /// The column variables and the degree of the compiled wrap circuit.
@@ -64,7 +65,8 @@ pub const DEGREE: usize = 7;
 /// digest values of `Fq` as they are.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Statement<V> {
-    /// The step proof's public input, shifted.
+    /// The step proof's public input, its words (each below `2^254`, a
+    /// value of both fields; the statement of Mina's shape replaces it).
     pub step_public: Vec<V>,
     /// The 128-bit challenge `alpha` comes from.
     pub alpha: V,
@@ -310,7 +312,14 @@ fn group_inputs(
         sg: opening.sg,
     };
     let deferred = DeferredIn {
-        public: step.public.to_vec(),
+        public: step
+            .public
+            .iter()
+            .map(|p| PublicWord {
+                value: Word::of(*p).reduce::<Fq>(),
+                bound: Some(WINDOW_BITS),
+            })
+            .collect(),
         perm: values.plonk.perm,
         zeta_to_srs_length: values.plonk.zeta_to_srs_length,
         zeta_to_domain_size: values.plonk.zeta_to_domain_size,
@@ -343,7 +352,7 @@ pub fn statement(step: &Step<'_>) -> Result<(Statement<Fq>, Vec<Fq>, Shape), Err
     }
     let (sx, sy) = coordinates(&out.sg);
     let statement = Statement {
-        step_public: deferred.public.iter().map(|p| shifted(*p)).collect(),
+        step_public: deferred.public.iter().map(|w| w.value).collect(),
         alpha: out.drawn.alpha,
         beta: out.drawn.beta,
         gamma: out.drawn.gamma,
@@ -488,7 +497,14 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
             sg: st.sg.clone(),
         };
         let deferred = DeferredIn {
-            public: st.step_public.iter().map(type1).collect(),
+            public: st
+                .step_public
+                .iter()
+                .map(|v| PublicWord {
+                    value: value(v),
+                    bound: Some(WINDOW_BITS),
+                })
+                .collect(),
             perm: type1(&st.perm),
             zeta_to_srs_length: type1(&st.zeta_to_srs_length),
             zeta_to_domain_size: type1(&st.zeta_to_domain_size),

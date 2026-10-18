@@ -135,6 +135,48 @@ where
     }
 }
 
+impl<F, E> Circuit<'_, F, E>
+where
+    F: PrimeField,
+    E: Env<F>,
+{
+    /// Constrain `x` below `2^bits`, `1 <= bits <= 254`: its canonical
+    /// integer, not merely a residue. A word below `2^128` is checked by the
+    /// EndoMulScalar rows (which pin their running sum to the crumbs), a
+    /// shorter one also scaled up to 128 bits (`2^(128 - bits) x` below
+    /// `2^128`, which cannot wrap since `x` is below `2^128`), a boolean by
+    /// `x^2 = x`; a longer one is split as `lo + 2^128 hi` and each half
+    /// checked, so `lo + 2^128 hi` is below `2^254`, under the modulus, and is
+    /// the integer of `x`.
+    ///
+    /// # Panics
+    ///
+    /// If `bits` is 0 or above 254.
+    pub fn assert_below(&mut self, x: &Affine<E::Var, F>, bits: u32) {
+        assert!((1..=254).contains(&bits), "a bound of 1 to 254 bits");
+        if bits == 1 {
+            let squared = self.mul(x, x);
+            self.assert_equal(&squared, x);
+            return;
+        }
+        if bits > 128 {
+            let cell = self.cell(x);
+            let [lo, hi] = self.env().call(&Split128, cell);
+            let _ = self.endo_rows(&lo);
+            self.assert_below(&Affine::of(hi), bits - 128);
+            return;
+        }
+        let cell = self.cell(x);
+        let _ = self.endo_rows(&cell);
+        if bits < 128 {
+            let two = F::ONE + F::ONE;
+            let scaled = self.scale(x, two.pow(u64::from(128 - bits)));
+            let scaled = self.cell(&scaled);
+            let _ = self.endo_rows(&scaled);
+        }
+    }
+}
+
 impl<F, E> ChallengeModel<F> for Circuit<'_, F, E>
 where
     F: PrimeField,

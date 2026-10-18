@@ -31,6 +31,8 @@ use arrabbiata_kimchi::{
     verifier_index::VerifierIndex,
 };
 use arrabbiata_poly::Domain;
+
+use crate::statement::Word;
 use arrabbiata_poseidon::kimchi::{KimchiPoseidon, WIDTH};
 use arrabbiata_transcript::PermutationIn;
 
@@ -80,6 +82,12 @@ where
     /// `[x^(-1)] p`, for `x` as in [`GroupModel::endo_scale`]: a circuit
     /// witnesses the result and checks its endo-scaling is `p`.
     fn endo_inv_scale(&mut self, p: &Self::Point, chal: &Self::Value) -> Self::Point;
+
+    /// `[w + 2^255] p` for the constant point `p` and the public word `w`:
+    /// the word lifted to an integer (canonically when it is bounded) and
+    /// acting on `p`. The shift keeps the result off the identity, which a
+    /// circuit cannot hold; `x_hat` takes `[2^255] p` back as a constant.
+    fn act_shifted(&mut self, p: &Projective<C>, w: &PublicWord<Self::Value>) -> Self::Point;
 
     /// The base-field elements the base sponge absorbs for the IPA's bound
     /// value `s`: those of its shifted form (Kimchi's `ShiftedValue`
@@ -169,6 +177,11 @@ where
 
     fn shifted_elements(&mut self, s: &C::Scalar) -> Vec<C::Base> {
         scalar_elements::<C>(shift_scalar::<C>(*s))
+    }
+
+    fn act_shifted(&mut self, p: &Projective<C>, w: &PublicWord<C::Base>) -> Projective<C> {
+        let integer: C::Scalar = Word::of(w.value).reduce();
+        *p * (integer + shift_of::<C>())
     }
 }
 
@@ -269,11 +282,23 @@ pub struct ProofIn<P, S> {
     pub sg: P,
 }
 
+/// A word of the public input of the proof the group half verifies, in the
+/// model, with its bound: `Some(n)` for a word below `2^n`, which the lift
+/// checks so that it is canonical; `None` for a word sound by descent (see
+/// `crate::statement`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicWord<V> {
+    /// The word, as an element of the model's field.
+    pub value: V,
+    /// Its bound.
+    pub bound: Option<u32>,
+}
+
 /// The deferred values the group half takes on trust, in the model.
 #[derive(Clone, Debug)]
 pub struct DeferredIn<V, S> {
-    /// The public input, its scalars.
-    pub public: Vec<S>,
+    /// The public input, its words.
+    pub public: Vec<PublicWord<V>>,
     /// `perm`.
     pub perm: S,
     /// `zeta^m`.
@@ -415,20 +440,33 @@ where
     m.sub_points(&sigma, &t_n_minus_t)
 }
 
-/// `x_hat`: `h` plus the Lagrange commitments scaled by minus the public
-/// input, chunk by chunk (`h` alone without public input).
-fn x_hat<C, M>(m: &mut M, constants: &Constants<C>, public: &[M::Scalar]) -> Vec<M::Point>
+/// `2^255` in the scalar field of `C`.
+fn shift_of<C: Glv>() -> C::Scalar {
+    (C::Scalar::ONE + C::Scalar::ONE).pow(255)
+}
+
+/// `x_hat`: `h - sum_i [w_i] L_i`, chunk by chunk, as
+/// `(h + sum_i [2^255] L_i) - sum_i [w_i + 2^255] L_i`: the first sum a
+/// constant, the second each word's shifted action, so no term is the
+/// identity even for a zero word.
+fn x_hat<C, M>(
+    m: &mut M,
+    constants: &Constants<C>,
+    public: &[PublicWord<M::Value>],
+) -> Vec<M::Point>
 where
     C: Glv,
     M: GroupModel<C>,
 {
+    let shift = shift_of::<C>();
     (0..constants.chunks)
         .map(|k| {
-            let mut acc = m.constant_point(&constants.h);
-            for (l, p) in constants.lagrange.iter().zip(public) {
-                let chunk = m.constant_point(&l.chunks[k]);
-                let scaled = m.scale_point(&chunk, p);
-                acc = m.sub_points(&acc, &scaled);
+            let chunks = constants.lagrange.iter().take(public.len());
+            let start = chunks.fold(constants.h, |acc, l| acc + l.chunks[k] * shift);
+            let mut acc = m.constant_point(&start);
+            for (l, w) in constants.lagrange.iter().zip(public) {
+                let acted = m.act_shifted(&l.chunks[k], w);
+                acc = m.sub_points(&acc, &acted);
             }
             acc
         })

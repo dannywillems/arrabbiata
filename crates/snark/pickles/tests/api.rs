@@ -496,7 +496,7 @@ fn curve_group_half_and_size_error() {
         arrabbiata_poseidon::kimchi::KimchiSponge::new(arrabbiata_poseidon::kimchi::vesta_base());
     let constants = group::Constants::new(&index.verifier_index, &index.srs, &base).unwrap();
     let poseidon = arrabbiata_poseidon::kimchi::vesta_base();
-    let refused = curve::GroupHalf::<Vesta, 1, 11>::new(constants, &poseidon, SHAPE).err();
+    let refused = curve::GroupHalf::<Vesta, 1, 11>::new(constants, &poseidon, SHAPE, vec![]).err();
     assert_eq!(
         refused,
         Some(curve::SizeError {

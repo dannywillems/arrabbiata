@@ -20,7 +20,8 @@ use arrabbiata_kimchi_gadgets::LAYOUT;
 use arrabbiata_pasta::{Fp, Fq, Pallas};
 use arrabbiata_pickles::{
     curve::{GroupHalf, Shape, flatten, held, scalar_width},
-    group::{Constants, DeferredIn, ProofIn, group_half_in},
+    group::{Constants, DeferredIn, ProofIn, PublicWord, group_half_in},
+    statement::Word,
     wrap::wrap_gates,
 };
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
@@ -85,7 +86,13 @@ fn the_group_half_of_a_pallas_proof_as_a_circuit_over_fp() {
         sg: opening.sg,
     };
     let deferred = DeferredIn {
-        public: public.to_vec(),
+        public: public
+            .iter()
+            .map(|p| PublicWord {
+                value: Word::of(*p).reduce(),
+                bound: Some(254),
+            })
+            .collect(),
         perm: values.plonk.perm,
         zeta_to_srs_length: values.plonk.zeta_to_srs_length,
         zeta_to_domain_size: values.plonk.zeta_to_domain_size,
@@ -118,13 +125,14 @@ fn the_group_half_of_a_pallas_proof_as_a_circuit_over_fp() {
         public: 1,
         width: 2,
     };
-    assert_eq!((shape.inputs(), shape.outputs()), (79, 10));
-    let gadget = GroupHalf::<Pallas, 79, 10>::new(constants, &poseidon, shape).unwrap();
+    assert_eq!((shape.inputs(), shape.outputs()), (78, 10));
+    let gadget =
+        GroupHalf::<Pallas, 78, 10>::new(constants, &poseidon, shape, vec![Some(254)]).unwrap();
     let point = |p: &Projective<Pallas>| {
         let (x, y) = coordinates(p);
         [x, y]
     };
-    let flat: [Fp; 79] = flatten(&proof_in, &deferred, point, |s| held::<Pallas>(*s))
+    let flat: [Fp; 78] = flatten(&proof_in, &deferred, point, |s| held::<Pallas>(*s))
         .try_into()
         .unwrap();
     let mut expected = vec![
@@ -147,7 +155,7 @@ fn the_group_half_of_a_pallas_proof_as_a_circuit_over_fp() {
             b: deferred.b + delta,
             ..deferred.clone()
         };
-        let flat: [Fp; 79] = flatten(&proof_in, &wrong, point, |s| held::<Pallas>(*s))
+        let flat: [Fp; 78] = flatten(&proof_in, &wrong, point, |s| held::<Pallas>(*s))
             .try_into()
             .unwrap();
         assert!(witness::<Fp, _, 64, 7>(&gadget, LAYOUT, &flat).is_err());

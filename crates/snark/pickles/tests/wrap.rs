@@ -11,9 +11,12 @@ use arrabbiata_kimchi::{
     srs::Srs,
 };
 use arrabbiata_pasta::{Fp, Fq, Vesta};
-use arrabbiata_pickles::wrap::{
-    Error, Step, StepEvaluations, Wrap, finalize, index, prove_wrap, shifted, statement,
-    step_gates, unshifted, verify_wrap,
+use arrabbiata_pickles::{
+    statement::Word,
+    wrap::{
+        Error, Step, StepEvaluations, Wrap, finalize, index, prove_wrap, statement, step_gates,
+        verify_wrap,
+    },
 };
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 
@@ -70,7 +73,7 @@ fn a_step_proof_is_wrapped_and_the_wrap_verifies() {
     };
     let (stmt, private, shape) = statement(&step).unwrap();
     assert_eq!((shape.statement(), shape.witness()), (S, W));
-    assert_eq!(unshifted(stmt.step_public[0]), public[0]);
+    assert_eq!(Word::of(stmt.step_public[0]), Word::of(public[0]));
 
     let poseidon = vesta_base();
     let wrap = Wrap::<S, W>::new(
@@ -100,7 +103,7 @@ fn a_step_proof_is_wrapped_and_the_wrap_verifies() {
 
     // Another public input: the wrap proof is not of that statement.
     let mut other = stmt.clone();
-    other.step_public[0] = shifted(Fp::from_u64(6));
+    other.step_public[0] = Fq::from_u64(6);
     let refused = verify_wrap(
         &wrap_index.verifier_index,
         &wrap_index.srs,

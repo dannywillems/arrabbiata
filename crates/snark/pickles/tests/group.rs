@@ -26,7 +26,8 @@ use arrabbiata_kimchi_gadgets::{
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_pickles::{
     curve::{GroupHalf, Shape, flatten},
-    group::{Constants, DeferredIn, ProofIn, group_half_in},
+    group::{Constants, DeferredIn, ProofIn, PublicWord, group_half_in},
+    statement::Word,
 };
 use arrabbiata_poseidon::kimchi::{KimchiPoseidon, KimchiSponge, WIDTH, pallas_base, vesta_base};
 
@@ -190,7 +191,13 @@ fn inputs_of(index: &ProverIndex<Vesta>, proof: &ProverProof<Vesta>, public: &[F
         sg: opening.sg,
     };
     let deferred = DeferredIn {
-        public: public.to_vec(),
+        public: public
+            .iter()
+            .map(|p| PublicWord {
+                value: Word::of(*p).reduce(),
+                bound: Some(255),
+            })
+            .collect(),
         perm: values.plonk.perm,
         zeta_to_srs_length: values.plonk.zeta_to_srs_length,
         zeta_to_domain_size: values.plonk.zeta_to_domain_size,
@@ -361,7 +368,9 @@ fn as_a_circuit<const N: usize, const M: usize>(
         public: public.len(),
         width: 1,
     };
-    let gadget = GroupHalf::<Vesta, N, M>::new(constants, &poseidon, shape).unwrap();
+    let gadget =
+        GroupHalf::<Vesta, N, M>::new(constants, &poseidon, shape, vec![Some(255); public.len()])
+            .unwrap();
     let point = |p: &arrabbiata_curve::Projective<Vesta>| {
         let (x, y) = coordinates(p);
         [x, y]
