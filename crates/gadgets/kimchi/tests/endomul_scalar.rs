@@ -12,13 +12,15 @@
 //! - a proof that a public `(a, b)` comes from a private challenge.
 
 use arrabbiata_curve::glv::Glv;
-use arrabbiata_field::Field;
-use arrabbiata_gadget::{Array, Cell, Env, Error, Of, Scalar, TypedGadget, evaluate, witness};
+use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_gadget::{
+    Array, Cell, Env, Error, Of, Placed, Scalar, TypedGadget, evaluate, witness,
+};
 use arrabbiata_generalized_plonk::{max_coefficients, prove, setup, verify};
 use arrabbiata_ipa::Ipa;
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
-    endomul_scalar::{CRUMBS_PER_ROW, EndoMulScalar},
+    endomul_scalar::{CRUMBS_PER_ROW, EndoMulScalar, EndoMulScalarOf, EndoMulScalarRowOf},
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
@@ -232,4 +234,30 @@ fn a_challenge_is_proved() {
         )
         .is_err()
     );
+}
+
+proptest! {
+    #[test]
+    fn the_rows_of_a_scalar_read_its_crumbs(lo in any::<u64>(), hi in any::<u64>()) {
+        // EndoMulScalarOf takes the crumbs from the scalar's value: n is the
+        // scalar, and a lambda + b its ScalarChallenge::to_field, with the
+        // start (0, 2, 2) placed in the first row's start cells.
+        let x = Fp::from_limbs(&[lo, hi]).unwrap();
+        let gadget = Placed {
+            gadget: EndoMulScalarOf::<64>,
+            cells: vec![Cell::new(0, 0), Cell::new(2, 0), Cell::new(3, 0), Cell::new(14, 0)],
+        };
+        let start = [Fp::ZERO, Fp::from_u64(2), Fp::from_u64(2)];
+        let input = (start, x);
+        let [n, a, b] = evaluate(&gadget, LAYOUT, &input).unwrap();
+        let lambda = Vesta::lambda();
+        prop_assert_eq!(n, x);
+        let wide = (u128::from(hi) << 64) | u128::from(lo);
+        prop_assert_eq!(a * lambda + b, to_field(wide, lambda));
+        prop_assert!(witness::<Fp, _, 64, 7>(&gadget, LAYOUT, &input).is_ok());
+        let row = EndoMulScalarRowOf { row: 0, crumbs: 64 };
+        prop_assert_eq!(<EndoMulScalarRowOf as TypedGadget<Fp>>::ROWS, 1);
+        prop_assert_eq!(row.crumbs, 64);
+        let _ = CRUMBS_PER_ROW;
+    }
 }

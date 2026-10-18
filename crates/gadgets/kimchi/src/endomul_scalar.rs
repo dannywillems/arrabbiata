@@ -20,7 +20,7 @@
 //! `{0, 1, 2, 3}` (`x (x - 1) (x - 2) (x - 3) = 0`). The witness is computed
 //! as Kimchi's `endomul_scalar::gen_witness`.
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget};
 
 /// The crumbs of one row.
@@ -77,6 +77,79 @@ where
         .fold(zero, |acc, c| acc * x.clone() + c.clone())
 }
 
+/// One row's constraints and witness from its start `[n0, a0, b0]`, the
+/// crumbs written by `crumb(env, i)` in their cells: the gate, whatever
+/// gives the crumbs' values.
+fn row<F, E>(
+    env: &mut E,
+    start: &[E::Var; 3],
+    mut crumb: impl FnMut(&mut E, usize) -> E::Var,
+) -> [E::Var; 3]
+where
+    F: Field,
+    E: Env<F>,
+{
+    let n0 = env.copy(Cell::new(N0, 0), &start[0]);
+    let a0 = env.copy(Cell::new(A0, 0), &start[1]);
+    let b0 = env.copy(Cell::new(B0, 0), &start[2]);
+    let x: [E::Var; CRUMBS_PER_ROW] = core::array::from_fn(|i| crumb(env, i));
+    let known = [
+        &n0, &a0, &b0, &x[0], &x[1], &x[2], &x[3], &x[4], &x[5], &x[6], &x[7],
+    ];
+    let n8 = env.advice(Cell::new(N8, 0), known, |v| {
+        v[3..].iter().fold(v[0], |n, x| n + n + n + n + *x)
+    });
+    let a8 = env.advice(Cell::new(A8, 0), known, |v| {
+        v[3..].iter().fold(v[1], |a, x| a + a + c_d(*x).0)
+    });
+    let b8 = env.advice(Cell::new(B8, 0), known, |v| {
+        v[3..].iter().fold(v[2], |b, x| b + b + c_d(*x).1)
+    });
+
+    let constant = |env: &mut E, numerator: u64, denominator: u64, negative: bool| {
+        let fraction =
+            F::from_u64(numerator) * F::from_u64(denominator).inverse().unwrap_or(F::ZERO);
+        env.constant(if negative { -fraction } else { fraction })
+    };
+    let c_coefficients = [
+        constant(env, 0, 1, false),
+        constant(env, 11, 6, false),
+        constant(env, 5, 2, true),
+        constant(env, 2, 3, false),
+    ];
+    let crumb_over_x = [
+        constant(env, 6, 1, true),
+        constant(env, 11, 1, false),
+        constant(env, 6, 1, true),
+        constant(env, 1, 1, false),
+    ];
+    let d_minus_c = [
+        constant(env, 1, 1, true),
+        constant(env, 3, 1, false),
+        constant(env, 1, 1, true),
+    ];
+    let zero = env.constant(F::ZERO);
+    let c: [E::Var; CRUMBS_PER_ROW] =
+        core::array::from_fn(|i| polynomial(&c_coefficients, &x[i], zero.clone()));
+    let d: [E::Var; CRUMBS_PER_ROW] =
+        core::array::from_fn(|i| c[i].clone() + polynomial(&d_minus_c, &x[i], zero.clone()));
+    // Each step scales by a constant rather than adding the running sum
+    // to itself: the same polynomial, without copying its term at each
+    // step (a copy per step makes the term grow fourfold per crumb).
+    let four = env.constant(F::from_u64(4));
+    let two = env.constant(F::from_u64(2));
+    let n8_expected = x.iter().fold(n0, |n, xi| n * four.clone() + xi.clone());
+    let a8_expected = c.iter().fold(a0, |a, ci| a * two.clone() + ci.clone());
+    let b8_expected = d.iter().fold(b0, |b, di| b * two.clone() + di.clone());
+    env.assert_zero(n8_expected - n8.clone());
+    env.assert_zero(a8_expected - a8.clone());
+    env.assert_zero(b8_expected - b8.clone());
+    for xi in &x {
+        env.assert_zero(polynomial(&crumb_over_x, xi, zero.clone()) * xi.clone());
+    }
+    [n8, a8, b8]
+}
+
 /// One row: input `(n0, a0, b0, [x0 .. x7])`, output `[n8, a8, b8]`.
 ///
 /// `n0`, `a0`, `b0` are wired by copies; the crumbs are written from their
@@ -101,64 +174,9 @@ where
     where
         E: Env<F>,
     {
-        let n0 = env.copy(Cell::new(N0, 0), &start[0]);
-        let a0 = env.copy(Cell::new(A0, 0), &start[1]);
-        let b0 = env.copy(Cell::new(B0, 0), &start[2]);
-        let x: [E::Var; CRUMBS_PER_ROW] =
-            core::array::from_fn(|i| env.advice(Cell::new(X + i, 0), [&crumbs[i]], |[v]| v));
-        let known = [
-            &n0, &a0, &b0, &x[0], &x[1], &x[2], &x[3], &x[4], &x[5], &x[6], &x[7],
-        ];
-        let n8 = env.advice(Cell::new(N8, 0), known, |v| {
-            v[3..].iter().fold(v[0], |n, x| n + n + n + n + *x)
-        });
-        let a8 = env.advice(Cell::new(A8, 0), known, |v| {
-            v[3..].iter().fold(v[1], |a, x| a + a + c_d(*x).0)
-        });
-        let b8 = env.advice(Cell::new(B8, 0), known, |v| {
-            v[3..].iter().fold(v[2], |b, x| b + b + c_d(*x).1)
-        });
-
-        let constant = |env: &mut E, numerator: u64, denominator: u64, negative: bool| {
-            let fraction =
-                F::from_u64(numerator) * F::from_u64(denominator).inverse().unwrap_or(F::ZERO);
-            env.constant(if negative { -fraction } else { fraction })
-        };
-        let c_coefficients = [
-            constant(env, 0, 1, false),
-            constant(env, 11, 6, false),
-            constant(env, 5, 2, true),
-            constant(env, 2, 3, false),
-        ];
-        let crumb_over_x = [
-            constant(env, 6, 1, true),
-            constant(env, 11, 1, false),
-            constant(env, 6, 1, true),
-            constant(env, 1, 1, false),
-        ];
-        let d_minus_c = [
-            constant(env, 1, 1, true),
-            constant(env, 3, 1, false),
-            constant(env, 1, 1, true),
-        ];
-        let zero = env.constant(F::ZERO);
-        let c: [E::Var; CRUMBS_PER_ROW] =
-            core::array::from_fn(|i| polynomial(&c_coefficients, &x[i], zero.clone()));
-        let d: [E::Var; CRUMBS_PER_ROW] =
-            core::array::from_fn(|i| c[i].clone() + polynomial(&d_minus_c, &x[i], zero.clone()));
-        let n8_expected = x.iter().fold(n0, |n, xi| {
-            let double = n.clone() + n;
-            double.clone() + double + xi.clone()
-        });
-        let a8_expected = c.iter().fold(a0, |a, ci| a.clone() + a + ci.clone());
-        let b8_expected = d.iter().fold(b0, |b, di| b.clone() + b + di.clone());
-        env.assert_zero(n8_expected - n8.clone());
-        env.assert_zero(a8_expected - a8.clone());
-        env.assert_zero(b8_expected - b8.clone());
-        for xi in &x {
-            env.assert_zero(polynomial(&crumb_over_x, xi, zero.clone()) * xi.clone());
-        }
-        [n8, a8, b8]
+        row(env, &start, |env, i| {
+            env.advice(Cell::new(X + i, 0), [&crumbs[i]], |[v]| v)
+        })
     }
 }
 
@@ -203,6 +221,86 @@ where
         for chunk in crumbs.chunks(CRUMBS_PER_ROW) {
             let eight: [E::Var; CRUMBS_PER_ROW] = core::array::from_fn(|k| chunk[k].clone());
             state = env.call(&EndoMulScalarGate, (state, eight));
+        }
+        state
+    }
+}
+
+/// The crumb of `scalar` at `index` of `crumbs`, the most significant first:
+/// its bits `2 (crumbs - 1 - index) + 1` and `2 (crumbs - 1 - index)`.
+fn crumb_of<F: PrimeField>(scalar: F, index: usize, crumbs: usize) -> F {
+    let low = 2 * (crumbs - 1 - index);
+    let bit = |i: usize| (scalar.limb(i / 64) >> (i % 64)) & 1;
+    F::from_u64(2 * bit(low + 1) + bit(low))
+}
+
+/// One row of [`EndoMulScalarOf`]: the gate, its crumbs the ones of the
+/// scalar it reads at `row`, taken from the scalar's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndoMulScalarRowOf {
+    /// The row, from the most significant crumbs.
+    pub row: usize,
+    /// The crumbs of the whole scalar.
+    pub crumbs: usize,
+}
+
+impl<F> TypedGadget<F> for EndoMulScalarRowOf
+where
+    F: PrimeField,
+{
+    type Input = (Array<Scalar, 3>, Scalar);
+    type Output = Array<Scalar, 3>;
+    const NAME: &'static str = "kimchi-endomul-scalar";
+    const ROWS: usize = 1;
+
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (start, scalar): Of<Self::Input, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var>
+    where
+        E: Env<F>,
+    {
+        let (base, crumbs) = (self.row * CRUMBS_PER_ROW, self.crumbs);
+        row(env, &start, |env, i| {
+            env.advice(Cell::new(X + i, 0), [&scalar], |[v]| {
+                crumb_of(v, base + i, crumbs)
+            })
+        })
+    }
+}
+
+/// [`EndoMulScalar`] of the scalar it reads, its crumbs taken from the
+/// scalar's value: input the start `[n0, a0, b0]` (cells holding `0, 2,
+/// 2`, which the caller constrains) and the scalar, output `[n, a, b]`. The
+/// gate pins `n` to the crumbs, so a caller asserting `n` equal to the
+/// scalar checks that the scalar has `2 CRUMBS` bits (Pickles'
+/// `to_field_checked`), and `a lambda + b` is then its
+/// `ScalarChallenge::to_field`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EndoMulScalarOf<const CRUMBS: usize>;
+
+impl<F, const C: usize> TypedGadget<F> for EndoMulScalarOf<C>
+where
+    F: PrimeField,
+{
+    type Input = (Array<Scalar, 3>, Scalar);
+    type Output = Array<Scalar, 3>;
+    const NAME: &'static str = "kimchi-endomul-scalar-of";
+    const ROWS: usize = <EndoMulScalar<C> as TypedGadget<F>>::ROWS;
+
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (start, scalar): Of<Self::Input, E::Var>,
+    ) -> Of<Array<Scalar, 3>, E::Var>
+    where
+        E: Env<F>,
+    {
+        let mut state = start;
+        for r in 0..C / CRUMBS_PER_ROW {
+            let gate = EndoMulScalarRowOf { row: r, crumbs: C };
+            state = env.call(&gate, (state, scalar.clone()));
         }
         state
     }

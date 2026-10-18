@@ -140,8 +140,10 @@ where
             |v| v[1..].iter().fold(v[0], |acc, bit| acc + acc + *bit),
         );
 
-        // n' = 32 n + bits.
-        let combined = b.iter().fold(n, |acc, bit| acc.clone() + acc + bit.clone());
+        // n' = 32 n + bits, each step a scaling by 2 (not `acc + acc`, which
+        // copies the term at every bit).
+        let two = env.constant(F::from_u64(2));
+        let combined = b.iter().fold(n, |acc, bit| acc * two.clone() + bit.clone());
         env.assert_zero(n_next.clone() - combined);
         let one = env.constant(F::ONE);
         for k in 0..BITS_PER_GATE {
