@@ -2,7 +2,7 @@
 //! the rustdoc examples).
 
 use arrabbiata_field::{
-    Field, Goldilocks as F, Goldilocks, PrimeField, Sqrt, TwoAdicField, bigint,
+    Field, FieldModel, Goldilocks as F, Goldilocks, Native, PrimeField, Sqrt, TwoAdicField, bigint,
     extension::{Quadratic, QuadraticConfig},
     goldilocks::MODULUS,
     inner_product, laws,
@@ -634,4 +634,69 @@ fn codec_to_and_from_le_bytes() {
         from_le_bytes::<Goldilocks>(&[0; 8].iter().chain(&[1]).copied().collect::<Vec<u8>>()),
         None
     );
+}
+
+/// A model that counts its products and defines only the signature's
+/// required operations, so the provided ones are its defaults.
+#[derive(Default)]
+struct Counting {
+    products: usize,
+}
+
+impl FieldModel<F> for Counting {
+    type Value = F;
+
+    fn constant(&mut self, c: F) -> F {
+        c
+    }
+
+    fn add(&mut self, a: &F, b: &F) -> F {
+        *a + *b
+    }
+
+    fn mul(&mut self, a: &F, b: &F) -> F {
+        self.products += 1;
+        *a * *b
+    }
+
+    fn neg(&mut self, a: &F) -> F {
+        -*a
+    }
+
+    fn inverse(&mut self, a: &F) -> F {
+        a.inverse().unwrap_or(F::ZERO)
+    }
+}
+
+#[test]
+fn field_model() {
+    // The provided operations, from the required ones: the same values as
+    // the field's operators, pow with one squaring per bit.
+    let (a, b) = (F::from_u64(7), F::from_u64(3));
+    let mut m = Counting::default();
+    assert_eq!(m.sub(&a, &b), F::from_u64(4));
+    assert_eq!(m.scale(&a, b), F::from_u64(21));
+    assert_eq!(m.shift(&a, b), F::from_u64(10));
+    assert_eq!(m.square(&b), F::from_u64(9));
+    let before = m.products;
+    assert_eq!(m.pow(&a, 13), a.pow(13));
+    // 13 = 0b1101: four squarings, three multiplications.
+    assert_eq!(m.products - before, 7);
+    assert_eq!(m.pow(&a, 0), F::ONE);
+}
+
+#[test]
+fn native() {
+    // The field itself: each operation its operator, and zero's inverse
+    // zero.
+    let (a, b) = (F::from_u64(7), F::from_u64(3));
+    let mut m = Native;
+    assert_eq!(FieldModel::<F>::add(&mut m, &a, &b), a + b);
+    assert_eq!(FieldModel::<F>::mul(&mut m, &a, &b), a * b);
+    assert_eq!(FieldModel::<F>::neg(&mut m, &a), -a);
+    assert_eq!(FieldModel::<F>::constant(&mut m, a), a);
+    assert_eq!(FieldModel::<F>::inverse(&mut m, &a) * a, F::ONE);
+    assert_eq!(FieldModel::<F>::inverse(&mut m, &F::ZERO), F::ZERO);
+    assert_eq!(FieldModel::<F>::pow(&mut m, &a, 5), a.pow(5));
+    assert_eq!(FieldModel::<F>::square(&mut m, &a), a * a);
 }

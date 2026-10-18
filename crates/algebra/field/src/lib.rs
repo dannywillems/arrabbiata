@@ -36,11 +36,13 @@ pub mod codec;
 pub mod extension;
 pub mod goldilocks;
 pub mod laws;
+pub mod model;
 pub mod montgomery;
 pub mod rng;
 pub mod vector;
 
 pub use goldilocks::Goldilocks;
+pub use model::{FieldModel, Native};
 pub use montgomery::{MontField, MontgomeryConfig};
 pub use vector::{inner_product, powers};
 

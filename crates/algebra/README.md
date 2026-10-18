@@ -1,6 +1,7 @@
 # algebra
 
-The algebraic substrate: finite fields (`field`: the `Field` traits,
+The algebraic substrate: finite fields (`field`: the `Field` traits, their
+models `FieldModel` (the field itself, or a circuit computing in it),
 Montgomery prime fields, quadratic extensions, Goldilocks) and polynomials
 (`poly`: constraint expressions over typed columns, graded evaluation and
 homogenization, univariate polynomials, NTT domains), and multivariate
