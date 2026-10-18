@@ -285,7 +285,9 @@ where
 }
 
 /// [`EndoMul`] of the scalar it reads, its bits taken from the scalar's
-/// value, most significant first: input `(T, P, x)`, output `(P', n)`. The
+/// value, most significant first: input `(T, P, x, n0)`, output `(P', n)`,
+/// `n0` a cell the caller constrains to zero (otherwise the bits are free).
+/// The
 /// rows pin `n` to the bits, so a caller asserting `n` equal to `x` checks
 /// that `x` has `BITS` bits and that the bits are its own; from
 /// `P = 2 (phi(T) + T)`, `P'` is `[k] T` for `ScalarChallenge::to_field` of
@@ -300,7 +302,7 @@ impl<F, const B: usize> TypedGadget<F> for EndoMulOf<F, B>
 where
     F: PrimeField,
 {
-    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar);
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar, Scalar);
     type Output = (Array<Scalar, 2>, Scalar);
     const NAME: &'static str = "kimchi-endomul-of";
     const ROWS: usize = <EndoMul<F, B> as TypedGadget<F>>::ROWS;
@@ -308,13 +310,12 @@ where
     fn synthesize<E>(
         &self,
         env: &mut E,
-        (t, p, scalar): Of<Self::Input, E::Var>,
+        (t, p, scalar, n0): Of<Self::Input, E::Var>,
     ) -> Of<Self::Output, E::Var>
     where
         E: Env<F>,
     {
-        let zero = env.constant(F::ZERO);
-        let mut n = env.define(Cell::new(N, 0), zero);
+        let mut n = n0;
         let mut acc = p;
         for r in 0..B / BITS_PER_ROW {
             let gate = EndoMulGateOf {

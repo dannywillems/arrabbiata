@@ -316,7 +316,8 @@ impl<const B: usize> TypedGadget<Fp> for MultiplyOf<B> {
         let gadget = EndoMulOf::<Fp, B> {
             endo: Pallas::beta(),
         };
-        env.call(&gadget, (t, p, x))
+        let n0 = env.advice(Cell::new(column::N, 0), [], |[]| Fp::ZERO);
+        env.call(&gadget, (t, p, x, n0))
     }
 }
 

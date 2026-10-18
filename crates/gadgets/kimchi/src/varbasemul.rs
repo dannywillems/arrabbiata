@@ -267,9 +267,11 @@ where
 }
 
 /// [`VarBaseMul`] of the scalar it reads, its bits taken from the scalar's
-/// value, most significant first: input `(T, A, x)`, output `(A', n)`. The
-/// gates pin `n` to the bits, so a caller asserting `n` equal to `x` checks
-/// that `x` has `BITS` bits and that the bits are its own; from `A = 2 T`,
+/// value, most significant first: input `(T, A, x, n0)`, output `(A', n)`,
+/// `n0` a cell the caller constrains to zero (otherwise `n = 32^k n0 +
+/// bits` and the bits are free). The gates pin `n` to the bits, so a
+/// caller asserting `n` equal to `x` checks that `x` has `BITS` bits and
+/// that the bits are its own; from `A = 2 T`,
 /// `A' = (1 + 2^BITS + 2 x) T`, Pickles' `scale_fast` of the shifted value
 /// `x` (`Shifted_value.Type1`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -279,7 +281,7 @@ impl<F, const B: usize> TypedGadget<F> for VarBaseMulOf<B>
 where
     F: PrimeField,
 {
-    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar);
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar, Scalar);
     type Output = (Array<Scalar, 2>, Scalar);
     const NAME: &'static str = "kimchi-varbasemul-of";
     const ROWS: usize = <VarBaseMul<B> as TypedGadget<F>>::ROWS;
@@ -287,13 +289,12 @@ where
     fn synthesize<E>(
         &self,
         env: &mut E,
-        (base, acc, scalar): Of<Self::Input, E::Var>,
+        (base, acc, scalar, n0): Of<Self::Input, E::Var>,
     ) -> Of<Self::Output, E::Var>
     where
         E: Env<F>,
     {
-        let zero = env.constant(F::ZERO);
-        let mut n = env.define(Cell::new(N, 0), zero);
+        let mut n = n0;
         let mut acc = acc;
         for g in 0..B / BITS_PER_GATE {
             let gate = VarBaseMulGateOf {

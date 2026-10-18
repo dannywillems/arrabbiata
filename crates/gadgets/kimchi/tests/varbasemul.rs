@@ -296,7 +296,8 @@ impl<const B: usize> TypedGadget<Fp> for MultiplyOf<B> {
     ) -> Of<Self::Output, E::Var> {
         let t = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&t[i]], |[v]| v));
         let a = core::array::from_fn(|i| env.advice(Cell::new(2 + i, 0), [&a[i]], |[v]| v));
-        env.call(&VarBaseMulOf::<B>, (t, a, x))
+        let n0 = env.advice(Cell::new(4, 0), [], |[]| Fp::ZERO);
+        env.call(&VarBaseMulOf::<B>, (t, a, x, n0))
     }
 }
 
