@@ -94,6 +94,7 @@ kimchi-vectors: kimchi-checkout ## Write Kimchi's vectors from KIMCHI_REV
 		> $(SNARK_VECTORS)/kimchi_prover.txt \
 		2> $(SNARK_VECTORS)/kimchi_verifies_arrabbiata.txt
 	$(KIMCHI_BIN)/differential > $(GADGET_VECTORS)/kimchi_differential.txt
+	$(KIMCHI_BIN)/fixtures > $(SNARK_VECTORS)/kimchi_fixtures.txt
 
 .PHONY: test-curve
 test-curve: ## Curve laws on CURVE (pallas, vesta, bn254_g{1,2}, grumpkin)

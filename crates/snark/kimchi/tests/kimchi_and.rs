@@ -11,6 +11,7 @@ use arrabbiata_gadget::{Cell, Placed, TypedGadget};
 use arrabbiata_kimchi::{
     constraints::{COLUMNS, CircuitGate, ConstraintSystem},
     gates::Gates,
+    serialization::to_bytes,
 };
 use arrabbiata_kimchi_gadgets::{
     and::And,
@@ -224,12 +225,27 @@ fn test_serialization_regression() {
         .collect();
     let (gates, witness) = and([in1, in2], 8);
     assert_eq!(rows(&witness), case.witnesses[0]);
+    // Kimchi's TestFramework proves on its precomputed test key, of 2^16
+    // generators: our key of that size, which is the same.
+    let srs = case.number("srs");
     // Our rows are Kimchi's up to the order in each copy cycle; the proof,
     // which reads that order through the sigmas, is made on Kimchi's.
     gate_tests::assert_kimchi_rows(&gates, &case.gates[0]);
-    let proof =
-        gate_tests::prove_replayed(gate_tests::kimchi_gates(&case.gates[0]), witness, words);
+    let proof = gate_tests::prove_replayed(
+        gate_tests::kimchi_gates(&case.gates[0]),
+        witness,
+        words,
+        srs,
+    );
     let mut expected = case.proof.clone();
     expected.sort();
     assert_eq!(gate_tests::proof_lines("serialization", &proof), expected);
+    // And its bytes are the ones Kimchi's test hard-codes for it
+    // (`buf_expected`, `rmp_serde::to_vec` of Kimchi's proof).
+    let serialized = case.input("serialized")[0].as_str();
+    let ours: String = to_bytes(&proof)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert!(ours == serialized, "our bytes are not Kimchi's");
 }

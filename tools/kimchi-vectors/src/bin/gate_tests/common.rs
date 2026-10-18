@@ -335,10 +335,9 @@ pub fn prove_recorded<R: rand::RngCore + rand::CryptoRng>(
     rng: &mut R,
 ) -> (ProverProof<Vesta, OpeningProof<Vesta, FULL_ROUNDS>, FULL_ROUNDS>, Vec<u64>, usize) {
     gates_line(&gates);
-    let cs = ConstraintSystem::<Fp>::create(gates).lookup(vec![]).build().unwrap();
-    let srs = Arc::new(SRS::<Vesta>::create(cs.domain.d1.size as usize));
-    let endo = *Vesta::other_curve_endo();
-    let index: ProverIndex<FULL_ROUNDS, Vesta, SRS<Vesta>> = ProverIndex::create(cs, endo, srs, false);
+    // Kimchi's TestFramework index: the precomputed test SRS.
+    let index = kimchi::prover_index::testing::new_index_for_test::<FULL_ROUNDS, Vesta>(gates, 0);
+    println!("input srs {}", index.srs.g.len());
     index.verify(&witness, &[]).unwrap();
     let group_map = <Vesta as CommitmentCurve>::Map::setup();
     let mut recording = Recording { inner: rng, words: vec![], other: 0 };

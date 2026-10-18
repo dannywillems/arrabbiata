@@ -8,6 +8,7 @@ mod kimchi_runs;
 
 use std::{collections::BTreeMap, sync::LazyLock};
 
+use arrabbiata_codec::laws as codec_laws;
 use arrabbiata_curve::{Affine, Curve, Projective, glv::Glv};
 use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_halo::Accumulated;
@@ -77,7 +78,9 @@ const PALLAS_CIRCUITS: [(&str, Option<usize>, usize); 2] =
 /// A curve Kimchi proves over, with what the tests need of it: Kimchi's
 /// gates over its scalar field, its two sponges, and the tool's circuits on
 /// it.
-trait Kimchi: Glv + Curve<Base: PrimeField + Sqrt, Scalar: TwoAdicField> {
+trait Kimchi:
+    Glv + Curve<Base: PrimeField + Sqrt, Scalar: TwoAdicField + arrabbiata_codec::Codec>
+{
     const CIRCUITS: &'static [(&'static str, Option<usize>, usize)];
     fn gates() -> KimchiGates<Self::Scalar>;
     fn base() -> KimchiSponge<Self::Base>;
@@ -1041,6 +1044,14 @@ fn our_proofs_verify<C: Kimchi>() -> Vec<String> {
             proof,
             kimchis_proof::<C>(name),
             "{name}: another stream, another proof"
+        );
+        // Written as Kimchi writes proofs, and read back to itself; so is
+        // Kimchi's proof of the same circuit.
+        assert_eq!(codec_laws::round_trip(&proof, ()), Ok(()), "{name}");
+        assert_eq!(
+            codec_laws::round_trip(&kimchis_proof::<C>(name), ()),
+            Ok(()),
+            "{name}"
         );
         lines.extend(dump(name, &proof));
     }

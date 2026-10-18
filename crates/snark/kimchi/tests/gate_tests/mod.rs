@@ -522,18 +522,18 @@ pub fn proof_lines<C: Curve<Base: PrimeField>>(name: &str, proof: &ProverProof<C
     out
 }
 
-/// Our proof of `witness` for `gates` on Vesta, drawing `words` as Kimchi's
-/// prover drew them.
+/// Our proof of `witness` for `gates` on Vesta, on a key of `srs`
+/// generators, drawing `words` as Kimchi's prover drew them.
 pub fn prove_replayed(
     gates: Vec<CircuitGate<Fp>>,
     witness: [Vec<Fp>; COLUMNS],
     words: Vec<u64>,
+    srs: usize,
 ) -> ProverProof<Vesta> {
     let kimchi = vesta_gates();
     let cs = ConstraintSystem::create(gates).build().unwrap();
     cs.verify_witness(&witness, &[], &kimchi).unwrap();
-    let depth = cs.domain.d1.size();
-    let index: ProverIndex<Vesta> = ProverIndex::create(cs, Srs::create(depth));
+    let index: ProverIndex<Vesta> = ProverIndex::create(cs, Srs::create(srs));
     let base = KimchiSponge::new(vesta_base());
     let scalar = KimchiSponge::new(pallas_base());
     let mut rng = Arkworks(Replay(words, 0));

@@ -157,4 +157,21 @@ pub fn serialization() {
     let items: Vec<String> = words.iter().map(|w| w.to_string()).collect();
     println!("input words {}", items.join(" "));
     print_proof("serialization", &proof);
+    // The bytes Kimchi's test expects of this proof, `rmp_serde::to_vec` of
+    // it, as its source writes them (`buf_expected`).
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../proof-systems/kimchi/src/tests/and.rs"
+    ))
+    .unwrap();
+    let start = source.find("let buf_expected = vec![").unwrap() + "let buf_expected = vec![".len();
+    let end = start + source[start..].find("];").unwrap();
+    let bytes: Vec<u8> = source[start..end]
+        .split(',')
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+        .map(|w| w.parse().unwrap())
+        .collect();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    println!("input serialized {hex}");
 }
