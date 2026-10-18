@@ -139,6 +139,9 @@ pub mod tag {
     pub const PATTERN_ROUNDS: u64 = 0x5052;
     /// A choice between two protocols in a protocol pattern.
     pub const PATTERN_BRANCH: u64 = 0x5042;
+    /// A sub-protocol repeated a fixed number of times, in a protocol
+    /// pattern; the count follows it.
+    pub const PATTERN_REPEAT: u64 = 0x5058;
 }
 
 /// A permutation of `F^WIDTH`, the core of a sponge.

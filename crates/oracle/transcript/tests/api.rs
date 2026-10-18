@@ -7,9 +7,9 @@ use arrabbiata_transcript::{
     Absorb, Duplex, Permutation, PermutationIn, Transcript, absorb_length, absorb_slice,
     hlist::{HCons, HList, HNil, Reverse},
     typed::{
-        Branch, Challenge, Draw, Either, End, Label, Labeled, Message, Pattern, Peek, ProofOf,
-        Protocol, Prover, Public, Rounds, Send, Seq, Sequence, Squeeze, Statement, Tail, Tape,
-        Then, Verifier, Write, prove_within, prover_tape, verifier_tape, verify_within,
+        Agreed, Branch, Challenge, Draw, Either, End, Exactly, Label, Labeled, Message, Pattern,
+        Peek, ProofOf, Protocol, Prover, Public, Rounds, Send, Seq, Sequence, Squeeze, Statement,
+        Tail, Tape, Then, Verifier, Write, prove_within, prover_tape, verifier_tape, verify_within,
     },
 };
 
@@ -743,4 +743,68 @@ fn typed_verify_within() {
     });
     let ((m, y), _) = verified.unwrap();
     assert_eq!((m, y), (F::new(3), x));
+}
+
+/// A round of the tests below: a word sent, a count drawn.
+type Round = Send<Word, Squeeze<Count, End>>;
+
+#[test]
+fn typed_tape_repeat() {
+    // Exactly three rounds, in order, then the rest.
+    type P = Rounds<Round, Send<Word, End>, Exactly<3>>;
+    let tape = Tape::<F, Log, P>::undescribed(Log::default());
+    let (drawn, tape) = tape.repeat(|i, round| round.send(&Word(i as u64)).squeeze());
+    assert_eq!(drawn, [1, 2, 3]);
+    let log = tape.send(&Word(9)).into_inner();
+    assert_eq!(log.written, vec![0, 1, 2, 9]);
+}
+
+#[test]
+fn typed_tape_try_repeat() {
+    // The first refusal ends the rounds: later rounds do not run.
+    type P = Rounds<Round, End, Exactly<3>>;
+    let tape = Tape::<F, Log, P>::undescribed(Log::default());
+    let mut ran = 0;
+    let refused = tape.try_repeat(|i, round| {
+        ran += 1;
+        if i == 1 {
+            Err(i)
+        } else {
+            Ok(round.send(&Word(0)).squeeze())
+        }
+    });
+    assert_eq!(refused.err(), Some(1));
+    assert_eq!(ran, 2);
+    let tape = Tape::<F, Log, P>::undescribed(Log::default());
+    let accepted: Result<_, ()> = tape.try_repeat(|_, round| Ok(round.send(&Word(0)).squeeze()));
+    assert_eq!(accepted.map(|(drawn, _)| drawn).ok(), Some([1, 2, 3]));
+}
+
+#[test]
+fn typed_agreed() {
+    // The default count: `Rounds<B, N>` is `Rounds<B, N, Agreed>`, stepped
+    // round by round, its counts those of what follows.
+    let tape = Tape::<F, Log, Rounds<Round, End, Agreed>>::undescribed(Log::default());
+    let _: Tape<F, Log, Rounds<Round, End>> = tape;
+    assert_eq!(<Rounds<Round, End> as Pattern>::CHALLENGES, 0);
+}
+
+#[test]
+fn typed_exactly() {
+    // A fixed count is in the counts and in the description: two counts
+    // are two protocols, and neither is the agreed one.
+    type Body = Message<F, Challenge<End>>;
+    assert_eq!(<Rounds<Body, End, Exactly<4>> as Pattern>::MESSAGES, 4);
+    assert_eq!(<Rounds<Body, End, Exactly<4>> as Pattern>::CHALLENGES, 4);
+    let describe = |which: u8| {
+        let mut sponge = goldilocks_sponge(0);
+        match which {
+            0 => <Rounds<Body, End, Exactly<4>> as Pattern>::describe::<F, _>(&mut sponge),
+            1 => <Rounds<Body, End, Exactly<5>> as Pattern>::describe::<F, _>(&mut sponge),
+            _ => <Rounds<Body, End> as Pattern>::describe::<F, _>(&mut sponge),
+        }
+        sponge.squeeze()
+    };
+    assert_ne!(describe(0), describe(1));
+    assert_ne!(describe(0), describe(2));
 }

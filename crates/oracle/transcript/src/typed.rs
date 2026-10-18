@@ -33,7 +33,9 @@
 //!   it as it was (a digest handed to another sponge);
 //! - [`Rounds<Body, Next>`]: `Body` as many times as the parties agree,
 //!   then `Next` (the rounds of an inner-product argument, as many as the
-//!   logarithm of the key's size);
+//!   logarithm of the key's size); `Rounds<Body, Next, Exactly<N>>`:
+//!   exactly `N` times, the count in the type (a circuit's verifier, whose
+//!   shape is fixed);
 //! - [`Branch<A, B>`]: `A` or `B`, as the public statement decides (a
 //!   protocol with optional rounds).
 //!
@@ -796,9 +798,22 @@ pub struct Squeeze<K, Next>(PhantomData<(K, Next)>);
 #[derive(Debug)]
 pub struct Peek<K, Next>(PhantomData<(K, Next)>);
 
-/// `Body` (a pattern ending in [`End`]) any number of times, then `Next`.
+/// `Body` (a pattern ending in [`End`]) `Count` times, then `Next`.
+///
+/// `Count` is [`Agreed`] (the default: as many times as the parties agree
+/// at run time, stepped by [`Tape::round`] and [`Tape::done`]) or
+/// [`Exactly<N>`] (`N` times, run by [`Tape::repeat`], which can do nothing
+/// else).
 #[derive(Debug)]
-pub struct Rounds<Body, Next>(PhantomData<(Body, Next)>);
+pub struct Rounds<Body, Next, Count = Agreed>(PhantomData<(Body, Next, Count)>);
+
+/// A number of rounds agreed at run time.
+#[derive(Debug)]
+pub struct Agreed;
+
+/// Exactly `N` rounds.
+#[derive(Debug)]
+pub struct Exactly<const N: usize>;
 
 /// `A` or `B`, as the statement decides.
 #[derive(Debug)]
@@ -915,6 +930,30 @@ where
     }
 }
 
+/// The counts of `N` rounds are exact: `N` times the body's, then `Next`'s,
+/// and the proof has one body proof per round. The description absorbs `N`,
+/// so two counts are two protocols.
+impl<Body, Next, const N: usize> Pattern for Rounds<Body, Next, Exactly<N>>
+where
+    Body: Pattern,
+    Next: Pattern,
+{
+    const MESSAGES: usize = N * Body::MESSAGES + Next::MESSAGES;
+    const CHALLENGES: usize = N * Body::CHALLENGES + Next::CHALLENGES;
+    type Proof = HCons<[<Body as Pattern>::Proof; N], <Next as Pattern>::Proof>;
+
+    fn describe<F, T>(transcript: &mut T)
+    where
+        F: Field,
+        T: Transcript<F>,
+    {
+        transcript.absorb(F::from_u64(tag::PATTERN_REPEAT));
+        transcript.absorb(F::from_u64(N as u64));
+        Body::describe(transcript);
+        Next::describe(transcript);
+    }
+}
+
 /// The counts of a [`Branch`] are the smaller of its branches'.
 impl<A, B> Pattern for Branch<A, B>
 where
@@ -972,11 +1011,11 @@ where
     type Tail<R> = Peek<K, Next::Tail<R>>;
 }
 
-impl<Body, Next> Sequence for Rounds<Body, Next>
+impl<Body, Next, Count> Sequence for Rounds<Body, Next, Count>
 where
     Next: Sequence,
 {
-    type Tail<R> = Rounds<Body, Next::Tail<R>>;
+    type Tail<R> = Rounds<Body, Next::Tail<R>, Count>;
 }
 
 impl<A, B> Sequence for Branch<A, B>
@@ -1078,6 +1117,59 @@ where
     #[must_use]
     pub fn done(self) -> Tape<F, T, Next> {
         self.moved()
+    }
+}
+
+impl<F, T, Body, Next, const N: usize> Tape<F, T, Rounds<Body, Next, Exactly<N>>>
+where
+    Body: Sequence,
+{
+    /// The `N` rounds: `round` gets the index and the tape at `Body`, and
+    /// must hand it back at [`End`], which only stepping through `Body` can
+    /// do; it is called exactly `N` times, and its results are returned in
+    /// order with the tape at `Next`.
+    pub fn repeat<X>(
+        self,
+        mut round: impl FnMut(usize, Tape<F, T, Tail<Body, End>>) -> (X, Tape<F, T, End>),
+    ) -> ([X; N], Tape<F, T, Next>) {
+        let result: Result<_, core::convert::Infallible> =
+            self.try_repeat(|i, tape| Ok(round(i, tape)));
+        match result {
+            Ok(done) => done,
+            Err(never) => match never {},
+        }
+    }
+
+    /// [`Tape::repeat`] for rounds that may refuse (a verifier): the first
+    /// error ends the protocol.
+    ///
+    /// # Errors
+    ///
+    /// The first error `round` returns.
+    #[allow(clippy::type_complexity)]
+    pub fn try_repeat<X, E>(
+        self,
+        mut round: impl FnMut(usize, Tape<F, T, Tail<Body, End>>) -> Result<(X, Tape<F, T, End>), E>,
+    ) -> Result<([X; N], Tape<F, T, Next>), E> {
+        let mut transcript = self.transcript;
+        let mut results = alloc::vec::Vec::with_capacity(N);
+        for i in 0..N {
+            let tape = Tape {
+                transcript,
+                marker: PhantomData,
+            };
+            let (x, end) = round(i, tape)?;
+            transcript = end.transcript;
+            results.push(x);
+        }
+        let Ok(results) = <[X; N]>::try_from(results) else {
+            unreachable!("exactly N rounds ran");
+        };
+        let tape = Tape {
+            transcript,
+            marker: PhantomData,
+        };
+        Ok((results, tape))
     }
 }
 
