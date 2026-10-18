@@ -12,8 +12,9 @@ use arrabbiata_kimchi::{
 use arrabbiata_kimchi_gadgets::LAYOUT;
 use arrabbiata_pasta::{Fp, Fq, Vesta};
 use arrabbiata_pickles::{
+    curve::{self, CHALLENGE_BITS, EndoScale, SCALAR_BITS, Shape},
     group::{self, GroupModel},
-    model::{Affine, Basic, Circuit, Constant, Inverse, LOAD, Load, load},
+    model::{Affine, Basic, Circuit, Constant, Hint, Inverse, LOAD, Load, load},
     scalar::{
         Constants, Inputs, OUTPUTS, Outputs, ScalarError, b_poly, combine, combined_inner_product,
         evaluations, flatten,
@@ -433,4 +434,165 @@ fn group_proof_in_deferred_in_outputs() {
         b: Fp::ONE,
     };
     assert_eq!((proof.rounds.len(), deferred.public.len()), (1, 0));
+}
+
+/// The shape of a one-chunk proof of 4 rounds, no previous accumulator,
+/// no public input.
+const SHAPE: Shape = Shape {
+    previous: 0,
+    chunks: 1,
+    quotient_chunks: 7,
+    rounds: 4,
+    public: 0,
+};
+
+#[test]
+fn curve_shape() {
+    // 25 + 2 * 4 points of two coordinates, two scalars, six values; five
+    // draws, four prechallenges, sg.
+    assert_eq!((SHAPE.inputs(), SHAPE.outputs()), (74, 11));
+    assert_eq!((CHALLENGE_BITS, SCALAR_BITS), (128, 255));
+}
+
+#[test]
+fn curve_flatten() {
+    let g = arrabbiata_curve::Projective::<Vesta>::generator();
+    let proof = group::ProofIn {
+        previous: vec![],
+        witness: core::array::from_fn(|_| vec![g]),
+        z: vec![g],
+        t: vec![g; 7],
+        rounds: vec![(g, g); 4],
+        delta: g,
+        z1: Fp::ONE,
+        z2: Fp::ONE,
+        sg: g,
+    };
+    let deferred = group::DeferredIn {
+        public: vec![],
+        perm: Fp::ONE,
+        zeta_to_srs_length: Fp::ONE,
+        zeta_to_domain_size: Fp::ONE,
+        xi: Fq::ONE,
+        combined_inner_product: Fp::ONE,
+        b: Fp::ONE,
+    };
+    let flat = curve::flatten(&proof, &deferred, |_| [Fq::ONE, Fq::ONE], |_| Fq::ZERO);
+    assert_eq!(flat.len(), SHAPE.inputs());
+}
+
+#[test]
+fn curve_group_half_and_size_error() {
+    // A size that is not the shape's is refused with the sizes it needs.
+    let index = index();
+    let base =
+        arrabbiata_poseidon::kimchi::KimchiSponge::new(arrabbiata_poseidon::kimchi::vesta_base());
+    let constants = group::Constants::new(&index.verifier_index, &index.srs, &base).unwrap();
+    let poseidon = arrabbiata_poseidon::kimchi::vesta_base();
+    let refused = curve::GroupHalf::<Vesta, 1, 11>::new(constants, &poseidon, SHAPE).err();
+    assert_eq!(
+        refused,
+        Some(curve::SizeError {
+            inputs: 74,
+            outputs: 11,
+        })
+    );
+}
+
+#[test]
+fn curve_endo_scale() {
+    // 32 rows of four bits, and the row its result lands on.
+    assert_eq!(<EndoScale<Fq> as TypedGadget<Fq>>::ROWS, 33);
+}
+
+/// The group map of `t` in the circuit model.
+#[derive(Clone, Copy, Debug)]
+struct MapInCircuit;
+
+impl TypedGadget<Fq> for MapInCircuit {
+    type Input = Array<Scalar, 1>;
+    type Output = Array<Scalar, 2>;
+    const NAME: &'static str = "map-in-circuit";
+    const ROWS: usize = 0;
+
+    fn rows(&self) -> usize {
+        measure(self, LAYOUT).unwrap_or(0)
+    }
+
+    fn synthesize<E: Env<Fq>>(
+        &self,
+        env: &mut E,
+        input: Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var> {
+        let cells = load(env, &input);
+        let mut m = Circuit::new(env);
+        let t = Affine::of(cells[0].clone());
+        let map = arrabbiata_kimchi::srs::GroupMap::<Vesta>::setup();
+        let (x, y) = map.to_group_in(&mut m, &t);
+        [m.cell(&x), m.cell(&y)]
+    }
+}
+
+#[test]
+fn curve_group_map_model() {
+    // In the circuit, the native point of the map: a witnessed choice and
+    // ordinate, constrained to the curve.
+    let t = Fq::from_u64(1234);
+    let p = arrabbiata_kimchi::srs::GroupMap::<Vesta>::setup().to_group(t);
+    let out = evaluate(&MapInCircuit, LAYOUT, &[t]).unwrap();
+    assert_eq!(out, [p.x().unwrap(), p.y().unwrap()]);
+    let (_, witnessed) =
+        arrabbiata_gadget::witness::<Fq, _, 64, 7>(&MapInCircuit, LAYOUT, &[t]).unwrap();
+    assert_eq!(witnessed, out);
+}
+
+/// A witnessed square of the input, asserted equal to `x * x`, or (when
+/// `wrong`) to `x * x + 1`.
+#[derive(Clone, Copy, Debug)]
+struct Squared {
+    wrong: bool,
+}
+
+impl TypedGadget<Fq> for Squared {
+    type Input = Array<Scalar, 1>;
+    type Output = Scalar;
+    const NAME: &'static str = "squared";
+    const ROWS: usize = 0;
+
+    fn rows(&self) -> usize {
+        measure(self, LAYOUT).unwrap_or(0)
+    }
+
+    fn synthesize<E: Env<Fq>>(&self, env: &mut E, input: Of<Self::Input, E::Var>) -> E::Var {
+        let cells = load(env, &input);
+        let mut m = Circuit::new(env);
+        let x = Affine::of(cells[0].clone());
+        let hinted = m.witness([&x], |[v]| v * v);
+        let squared = m.mul(&x, &x);
+        let target = if self.wrong {
+            m.add(&squared, &Affine::constant(Fq::ONE))
+        } else {
+            squared
+        };
+        m.assert_equal(&hinted, &target);
+        m.cell(&hinted)
+    }
+}
+
+#[test]
+fn model_hint_witness_assert_equal() {
+    // A hint is a witness cell of the inputs' values; an equality is a copy
+    // constraint, so a false one has no satisfying witness.
+    let x = Fq::from_u64(9);
+    assert_eq!(
+        evaluate(&Squared { wrong: false }, LAYOUT, &[x]).unwrap(),
+        Fq::from_u64(81)
+    );
+    assert!(
+        arrabbiata_gadget::witness::<Fq, _, 64, 7>(&Squared { wrong: false }, LAYOUT, &[x]).is_ok()
+    );
+    assert!(
+        arrabbiata_gadget::witness::<Fq, _, 64, 7>(&Squared { wrong: true }, LAYOUT, &[x]).is_err()
+    );
+    assert_eq!(<Hint<fn([Fq; 1]) -> Fq, 1> as TypedGadget<Fq>>::ROWS, 1);
 }

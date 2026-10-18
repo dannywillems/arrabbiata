@@ -187,6 +187,34 @@ where
     env.call(&row, [a, b, c, d, e, f]);
 }
 
+/// A witness cell holding `hint` of the values of `K` cells, in column 0 of
+/// a row of its own, with no gate: unconstrained, so whoever asks for it
+/// constrains it (a point to scale back, a choice to check).
+#[derive(Clone, Copy, Debug)]
+pub struct Hint<H, const K: usize> {
+    /// The value of the cell, from the inputs' values.
+    pub hint: H,
+}
+
+impl<F, H, const K: usize> TypedGadget<F> for Hint<H, K>
+where
+    F: Field,
+    H: Fn([F; K]) -> F,
+{
+    type Input = Array<Scalar, K>;
+    type Output = Scalar;
+    const NAME: &'static str = "pickles-hint";
+    const ROWS: usize = 1;
+
+    fn synthesize<E>(&self, env: &mut E, input: Of<Self::Input, E::Var>) -> Of<Scalar, E::Var>
+    where
+        E: Env<F>,
+    {
+        let inputs: [&E::Var; K] = core::array::from_fn(|i| &input[i]);
+        env.advice(Cell::new(0, 0), inputs, |v| (self.hint)(v))
+    }
+}
+
 /// The cells a row of permuted columns holds: Kimchi copies between its
 /// first seven columns.
 pub const LOAD: usize = 7;
@@ -272,6 +300,24 @@ where
             }
             None => self.env.call(&Constant { value: a.offset }, ()),
         }
+    }
+
+    /// A value of a witness cell holding `hint` of the values of `inputs`,
+    /// unconstrained ([`Hint`]): the caller constrains it.
+    pub fn witness<const K: usize>(
+        &mut self,
+        inputs: [&Affine<E::Var, F>; K],
+        hint: impl Fn([F; K]) -> F,
+    ) -> Affine<E::Var, F> {
+        let cells: [E::Var; K] = core::array::from_fn(|i| self.cell(inputs[i]));
+        Affine::of(self.env.call(&Hint { hint }, cells))
+    }
+
+    /// Constrain `a` and `b` to be equal: their cells wired by a copy
+    /// constraint.
+    pub fn assert_equal(&mut self, a: &Affine<E::Var, F>, b: &Affine<E::Var, F>) {
+        let (x, y) = (self.cell(a), self.cell(b));
+        self.env.connect(&x, &y);
     }
 
     /// The Basic row of `coefficients` on `x` and `y`, as a value.

@@ -289,15 +289,19 @@ pub struct DeferredIn<V, S> {
 }
 
 /// What the group half computes: the draws to compare with the deferred
-/// ones, and the point that is the identity exactly when the opening holds.
+/// ones, and the two sides of the IPA's final equation, equal exactly when
+/// the opening holds (Pickles asserts them equal rather than subtracting,
+/// which would need the point at infinity).
 #[derive(Clone, Debug)]
 pub struct Outputs<V, P> {
     /// The base transcript's draws (128-bit challenges unmapped).
     pub drawn: PiopChallenges<V>,
     /// The IPA's round challenges, unmapped (Pickles' prechallenges).
     pub prechallenges: Vec<V>,
-    /// The IPA's final expression: the identity when the opening holds.
-    pub expression: P,
+    /// `[c] Q + delta`.
+    pub left: P,
+    /// `[z1] (sg + [b] U) + [z2] H`.
+    pub right: P,
     /// The IPA's `sg`, the new accumulator's commitment.
     pub sg: P,
 }
@@ -491,7 +495,7 @@ where
     sponge.absorb_value(&delta.y);
     let c = sponge.challenge_read();
     let mut m = model.borrow_mut();
-    // [c] Q + delta - [z1] (sg + [b] U) - [z2] H.
+    // [c] Q + delta = [z1] (sg + [b] U) + [z2] H.
     let cq = m.endo_scale(&q, &c);
     let left = m.add_points(&cq, &proof.delta);
     let b_u = m.scale_point(&u, &deferred.b);
@@ -500,11 +504,11 @@ where
     let h = m.constant_point(&constants.h);
     let z2_term = m.scale_point(&h, &proof.z2);
     let right = m.add_points(&z1_term, &z2_term);
-    let expression = m.sub_points(&left, &right);
     Outputs {
         drawn,
         prechallenges,
-        expression,
+        left,
+        right,
         sg: proof.sg.clone(),
     }
 }

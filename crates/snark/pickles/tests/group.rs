@@ -6,24 +6,28 @@ use core::cell::RefCell;
 
 use arrabbiata_curve::{glv::Glv, msm};
 use arrabbiata_field::{Field, Native, PrimeField};
-use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, Unit};
-use arrabbiata_ipa::{RecursionChallenge, b_poly_coefficients};
+use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, Unit, evaluate, witness};
+use arrabbiata_ipa::{RecursionChallenge, b_poly_coefficients, generic::shift_scalar};
 use arrabbiata_kimchi::{
     compiled,
     constraints::{CircuitGate, ConstraintSystem},
     deferred::{expand_deferred, group_half},
     gates::KimchiGates,
-    oracle::{BaseReading, ScalarChallenge},
+    oracle::{BaseReading, ScalarChallenge, coordinates},
     prover::{ProverIndex, ProverProof, prove},
     rng::{Arkworks, SplitMix64},
     srs::Srs,
 };
 use arrabbiata_kimchi_gadgets::{
+    LAYOUT,
     generic::{Generic, GenericSpec},
     poseidon::{PoseidonPermutation, ROWS_PER_PERMUTATION},
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
-use arrabbiata_pickles::group::{Constants, DeferredIn, ProofIn, group_half_in};
+use arrabbiata_pickles::{
+    curve::{GroupHalf, Shape, flatten},
+    group::{Constants, DeferredIn, ProofIn, group_half_in},
+};
 use arrabbiata_poseidon::kimchi::{KimchiPoseidon, KimchiSponge, WIDTH, pallas_base, vesta_base};
 
 /// The column variables and the degree of the compiled circuits.
@@ -204,7 +208,7 @@ fn natively(index: &ProverIndex<Vesta>, proof: &ProverProof<Vesta>, public: &[Fp
     let poseidon = vesta_base();
     let model = RefCell::new(Native);
     let out = group_half_in::<Vesta, _>(&model, &poseidon, &constants, &proof_in, &deferred);
-    assert!(out.expression.is_identity(), "the opening holds");
+    assert_eq!(out.left, out.right, "the opening holds");
     let drawn = &out.drawn;
     assert_eq!(ScalarChallenge(to_scalar(drawn.alpha)), values.plonk.alpha);
     assert_eq!(to_scalar(drawn.beta), values.plonk.beta);
@@ -238,13 +242,13 @@ fn natively(index: &ProverIndex<Vesta>, proof: &ProverProof<Vesta>, public: &[Fp
         ..deferred.clone()
     };
     let out = group_half_in::<Vesta, _>(&model, &poseidon, &constants, &proof_in, &wrong_b);
-    assert!(!out.expression.is_identity(), "a false b");
+    assert_ne!(out.left, out.right, "a false b");
     let wrong_z1 = ProofIn {
         z1: proof_in.z1 + Fp::ONE,
         ..proof_in.clone()
     };
     let out = group_half_in::<Vesta, _>(&model, &poseidon, &constants, &wrong_z1, &deferred);
-    assert!(!out.expression.is_identity(), "a false z1");
+    assert_ne!(out.left, out.right, "a false z1");
 }
 
 /// The fixture's input.
@@ -312,4 +316,101 @@ fn the_group_half_with_a_public_input() {
     )
     .unwrap();
     natively(&index, &proof, &public);
+}
+
+/// The column variables and the degree of the group half's circuits.
+const GROUP_VARIABLES: usize = 64;
+const GROUP_DEGREE: usize = 7;
+
+/// A scalar of Vesta, as the circuit over Fq holds it: its shifted value
+/// (`Shifted_value.Type1`), which fits Fq.
+fn shifted(s: &Fp) -> Fq {
+    let t = shift_scalar::<Vesta>(*s);
+    Fq::from_limbs(&(0..4).map(|i| t.limb(i)).collect::<Vec<_>>()).unwrap()
+}
+
+/// The group half as a circuit of input size `N` and output size `M` on
+/// `proof`: the native outputs, a witness that satisfies it; a false `b`
+/// leaves no satisfying witness.
+fn as_a_circuit<const N: usize, const M: usize>(
+    index: &ProverIndex<Vesta>,
+    proof: &ProverProof<Vesta>,
+    public: &[Fp],
+) {
+    let (constants, proof_in, deferred, _) = inputs_of(index, proof, public);
+    let poseidon = vesta_base();
+    let model = RefCell::new(Native);
+    let native = group_half_in::<Vesta, _>(&model, &poseidon, &constants, &proof_in, &deferred);
+    let mut expected = vec![
+        native.drawn.alpha,
+        native.drawn.beta,
+        native.drawn.gamma,
+        native.drawn.zeta,
+        native.drawn.digest,
+    ];
+    expected.extend(&native.prechallenges);
+    let (sx, sy) = coordinates(&native.sg);
+    expected.extend([sx, sy]);
+
+    let shape = Shape {
+        previous: proof_in.previous.len(),
+        chunks: proof_in.z.len(),
+        quotient_chunks: proof_in.t.len(),
+        rounds: proof_in.rounds.len(),
+        public: public.len(),
+    };
+    let gadget = GroupHalf::<Vesta, N, M>::new(constants, &poseidon, shape).unwrap();
+    let point = |p: &arrabbiata_curve::Projective<Vesta>| {
+        let (x, y) = coordinates(p);
+        [x, y]
+    };
+    let flat: [Fq; N] = flatten(&proof_in, &deferred_in_fq(&deferred), point, shifted)
+        .try_into()
+        .unwrap();
+    let out = evaluate(&gadget, LAYOUT, &flat).unwrap();
+    assert_eq!(out.to_vec(), expected, "circuit output");
+    let (_, witnessed) =
+        witness::<Fq, _, GROUP_VARIABLES, GROUP_DEGREE>(&gadget, LAYOUT, &flat).unwrap();
+    assert_eq!(witnessed.to_vec(), expected, "witness");
+
+    let wrong = DeferredIn {
+        b: deferred.b + Fp::ONE,
+        ..deferred.clone()
+    };
+    let flat: [Fq; N] = flatten(&proof_in, &deferred_in_fq(&wrong), point, shifted)
+        .try_into()
+        .unwrap();
+    // Refused by the group half's own constraint: the copy wiring the IPA's
+    // two sides together, not by a gadget inside it.
+    let refused = witness::<Fq, _, GROUP_VARIABLES, GROUP_DEGREE>(&gadget, LAYOUT, &flat).err();
+    assert!(
+        matches!(
+            refused,
+            Some(arrabbiata_gadget::Error::Unsatisfied {
+                gadget: "pickles-group-half",
+                ..
+            })
+        ),
+        "a false b breaks the final equation: {refused:?}"
+    );
+}
+
+/// The deferred values with `xi` kept as it is (a base-field value) and the
+/// scalars as they are, for [`flatten`]'s scalar map.
+fn deferred_in_fq(d: &DeferredIn<Fq, Fp>) -> DeferredIn<Fq, Fp> {
+    d.clone()
+}
+
+#[test]
+fn the_group_half_as_a_circuit() {
+    let poseidon = pallas_base();
+    let fixture = Fixture {
+        poseidon: &poseidon,
+    };
+    let input = INPUT.map(Fp::from_u64);
+    let (index, columns) = indexed(&fixture, &input, 0, None);
+    let proof = proved(&index, columns, &[]);
+    let rounds = proof.proof.lr.len();
+    assert_eq!(rounds, 4, "the shape below is for 4 rounds");
+    as_a_circuit::<74, 11>(&index, &proof, &[]);
 }
