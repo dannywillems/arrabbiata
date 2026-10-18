@@ -20,7 +20,5 @@ arrabbiata-poly = { workspace = true }
 arrabbiata-poseidon = { workspace = true }
 arrabbiata-transcript = { workspace = true }
 
-[dev-dependencies]
-
 [lints]
 workspace = true

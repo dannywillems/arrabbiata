@@ -16,9 +16,16 @@
 //! - The group map's choice is two witnessed booleans picking a candidate
 //!   and a witnessed ordinate on the curve.
 //!
-//! Deviation: only the shifted form of a scalar field smaller than the base
-//! field (Type1, a Vesta proof in a circuit over Vesta's base field) is
-//! held; Type2, for the other side of the cycle, is not written yet.
+//! A scalar of the other field is held as Kimchi absorbs it ([`Shifted`]):
+//! Type1, one cell `t` with `s = 2 t + 2^255 + 1`, when the scalar field is
+//! the smaller (a Vesta proof in a circuit over `Fq`); Type2, the high bits
+//! and the low bit of `t` with `s = t + 2^255`, when it is the larger (a
+//! Pallas proof in a circuit over `Fp`), scaled as Pickles' `scale_fast2`.
+//!
+//! Deviation: Type2's high part is pinned to its bits but not to 254 of
+//! them (Mina constrains the top bit to zero), so `2 high + low` may be a
+//! non-canonical representative of the scalar, the same scalar modulo the
+//! group order.
 
 use alloc::{vec, vec::Vec};
 use core::cell::RefCell;
@@ -138,7 +145,7 @@ where
     E: Env<C::Base>,
 {
     type Point = [E::Var; 2];
-    type Scalar = Affine<E::Var, C::Base>;
+    type Scalar = Shifted<Affine<E::Var, C::Base>>;
 
     /// The coordinates of `p` as constants (the identity as `(0, 0)`, which
     /// the gates cannot add: the group half never embeds it).
@@ -175,6 +182,11 @@ where
         [a[0].clone(), self.cell(&minus)]
     }
 
+    /// Type1: `[2 t + 2^255 + 1] p`, VarBaseMul over the bits of `t` from
+    /// `2 p`. Type2: the same over the high part `h`, which is
+    /// `[2 h + 1 + 2^255] p`, then `p` taken off when the low bit is zero, so
+    /// `[t + 2^255] p` (Pickles' `scale_fast2`).
+    ///
     /// # Panics
     ///
     /// If the scalars of `C` do not have 255 bits.
@@ -185,14 +197,29 @@ where
             "the shifted form is over 255 bits"
         );
         let double = GroupModel::<C>::add_points(self, p, p);
-        let t = self.cell(s);
+        let t = self.cell(&s.high);
         let n0 = self.cell(&Affine::constant(C::Base::ZERO));
         let (acc, n) = self.env().call(
             &VarBaseMulOf::<SCALAR_BITS>,
             (p.clone(), double, t.clone(), n0),
         );
         self.env().connect(&n, &t);
-        acc
+        let Some(low) = &s.low else {
+            return acc;
+        };
+        let squared = self.mul(low, low);
+        self.assert_equal(&squared, low);
+        let minus = GroupModel::<C>::neg_point(self, p);
+        let less = GroupModel::<C>::add_points(self, &acc, &minus);
+        // low h + (1 - low) (h - p), coordinate by coordinate.
+        let pick = |m: &mut Self, a: &E::Var, b: &E::Var| {
+            let (a, b) = (Affine::of(a.clone()), Affine::of(b.clone()));
+            let difference = m.sub(&a, &b);
+            let scaled = m.mul(low, &difference);
+            let chosen = m.add(&scaled, &b);
+            m.cell(&chosen)
+        };
+        [pick(self, &acc[0], &less[0]), pick(self, &acc[1], &less[1])]
     }
 
     fn endo_scale(&mut self, p: &[E::Var; 2], chal: &Self::Value) -> [E::Var; 2] {
@@ -230,20 +257,73 @@ where
         q
     }
 
-    /// The shifted value itself, as a scalar smaller than the base field
-    /// is absorbed.
+    /// The cells of the shifted value: what Kimchi absorbs for it.
+    fn shifted_elements(&mut self, s: &Self::Scalar) -> Vec<Self::Value> {
+        s.elements()
+    }
+}
+
+/// A scalar of the other field as a circuit holds it, in the cells Kimchi
+/// absorbs for it: Type1, `high` the shifted value `t` and no `low`;
+/// Type2, `high` and `low` the high bits and the low bit of `t`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Shifted<V> {
+    /// `t`, or its high bits.
+    pub high: V,
+    /// The low bit of `t`, for Type2.
+    pub low: Option<V>,
+}
+
+impl<V: Clone> Shifted<V> {
+    /// The scalar of the cells `values` (one for Type1, two for Type2).
     ///
     /// # Panics
     ///
-    /// If the scalar field of `C` is not the smaller (Type2, not written).
-    fn shifted_elements(&mut self, s: &Self::Scalar) -> Vec<Self::Value> {
-        assert_eq!(
-            scalar_elements::<C>(C::Scalar::ZERO).len(),
-            1,
-            "only the shifted form of a smaller scalar field is held"
-        );
-        vec![s.clone()]
+    /// If `values` has neither one nor two cells.
+    #[must_use]
+    pub fn of(values: &[V]) -> Self {
+        match values {
+            [t] => Self {
+                high: t.clone(),
+                low: None,
+            },
+            [high, low] => Self {
+                high: high.clone(),
+                low: Some(low.clone()),
+            },
+            _ => panic!("a shifted scalar is one or two cells"),
+        }
     }
+
+    /// Its cells, in order.
+    #[must_use]
+    pub fn elements(&self) -> Vec<V> {
+        let mut out = vec![self.high.clone()];
+        out.extend(self.low.clone());
+        out
+    }
+}
+
+/// The cells a scalar `s` of `C` is held in by a circuit over its base
+/// field: those Kimchi absorbs for its shifted value, one (Type1) or two
+/// (Type2).
+#[must_use]
+pub fn held<C>(s: C::Scalar) -> Vec<C::Base>
+where
+    C: Glv,
+    C::Base: PrimeField,
+{
+    scalar_elements::<C>(arrabbiata_ipa::generic::shift_scalar::<C>(s))
+}
+
+/// The cells of one scalar of `C`: one or two.
+#[must_use]
+pub fn scalar_width<C>() -> usize
+where
+    C: Glv,
+    C::Base: PrimeField,
+{
+    scalar_elements::<C>(C::Scalar::ZERO).len()
 }
 
 /// The shape of a proof the group half circuit reads: how many of each
@@ -260,6 +340,8 @@ pub struct Shape {
     pub rounds: usize,
     /// The public input's length.
     pub public: usize,
+    /// The cells of a scalar ([`scalar_width`]).
+    pub width: usize,
 }
 
 impl Shape {
@@ -277,7 +359,7 @@ impl Shape {
     /// coordinates, scalars as their shifted value.
     #[must_use]
     pub const fn inputs(&self) -> usize {
-        2 * self.points() + 2 + self.public + 6
+        2 * self.points() + self.width * (2 + self.public + 5) + 1
     }
 
     /// The size of the output: the five draws, the prechallenges and `sg`.
@@ -296,7 +378,7 @@ pub fn flatten<P, S, V>(
     proof: &ProofIn<P, S>,
     deferred: &DeferredIn<V, S>,
     point: impl Fn(&P) -> [V; 2],
-    scalar: impl Fn(&S) -> V,
+    scalar: impl Fn(&S) -> Vec<V>,
 ) -> Vec<V>
 where
     V: Clone,
@@ -314,51 +396,67 @@ where
     points.push(&proof.delta);
     points.push(&proof.sg);
     let mut out: Vec<V> = points.into_iter().flat_map(&point).collect();
-    out.push(scalar(&proof.z1));
-    out.push(scalar(&proof.z2));
-    out.extend(deferred.public.iter().map(&scalar));
-    out.push(scalar(&deferred.perm));
-    out.push(scalar(&deferred.zeta_to_srs_length));
-    out.push(scalar(&deferred.zeta_to_domain_size));
+    out.extend(scalar(&proof.z1));
+    out.extend(scalar(&proof.z2));
+    out.extend(deferred.public.iter().flat_map(&scalar));
+    out.extend(scalar(&deferred.perm));
+    out.extend(scalar(&deferred.zeta_to_srs_length));
+    out.extend(scalar(&deferred.zeta_to_domain_size));
     out.push(deferred.xi.clone());
-    out.push(scalar(&deferred.combined_inner_product));
-    out.push(scalar(&deferred.b));
+    out.extend(scalar(&deferred.combined_inner_product));
+    out.extend(scalar(&deferred.b));
     out
 }
 
+/// The values of a flat input, read in order.
+struct Reader<'a, V> {
+    flat: &'a [V],
+    at: usize,
+}
+
+impl<V: Clone> Reader<'_, V> {
+    /// The next value.
+    fn value(&mut self) -> V {
+        let v = self.flat[self.at].clone();
+        self.at += 1;
+        v
+    }
+
+    /// The next point.
+    fn point(&mut self) -> [V; 2] {
+        [self.value(), self.value()]
+    }
+
+    /// The next `n` points.
+    fn points(&mut self, n: usize) -> Vec<[V; 2]> {
+        (0..n).map(|_| self.point()).collect()
+    }
+
+    /// The next scalar, of `width` cells.
+    fn scalar(&mut self, width: usize) -> Shifted<V> {
+        let cells: Vec<V> = (0..width).map(|_| self.value()).collect();
+        Shifted::of(&cells)
+    }
+}
+
 /// The proof and deferred values of the flat input `flat` of `shape`, the
-/// inverse of [`flatten`]: points of two cells, scalars and values of one.
-fn unflatten<V: Clone>(shape: &Shape, flat: &[V]) -> (ProofIn<[V; 2], V>, DeferredIn<V, V>) {
-    let mut next = flat.iter().cloned();
-    let mut take = || match next.next() {
-        Some(v) => v,
-        None => unreachable!("the input has the shape's size"),
-    };
-    let mut point = || [take(), take()];
-    let mut points = |n: usize| (0..n).map(|_| point()).collect::<Vec<_>>();
-    let previous = points(shape.previous);
-    let witness: [Vec<[V; 2]>; COLUMNS] = core::array::from_fn(|_| points(shape.chunks));
-    let z = points(shape.chunks);
-    let t = points(shape.quotient_chunks);
-    let rounds = (0..shape.rounds)
-        .map(|_| {
-            let mut two = points(2);
-            let r = two.pop();
-            let l = two.pop();
-            match (l, r) {
-                (Some(l), Some(r)) => (l, r),
-                _ => unreachable!("two points"),
-            }
-        })
-        .collect();
-    let mut last = points(2);
-    let (sg, delta) = match (last.pop(), last.pop()) {
-        (Some(sg), Some(delta)) => (sg, delta),
-        _ => unreachable!("two points"),
-    };
-    let z1 = take();
-    let z2 = take();
-    let public = (0..shape.public).map(|_| take()).collect();
+/// inverse of [`flatten`]: points of two cells, scalars of `shape.width`.
+#[allow(clippy::type_complexity)]
+fn unflatten<V: Clone>(
+    shape: &Shape,
+    flat: &[V],
+) -> (ProofIn<[V; 2], Shifted<V>>, DeferredIn<V, Shifted<V>>) {
+    let mut r = Reader { flat, at: 0 };
+    let w = shape.width;
+    let previous = r.points(shape.previous);
+    let witness: [Vec<[V; 2]>; COLUMNS] = core::array::from_fn(|_| r.points(shape.chunks));
+    let z = r.points(shape.chunks);
+    let t = r.points(shape.quotient_chunks);
+    let rounds = (0..shape.rounds).map(|_| (r.point(), r.point())).collect();
+    let delta = r.point();
+    let sg = r.point();
+    let z1 = r.scalar(w);
+    let z2 = r.scalar(w);
     let proof = ProofIn {
         previous,
         witness,
@@ -371,13 +469,13 @@ fn unflatten<V: Clone>(shape: &Shape, flat: &[V]) -> (ProofIn<[V; 2], V>, Deferr
         sg,
     };
     let deferred = DeferredIn {
-        public,
-        perm: take(),
-        zeta_to_srs_length: take(),
-        zeta_to_domain_size: take(),
-        xi: take(),
-        combined_inner_product: take(),
-        b: take(),
+        public: (0..shape.public).map(|_| r.scalar(w)).collect(),
+        perm: r.scalar(w),
+        zeta_to_srs_length: r.scalar(w),
+        zeta_to_domain_size: r.scalar(w),
+        xi: r.value(),
+        combined_inner_product: r.scalar(w),
+        b: r.scalar(w),
     };
     (proof, deferred)
 }
@@ -454,13 +552,12 @@ where
         E: Env<C::Base>,
     {
         let cells = load(env, &input);
-        let (points, values) = {
-            let p: Vec<E::Var> = cells.clone();
-            let v: Vec<Affine<E::Var, C::Base>> = cells.into_iter().map(Affine::of).collect();
-            (p, v)
+        let (cell_proof, cell_deferred) = unflatten(&self.shape, &cells);
+        let value = |v: &E::Var| Affine::of(v.clone());
+        let scalar = |s: &Shifted<E::Var>| Shifted {
+            high: value(&s.high),
+            low: s.low.as_ref().map(value),
         };
-        let (cell_proof, _) = unflatten(&self.shape, &points);
-        let (value_proof, deferred) = unflatten(&self.shape, &values);
         let proof = ProofIn {
             previous: cell_proof.previous,
             witness: cell_proof.witness,
@@ -468,9 +565,18 @@ where
             t: cell_proof.t,
             rounds: cell_proof.rounds,
             delta: cell_proof.delta,
-            z1: value_proof.z1,
-            z2: value_proof.z2,
+            z1: scalar(&cell_proof.z1),
+            z2: scalar(&cell_proof.z2),
             sg: cell_proof.sg,
+        };
+        let deferred = DeferredIn {
+            public: cell_deferred.public.iter().map(scalar).collect(),
+            perm: scalar(&cell_deferred.perm),
+            zeta_to_srs_length: scalar(&cell_deferred.zeta_to_srs_length),
+            zeta_to_domain_size: scalar(&cell_deferred.zeta_to_domain_size),
+            xi: value(&cell_deferred.xi),
+            combined_inner_product: scalar(&cell_deferred.combined_inner_product),
+            b: scalar(&cell_deferred.b),
         };
         let model = RefCell::new(Circuit::new(env));
         let out = group_half_in::<C, _>(&model, self.poseidon, &self.constants, &proof, &deferred);

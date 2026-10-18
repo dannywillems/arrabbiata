@@ -12,7 +12,7 @@ use arrabbiata_kimchi::{
 use arrabbiata_kimchi_gadgets::LAYOUT;
 use arrabbiata_pasta::{Fp, Fq, Vesta};
 use arrabbiata_pickles::{
-    curve::{self, CHALLENGE_BITS, EndoScale, SCALAR_BITS, Shape},
+    curve::{self, CHALLENGE_BITS, EndoScale, SCALAR_BITS, Shape, Shifted, held, scalar_width},
     group::{self, GroupModel},
     model::{Affine, Basic, Circuit, Constant, Hint, Inverse, LOAD, Load, load},
     scalar::{
@@ -445,6 +445,7 @@ const SHAPE: Shape = Shape {
     quotient_chunks: 7,
     rounds: 4,
     public: 0,
+    width: 1,
 };
 
 #[test]
@@ -478,7 +479,12 @@ fn curve_flatten() {
         combined_inner_product: Fp::ONE,
         b: Fp::ONE,
     };
-    let flat = curve::flatten(&proof, &deferred, |_| [Fq::ONE, Fq::ONE], |_| Fq::ZERO);
+    let flat = curve::flatten(
+        &proof,
+        &deferred,
+        |_| [Fq::ONE, Fq::ONE],
+        |_| vec![Fq::ZERO],
+    );
     assert_eq!(flat.len(), SHAPE.inputs());
 }
 
@@ -673,4 +679,36 @@ fn wrap_new_refuses_a_wrong_size() {
     let refused =
         wrap::Wrap::<1, 1>::new(&index.verifier_index, &index.srs, &poseidon, shape).err();
     assert_eq!(refused, Some(wrap::Error::Size));
+}
+
+#[test]
+fn curve_shifted() {
+    // One cell is Type1, two are Type2; its cells are what it was made of.
+    let one = Shifted::of(&[Fq::ONE]);
+    assert_eq!((one.high, one.low), (Fq::ONE, None));
+    let two = Shifted::of(&[Fq::from_u64(3), Fq::ONE]);
+    assert_eq!(two.elements(), vec![Fq::from_u64(3), Fq::ONE]);
+}
+
+#[test]
+fn curve_held_and_scalar_width() {
+    // Vesta's scalars (the smaller field) take one cell of Fq, Pallas's two
+    // of Fp: the shifted value as Kimchi absorbs it.
+    assert_eq!(
+        (
+            scalar_width::<Vesta>(),
+            scalar_width::<arrabbiata_pasta::Pallas>()
+        ),
+        (1, 2)
+    );
+    assert_eq!(
+        held::<Vesta>(Fp::from_u64(9)),
+        vec![wrap::shifted(Fp::from_u64(9))]
+    );
+    let [high, low]: [Fp; 2] = held::<arrabbiata_pasta::Pallas>(Fq::from_u64(9))
+        .try_into()
+        .unwrap();
+    let t = arrabbiata_ipa::generic::shift_scalar::<arrabbiata_pasta::Pallas>(Fq::from_u64(9));
+    let back = |x: Fp| Fq::from_limbs(&(0..4).map(|i| x.limb(i)).collect::<Vec<_>>()).unwrap();
+    assert_eq!(back(high) + back(high) + back(low), t);
 }

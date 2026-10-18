@@ -359,15 +359,18 @@ fn as_a_circuit<const N: usize, const M: usize>(
         quotient_chunks: proof_in.t.len(),
         rounds: proof_in.rounds.len(),
         public: public.len(),
+        width: 1,
     };
     let gadget = GroupHalf::<Vesta, N, M>::new(constants, &poseidon, shape).unwrap();
     let point = |p: &arrabbiata_curve::Projective<Vesta>| {
         let (x, y) = coordinates(p);
         [x, y]
     };
-    let flat: [Fq; N] = flatten(&proof_in, &deferred_in_fq(&deferred), point, shifted)
-        .try_into()
-        .unwrap();
+    let flat: [Fq; N] = flatten(&proof_in, &deferred_in_fq(&deferred), point, |s| {
+        vec![shifted(s)]
+    })
+    .try_into()
+    .unwrap();
     let out = evaluate(&gadget, LAYOUT, &flat).unwrap();
     assert_eq!(out.to_vec(), expected, "circuit output");
     let (_, witnessed) =
@@ -378,9 +381,11 @@ fn as_a_circuit<const N: usize, const M: usize>(
         b: deferred.b + Fp::ONE,
         ..deferred.clone()
     };
-    let flat: [Fq; N] = flatten(&proof_in, &deferred_in_fq(&wrong), point, shifted)
-        .try_into()
-        .unwrap();
+    let flat: [Fq; N] = flatten(&proof_in, &deferred_in_fq(&wrong), point, |s| {
+        vec![shifted(s)]
+    })
+    .try_into()
+    .unwrap();
     // Refused by the group half's own constraint: the copy wiring the IPA's
     // two sides together, not by a gadget inside it.
     let refused = witness::<Fq, _, GROUP_VARIABLES, GROUP_DEGREE>(&gadget, LAYOUT, &flat).err();

@@ -47,6 +47,7 @@ use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiPoseidon, KimchiSponge, pallas_base, vesta_base};
 
 use crate::{
+    curve::Shifted,
     group::{Constants, DeferredIn, ProofIn, group_half_in},
     model::{Affine, Circuit, load},
     scalar::{self, Inputs, scalar_half},
@@ -468,9 +469,13 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
         let t = (0..shape.quotient_chunks).map(|_| point()).collect();
         let rounds = (0..shape.rounds).map(|_| (point(), point())).collect();
         let delta = point();
-        let z1 = Affine::of(take());
-        let z2 = Affine::of(take());
         let value = |v: &E::Var| Affine::of(v.clone());
+        let type1 = |v: &E::Var| Shifted {
+            high: value(v),
+            low: None,
+        };
+        let z1 = type1(&take());
+        let z2 = type1(&take());
         let proof = ProofIn {
             previous: vec![],
             witness,
@@ -483,13 +488,13 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
             sg: st.sg.clone(),
         };
         let deferred = DeferredIn {
-            public: st.step_public.iter().map(value).collect(),
-            perm: value(&st.perm),
-            zeta_to_srs_length: value(&st.zeta_to_srs_length),
-            zeta_to_domain_size: value(&st.zeta_to_domain_size),
+            public: st.step_public.iter().map(type1).collect(),
+            perm: type1(&st.perm),
+            zeta_to_srs_length: type1(&st.zeta_to_srs_length),
+            zeta_to_domain_size: type1(&st.zeta_to_domain_size),
             xi: value(&st.xi),
-            combined_inner_product: value(&st.combined_inner_product),
-            b: value(&st.b),
+            combined_inner_product: type1(&st.combined_inner_product),
+            b: type1(&st.b),
         };
         let model = RefCell::new(Circuit::new(env));
         let out =
