@@ -19,7 +19,7 @@ use arrabbiata_reduction::{Batch, Output, OutputOf, Reduction, Then};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_slice,
     hlist::HNil,
-    typed::{Challenge, End, Label, ProofOf, Protocol, Public, prover_tape, verifier_tape},
+    typed::{Challenge, End, Label, ProofOf, Protocol, Public, Tape, prover_tape, verifier_tape},
 };
 
 use crate::{Ipa, IpaProof, RecursionChallenge, Statement};
@@ -53,8 +53,11 @@ where
     }
 }
 
-/// Absorb the combined claim and draw `evalscale`, which combines its
-/// points: what the IPA's prover and verifier both do first.
+/// The first step of the IPA's prover and verifier: the combined claim is
+/// public, then `evalscale`, which combines its points, is drawn.
+type Evalscale<F, C, P> = Public<arrabbiata_halo::PointClaim<F, C, P>, Challenge<End>>;
+
+/// [`Evalscale`] on `transcript`: `evalscale`.
 fn evalscale<F, C, P, T>(transcript: &mut T, claim: &arrabbiata_halo::PointClaim<F, C, P>) -> F
 where
     F: arrabbiata_field::Field,
@@ -62,8 +65,10 @@ where
     P: Absorb<F>,
     T: Transcript<F>,
 {
-    claim.absorb_into(transcript);
-    transcript.squeeze()
+    let tape: Tape<F, &mut T, Evalscale<F, C, P>> = Tape::undescribed(transcript);
+    let (evalscale, tape) = tape.public(claim).challenge();
+    let _ = tape.finish();
+    evalscale
 }
 
 /// `sum_j evalscale^j v_j`.

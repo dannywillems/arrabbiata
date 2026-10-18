@@ -23,7 +23,11 @@ use arrabbiata_curve::{Curve, Pairing, Projective, absorb_point};
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_halo::{Accumulation, ClaimsOf, Combine, PointClaimOf};
 use arrabbiata_reduction::Reduction;
-use arrabbiata_transcript::{Absorb, Transcript, absorb_slice, hlist::HNil, typed::Label};
+use arrabbiata_transcript::{
+    Absorb, Transcript, absorb_slice,
+    hlist::HNil,
+    typed::{Challenge, End, Label, Message, Public, Tape},
+};
 
 use crate::Kzg;
 
@@ -81,8 +85,59 @@ where
     }
 }
 
+/// The openings' quotient commitments of a combined claim, as one message.
+struct Openings<'a, E>(&'a [Projective<E::G1>])
+where
+    E: Pairing;
+
+impl<E> Label for Openings<'_, E>
+where
+    E: Pairing,
+{
+    const LABEL: u64 = 0x6f70_656e;
+}
+
+impl<E> Absorb<Scalar<E>> for Openings<'_, E>
+where
+    E: Pairing,
+    <E::G1 as Curve>::Base: PrimeField,
+{
+    fn absorb_into<T>(&self, transcript: &mut T)
+    where
+        T: Transcript<Scalar<E>>,
+    {
+        absorb_slice(transcript, self.0);
+    }
+}
+
+/// Pairing accumulators, as one public value.
+struct Pairs<'a, E>(&'a [PairingAccumulator<E>])
+where
+    E: Pairing;
+
+impl<E> Label for Pairs<'_, E>
+where
+    E: Pairing,
+{
+    const LABEL: u64 = 0x0070_6169_7273;
+}
+
+impl<E> Absorb<Scalar<E>> for Pairs<'_, E>
+where
+    E: Pairing,
+    <E::G1 as Curve>::Base: PrimeField,
+{
+    fn absorb_into<T>(&self, transcript: &mut T)
+    where
+        T: Transcript<Scalar<E>>,
+    {
+        absorb_slice(transcript, self.0);
+    }
+}
+
 /// The pairs of the openings of a combined claim, then their combination
-/// by `r`, drawn after the proofs. Shared by prover and verifier.
+/// by `r`, drawn after the proofs (the prover's message, then the
+/// challenge). Shared by prover and verifier.
 fn accumulate<E, T>(
     transcript: &mut T,
     claim: &PointClaimOf<Scalar<E>, Kzg<E>>,
@@ -93,8 +148,10 @@ where
     <E::G1 as Curve>::Base: PrimeField,
     T: Transcript<Scalar<E>>,
 {
-    absorb_slice(transcript, proofs);
-    let r = transcript.squeeze();
+    let tape: Tape<Scalar<E>, &mut T, Message<Openings<'_, E>, Challenge<End>>> =
+        Tape::undescribed(transcript);
+    let (r, tape) = tape.receive(&Openings(proofs)).challenge();
+    let _ = tape.finish();
     let g = Projective::<E::G1>::generator();
     let pairs: Vec<_> = claim
         .points
@@ -189,7 +246,8 @@ where
     }
 }
 
-/// The combination of `accumulators` by powers of `r`, drawn after them.
+/// The combination of `accumulators` by powers of `r`, drawn after them
+/// (public to both parties, then the challenge).
 fn fold_pairs<E, T>(
     transcript: &mut T,
     accumulators: &[PairingAccumulator<E>],
@@ -199,7 +257,9 @@ where
     <E::G1 as Curve>::Base: PrimeField,
     T: Transcript<Scalar<E>>,
 {
-    absorb_slice(transcript, accumulators);
-    let r = transcript.squeeze();
+    let tape: Tape<Scalar<E>, &mut T, Public<Pairs<'_, E>, Challenge<End>>> =
+        Tape::undescribed(transcript);
+    let (r, tape) = tape.public(&Pairs(accumulators)).challenge();
+    let _ = tape.finish();
     PairingAccumulator::combination(accumulators, r)
 }
