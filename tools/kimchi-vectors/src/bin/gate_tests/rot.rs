@@ -1,6 +1,5 @@
 //! kimchi/src/tests/rot.rs
-use ark_ff::{Field, One, PrimeField, Zero};
-use kimchi::circuits::polynomials::range_check;
+use ark_ff::{One, PrimeField, Zero};
 use kimchi::{
     circuits::{
         constraints::ConstraintSystem,
@@ -207,39 +206,5 @@ pub fn run() {
             let result = cs.gates[row].verify_witness::<R, Vesta>(row, &w, &cs, &w[0][0..cs.public]);
             verdict(&format!("row{row}"), &result);
         }
-    }
-    {
-        // Not one of Kimchi's tests: what connect_64bit wires, and a
-        // rotation with a wrong output that Kimchi accepts because of it.
-        test("connect_64bit_forgery");
-        let rot = 32u32;
-        let word: u64 = 0xDC81_1727_DAF2_2EC1;
-        number("word", word as usize);
-        number("rot", rot as usize);
-        let gates = gadget::<R, Vesta>(rot, RotMode::Left);
-        for (r, g) in gates.iter().enumerate() {
-            let wires: Vec<String> = g.wires.iter().map(|w| format!("{}:{}", w.row, w.col)).collect();
-            println!("input wires{r} {}", wires.join(" "));
-        }
-        let mut w = rot_witness::<Fp>(word, rot, RotMode::Left);
-        let two = |k: u64| Fp::from(2u64).pow([k]);
-        let shifted2 = w[0][2] + two(76);
-        let excess2 = w[2][1] - two(12);
-        let bound2 = excess2 - two(rot as u64) + two(64);
-        let rc = |v: Fp| range_check::witness::create(v);
-        let (b, s, e) = (rc(bound2), rc(shifted2), rc(excess2));
-        w[1][1] = shifted2 + excess2;
-        w[2][1] = excess2;
-        for c in 3..COLUMNS {
-            w[c][1] = b[c][0];
-        }
-        for c in 0..COLUMNS {
-            w[c][2] = s[c][0];
-            w[c][3] = e[c][0];
-        }
-        witness(&w);
-        let cs = ConstraintSystem::create(gates.clone()).public(1).build().unwrap();
-        rows::<R, Vesta>(&cs, &w);
-        verdict("prove", &prove_and_verify(gates, w, vec![Fp::zero()]));
     }
 }

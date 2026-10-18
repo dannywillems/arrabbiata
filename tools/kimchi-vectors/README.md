@@ -38,12 +38,11 @@ SplitMix64), so two runs write the same bytes.
 | `prover <arrabbiata_proofs.txt>` | `.../kimchi_prover.txt` (stdout), `.../kimchi_verifies_arrabbiata.txt` (stderr) |
 | `differential` | `crates/gadgets/kimchi/tests/vectors/kimchi_differential.txt` |
 
-Three binaries print tables kept inline in the tests, not files:
+Two binaries print tables kept inline in the tests, not files:
 `kimchi-vectors` (the constraint counts and degrees of each gate, the
-`KIMCHI` table of `crates/gadgets/kimchi/tests/figures.rs`), `ipa_vectors`
-(`b_poly`, `b_poly_coefficients`, `combined_inner_product`, in
-`crates/commitment/ipa/tests/kimchi.rs`) and `rot_wiring` (the wiring
-`connect_64bit` leaves, behind `kimchi_rot.rs`'s forgery test).
+`KIMCHI` table of `crates/gadgets/kimchi/tests/figures.rs`) and
+`ipa_vectors` (`b_poly`, `b_poly_coefficients`, `combined_inner_product`,
+in `crates/commitment/ipa/tests/kimchi.rs`).
 
 - `shifts`: `cs.shift` for domains of 16, 128 and 1024 rows.
 - `constraint_system`: four circuits through `ConstraintSystem::build` and
