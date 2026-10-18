@@ -837,6 +837,52 @@ where
     sigma * perm - t * (zeta_to_domain_size - C::Scalar::ONE)
 }
 
+/// The index's commitments in the opening, around the witness columns':
+/// the six selectors before them; the coefficients, the sigmas but the last
+/// and the optional selectors after them. Without the lookups' (which
+/// follow, built from the proof).
+#[derive(Clone, Debug)]
+pub struct FixedCommitments<C>
+where
+    C: Curve,
+{
+    /// Generic, Poseidon, CompleteAdd, VarBaseMul, EndoMul, EndoMulScalar.
+    pub before_witness: Vec<PolyComm<C>>,
+    /// The coefficients, the sigmas but the last, the optional selectors.
+    pub after_witness: Vec<PolyComm<C>>,
+}
+
+/// The index's commitments in the opening's order ([`FixedCommitments`]):
+/// the one definition [`commitments`] and an in-circuit verifier read.
+#[must_use]
+pub fn fixed_commitments<C>(index: &VerifierIndex<C>) -> FixedCommitments<C>
+where
+    C: Curve,
+{
+    let before_witness = [
+        &index.generic_comm,
+        &index.psm_comm,
+        &index.complete_add_comm,
+        &index.mul_comm,
+        &index.emul_comm,
+        &index.endomul_scalar_comm,
+    ]
+    .into_iter()
+    .cloned()
+    .collect();
+    let mut after_witness: Vec<PolyComm<C>> = index.coefficients_comm.to_vec();
+    after_witness.extend(index.sigma_comm[..PERMUTS - 1].iter().cloned());
+    for (_, c) in optional_selectors(index) {
+        if let Some(c) = c {
+            after_witness.push(c.clone());
+        }
+    }
+    FixedCommitments {
+        before_witness,
+        after_witness,
+    }
+}
+
 /// The commitments of the opening, in its order: the previous
 /// accumulators' `sg`, the public commitment, `ft`'s, `z`, the six
 /// selectors, the witness, the coefficients, the sigmas but the last, the
@@ -859,24 +905,10 @@ where
     comms.push(public_comm.clone());
     comms.push(one(ft_comm));
     comms.push(proof.z_comm.clone());
-    for c in [
-        &index.generic_comm,
-        &index.psm_comm,
-        &index.complete_add_comm,
-        &index.mul_comm,
-        &index.emul_comm,
-        &index.endomul_scalar_comm,
-    ] {
-        comms.push(c.clone());
-    }
+    let fixed = fixed_commitments(index);
+    comms.extend(fixed.before_witness);
     comms.extend(proof.w_comm.iter().cloned());
-    comms.extend(index.coefficients_comm.iter().cloned());
-    comms.extend(index.sigma_comm[..PERMUTS - 1].iter().cloned());
-    for (_, c) in optional_selectors(index) {
-        if let Some(c) = c {
-            comms.push(c.clone());
-        }
-    }
+    comms.extend(fixed.after_witness);
     if let (Some(li), Some(lc), Some(jc)) = (&index.lookup_index, &proof.lookup, joint_combiner) {
         comms.extend(lc.sorted.iter().cloned());
         comms.push(lc.aggreg.clone());

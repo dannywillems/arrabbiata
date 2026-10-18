@@ -308,26 +308,11 @@ where
         }
     }
 
-    /// Absorb scalars: as they are when the scalar modulus is the smaller,
-    /// otherwise as their high bits then their low bit.
+    /// Absorb scalars, each as [`scalar_elements`].
     pub fn absorb_fr(&mut self, values: &[C::Scalar]) {
-        let fits = compare_moduli::<C::Scalar, C::Base>() == Ordering::Less;
         for v in values {
-            let l = limbs(*v);
-            if fits {
-                self.absorb_value(&pack(&l));
-            } else {
-                let low = if l[0] & 1 == 1 {
-                    C::Base::ONE
-                } else {
-                    C::Base::ZERO
-                };
-                let mut high = vec![0u64; l.len()];
-                for i in 0..l.len() {
-                    high[i] = (l[i] >> 1) | l.get(i + 1).map_or(0, |w| w << 63);
-                }
-                self.absorb_value(&pack(&high));
-                self.absorb_value(&low);
+            for e in scalar_elements::<C>(*v) {
+                self.absorb_value(&e);
             }
         }
     }
@@ -367,6 +352,32 @@ where
         let duplex = Duplexed::new(&mut *model.borrow_mut(), permutation);
         Self::with_model(model, duplex)
     }
+}
+
+/// The base-field elements a scalar of `C` is absorbed as: itself when the
+/// scalar modulus is the smaller, otherwise its high bits then its low bit
+/// (Kimchi's `absorb_fr`). A circuit over the base field holds a scalar in
+/// this form already, so it absorbs what it holds.
+#[must_use]
+pub fn scalar_elements<C>(x: C::Scalar) -> Vec<C::Base>
+where
+    C: Curve,
+    C::Base: PrimeField,
+{
+    let l = limbs(x);
+    if compare_moduli::<C::Scalar, C::Base>() == Ordering::Less {
+        return vec![pack(&l)];
+    }
+    let low = if l[0] & 1 == 1 {
+        C::Base::ONE
+    } else {
+        C::Base::ZERO
+    };
+    let mut high = vec![0u64; l.len()];
+    for i in 0..l.len() {
+        high[i] = (l[i] >> 1) | l.get(i + 1).map_or(0, |w| w << 63);
+    }
+    vec![pack(&high), low]
 }
 
 /// The affine coordinates of `p` as the base sponge absorbs them, the

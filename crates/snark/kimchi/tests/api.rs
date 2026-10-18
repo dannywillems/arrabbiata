@@ -29,7 +29,7 @@ use arrabbiata_kimchi::{
     },
     oracle::{
         BaseReading, CHALLENGE_LIMBS, ChallengeModel, Duplexed, FqSponge, FrSponge, ModelHandle,
-        ScalarChallenge, SpongeIn, Value as ModelValue, coordinates,
+        ScalarChallenge, SpongeIn, Value as ModelValue, coordinates, scalar_elements,
     },
     permutation::{PERMUTS, shifts},
     prover::{
@@ -49,11 +49,11 @@ use arrabbiata_kimchi::{
         previous_challenges_digest_in, previous_challenges_digest_on,
     },
     verifier::{
-        BaseTranscript, Challenges, Claim, Linearization, LookupInputs, Oracles, PiopChallenges,
-        PiopInputs, VerifyError, base_transcript, base_transcript_in, combined_commitment,
-        combined_inner_product, commitments, evaluation_shape, evaluations, ft_comm, linearization,
-        oracles, piop_transcript_on, scalar_transcript, scalar_transcript_in, scalar_transcript_on,
-        succinct, verify,
+        BaseTranscript, Challenges, Claim, FixedCommitments, Linearization, LookupInputs, Oracles,
+        PiopChallenges, PiopInputs, VerifyError, base_transcript, base_transcript_in,
+        combined_commitment, combined_inner_product, commitments, evaluation_shape, evaluations,
+        fixed_commitments, ft_comm, linearization, oracles, piop_transcript_on, scalar_transcript,
+        scalar_transcript_in, scalar_transcript_on, succinct, verify,
     },
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
@@ -2379,4 +2379,28 @@ fn srs_group_map_model() {
     let (gx, gy) = <Vesta as arrabbiata_curve::Curve>::generator();
     let (x, y) = GroupMapModel::<Fq>::first_on_curve(&mut Native, &[gx, gx, gx], b);
     assert_eq!((x, y.square()), (gx, gy.square()));
+}
+
+#[test]
+fn oracle_scalar_elements() {
+    // Vesta's scalar field is the smaller: a scalar is absorbed as itself.
+    // Pallas's is the larger: as its high bits, then its low bit.
+    assert_eq!(
+        scalar_elements::<Vesta>(Fp::from_u64(7)),
+        vec![Fq::from_u64(7)]
+    );
+    assert_eq!(
+        scalar_elements::<Pallas>(Fq::from_u64(7)),
+        vec![Fp::from_u64(3), Fp::ONE]
+    );
+}
+
+#[test]
+fn verifier_fixed_commitments() {
+    // The six selectors before the witness; the coefficients and six sigmas
+    // after, without optional selectors.
+    let (index, _, _) = proved();
+    let fixed: FixedCommitments<Vesta> = fixed_commitments(&index.verifier_index);
+    assert_eq!(fixed.before_witness.len(), 6);
+    assert_eq!(fixed.after_witness.len(), COLUMNS + 6);
 }
