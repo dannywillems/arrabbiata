@@ -1,15 +1,15 @@
 //! The behaviour of each public item, one test per item (these were
 //! the rustdoc examples).
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, Native};
 use arrabbiata_pasta::{Fp, Fq};
 use arrabbiata_poseidon::{
     Poseidon, PoseidonSponge, bn254_base, bn254_base_sponge, bn254_scalar, bn254_scalar_sponge,
     goldilocks, goldilocks_sponge,
     grain::Grain,
     kimchi::{
-        KimchiPoseidon, KimchiSponge, ROUNDS, hash, pallas_base as kimchi_pallas_base,
-        vesta_base as kimchi_vesta_base,
+        KimchiDuplex, KimchiPoseidon, KimchiSponge, ROUNDS, hash,
+        pallas_base as kimchi_pallas_base, vesta_base as kimchi_vesta_base,
     },
     pallas_base, pallas_sponge, vesta_base, vesta_sponge,
 };
@@ -245,4 +245,21 @@ fn goldilocks_sponge_works() {
         goldilocks_sponge(1).squeeze(),
         goldilocks_sponge(2).squeeze()
     );
+}
+
+#[test]
+fn kimchi_duplex() {
+    // In the native model over Kimchi's permutation, the duplex is Kimchi's
+    // sponge.
+    let p = kimchi_pallas_base();
+    let mut duplex = KimchiDuplex::new(Fp::ZERO);
+    let mut sponge = KimchiSponge::new(kimchi_pallas_base());
+    for v in [3, 1, 4].map(Fp::from_u64) {
+        duplex.absorb(&mut Native, &p, &v);
+        sponge.absorb(v);
+    }
+    for _ in 0..3 {
+        assert_eq!(duplex.squeeze(&mut Native, &p), sponge.squeeze());
+    }
+    assert_eq!(duplex.state(), sponge.state());
 }

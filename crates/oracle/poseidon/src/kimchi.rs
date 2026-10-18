@@ -20,9 +20,9 @@
 mod fp;
 mod fq;
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, FieldModel, Native};
 use arrabbiata_pasta::{Fp, Fq};
-use arrabbiata_transcript::{Permutation, Transcript};
+use arrabbiata_transcript::{Permutation, PermutationIn, Transcript};
 
 /// The number of rounds, all full.
 pub const ROUNDS: usize = 55;
@@ -132,21 +132,97 @@ enum Mode {
     Squeezed(usize),
 }
 
-/// Kimchi's sponge (`ArithmeticSponge`): the zero state, the rate the first
-/// two elements.
+/// The state and the mode of Kimchi's sponge, in any model of the field
+/// signature: the duplex alone, without its permutation. [`KimchiSponge`]
+/// is it in the field itself; a circuit runs the same machine on its
+/// values, so the two cannot drift apart.
 ///
 /// - absorbing adds to the next rate element, permuting first when the rate
 ///   is full; right after a squeeze it adds to element 0 without permuting;
 /// - squeezing after absorbing permutes and returns element 0; squeezing
 ///   again returns element 1, and permutes only once the rate is used up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KimchiDuplex<V> {
+    state: [V; WIDTH],
+    mode: Mode,
+}
+
+impl<V> KimchiDuplex<V>
+where
+    V: Clone,
+{
+    /// The zero state, nothing absorbed; `zero` is the model's zero.
+    #[must_use]
+    pub fn new(zero: V) -> Self {
+        Self {
+            state: core::array::from_fn(|_| zero.clone()),
+            mode: Mode::Absorbed(0),
+        }
+    }
+
+    /// The state.
+    #[must_use]
+    pub const fn state(&self) -> &[V; WIDTH] {
+        &self.state
+    }
+
+    /// The state permuted by `permutation`, in `model`.
+    fn permute<F, M, P>(&mut self, model: &mut M, permutation: &P)
+    where
+        F: Field,
+        M: FieldModel<F, Value = V>,
+        P: PermutationIn<M, F, WIDTH>,
+    {
+        self.state = permutation.permute_in(model, self.state.clone());
+    }
+
+    /// Absorb `value`.
+    pub fn absorb<F, M, P>(&mut self, model: &mut M, permutation: &P, value: &V)
+    where
+        F: Field,
+        M: FieldModel<F, Value = V>,
+        P: PermutationIn<M, F, WIDTH>,
+    {
+        let position = match self.mode {
+            Mode::Absorbed(RATE) => {
+                self.permute(model, permutation);
+                0
+            }
+            Mode::Absorbed(n) => n,
+            Mode::Squeezed(_) => 0,
+        };
+        self.state[position] = model.add(&self.state[position], value);
+        self.mode = Mode::Absorbed(position + 1);
+    }
+
+    /// Squeeze an element.
+    pub fn squeeze<F, M, P>(&mut self, model: &mut M, permutation: &P) -> V
+    where
+        F: Field,
+        M: FieldModel<F, Value = V>,
+        P: PermutationIn<M, F, WIDTH>,
+    {
+        let position = match self.mode {
+            Mode::Squeezed(n) if n < RATE => n,
+            _ => {
+                self.permute(model, permutation);
+                0
+            }
+        };
+        self.mode = Mode::Squeezed(position + 1);
+        self.state[position].clone()
+    }
+}
+
+/// Kimchi's sponge (`ArithmeticSponge`): [`KimchiDuplex`] in the field
+/// itself, over Kimchi's permutation.
 ///
-/// So `[a]` and `[a, 0]` collide, as Kimchi documents: the sponge is meant
-/// for inputs of a fixed length.
+/// `[a]` and `[a, 0]` collide, as Kimchi documents: the sponge is meant for
+/// inputs of a fixed length.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KimchiSponge<F> {
     permutation: KimchiPoseidon<F>,
-    state: [F; WIDTH],
-    mode: Mode,
+    duplex: KimchiDuplex<F>,
 }
 
 impl<F> KimchiSponge<F>
@@ -158,15 +234,14 @@ where
     pub fn new(permutation: KimchiPoseidon<F>) -> Self {
         Self {
             permutation,
-            state: [F::ZERO; WIDTH],
-            mode: Mode::Absorbed(0),
+            duplex: KimchiDuplex::new(F::ZERO),
         }
     }
 
     /// The state.
     #[must_use]
     pub const fn state(&self) -> &[F; WIDTH] {
-        &self.state
+        self.duplex.state()
     }
 }
 
@@ -175,28 +250,11 @@ where
     F: Field,
 {
     fn absorb(&mut self, value: F) {
-        let position = match self.mode {
-            Mode::Absorbed(RATE) => {
-                self.permutation.permute_state(&mut self.state);
-                0
-            }
-            Mode::Absorbed(n) => n,
-            Mode::Squeezed(_) => 0,
-        };
-        self.state[position] = self.state[position] + value;
-        self.mode = Mode::Absorbed(position + 1);
+        self.duplex.absorb(&mut Native, &self.permutation, &value);
     }
 
     fn squeeze(&mut self) -> F {
-        let position = match self.mode {
-            Mode::Squeezed(n) if n < RATE => n,
-            _ => {
-                self.permutation.permute_state(&mut self.state);
-                0
-            }
-        };
-        self.mode = Mode::Squeezed(position + 1);
-        self.state[position]
+        self.duplex.squeeze(&mut Native, &self.permutation)
     }
 }
 
