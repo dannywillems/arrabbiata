@@ -62,6 +62,7 @@ pub mod generic;
 pub use accumulation::{Accumulators, Lift};
 pub use challenge::{
     RecursionChallenge, b_poly, b_poly_coefficients, combined_inner_product, evaluation_vector,
+    folded_evaluation,
 };
 
 /// The IPA commitment scheme over the curve `C`, with polynomials over its

@@ -8,7 +8,7 @@ use arrabbiata_field::{
     rng::{Arkworks, Sampler, SplitMix64},
 };
 use arrabbiata_ipa::{
-    Ipa, IpaProof, RecursionChallenge, Statement,
+    Ipa, IpaProof, RecursionChallenge, Statement, folded_evaluation,
     generic::{
         BaseDraw, BaseOracle, BindStatement, BindValue, Binding, Blinded, BoundStatement,
         CHALLENGE_BITS, ChallengeMap, DOMAIN, Delta, Endo, FinalChallenge, Folded, Full,
@@ -559,6 +559,53 @@ fn generic_ipa_check() {
         )
         .unwrap();
     assert_eq!(expression, Projective::<Pallas>::identity());
+}
+
+#[test]
+fn generic_ipa_check_given() {
+    // With b0 the value check computes, the same identity; with another
+    // value, the expression no longer vanishes, and the challenges are the
+    // same either way.
+    let ipa = scheme(BindStatement, Full, NotHiding);
+    let (p, commitment) = opened(&ipa.generators);
+    let points = [Fq::from_u64(2)];
+    let statement = Statement {
+        commitment: &commitment,
+        points: &points,
+        evalscale: Fq::ONE,
+        value: Fq::from_u64(17),
+    };
+    let witness = Witness {
+        coefficients: &p,
+        blinder: Fq::ZERO,
+    };
+    let (opening, _) = ipa.prove(
+        &mut ScalarOracle(&mut vesta_sponge(1)),
+        &statement,
+        &witness,
+        &mut NoRandomness,
+    );
+    let honest = |chals: &[Fq]| folded_evaluation(chals, &points, Fq::ONE);
+    let (accumulator, expression) = ipa
+        .check_given(
+            &mut ScalarOracle(&mut vesta_sponge(1)),
+            &statement,
+            &opening,
+            honest,
+        )
+        .unwrap();
+    assert_eq!(expression, Projective::<Pallas>::identity());
+    let wrong = |chals: &[Fq]| folded_evaluation(chals, &points, Fq::ONE) + Fq::ONE;
+    let (same, expression) = ipa
+        .check_given(
+            &mut ScalarOracle(&mut vesta_sponge(1)),
+            &statement,
+            &opening,
+            wrong,
+        )
+        .unwrap();
+    assert_ne!(expression, Projective::<Pallas>::identity());
+    assert_eq!(same, accumulator);
 }
 
 #[test]

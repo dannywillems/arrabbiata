@@ -44,7 +44,7 @@ use arrabbiata_transcript::{
     typed::{Draw, End, Label, Rounds, Send, Squeeze, Statement as Absorbed, Tape, Write},
 };
 
-use crate::{RecursionChallenge, Statement, b_poly, evaluation_vector};
+use crate::{RecursionChallenge, Statement, evaluation_vector, folded_evaluation};
 
 /// The oracle an opening talks to: it absorbs scalars and points and
 /// squeezes scalars.
@@ -910,6 +910,31 @@ where
         B: Binding<C, O>,
         V: ValueBase<C, O>,
     {
+        let b0 =
+            |chals: &[C::Scalar]| folded_evaluation(chals, statement.points, statement.evalscale);
+        self.check_given(oracle, statement, opening, b0)
+    }
+
+    /// [`GenericIpa::check`] with the folded evaluation vector `b0` given
+    /// by `b0` from the round challenges, instead of computed from the
+    /// statement's points. With a `b0` that ignores the challenges and
+    /// returns a claimed value, this is the group part of the check alone:
+    /// it holds up to `sg` and up to the claim that `b0` is
+    /// [`folded_evaluation`] of the challenges, which a verifier in the
+    /// other field checks (Pickles' deferred `b`).
+    pub fn check_given<O, F0>(
+        &self,
+        oracle: &mut O,
+        statement: &Statement<'_, C>,
+        opening: &Opening<C, H::Final>,
+        b0: F0,
+    ) -> Option<(RecursionChallenge<C>, Projective<C>)>
+    where
+        O: IpaOracle<C>,
+        B: Binding<C, O>,
+        V: ValueBase<C, O>,
+        F0: FnOnce(&[C::Scalar]) -> C::Scalar,
+    {
         let k = self.rounds();
         if opening.rounds.len() != k {
             return None;
@@ -927,12 +952,7 @@ where
             q = q + *l * x_inv + *r * x;
             chals.push(x);
         }
-        let mut b0 = C::Scalar::ZERO;
-        let mut scale = C::Scalar::ONE;
-        for point in statement.points {
-            b0 = b0 + scale * b_poly(&chals, *point);
-            scale = scale * statement.evalscale;
-        }
+        let b0 = b0(&chals);
         let (expression, tape) = self.hiding.check_final(
             tape.done(),
             &self.challenges,

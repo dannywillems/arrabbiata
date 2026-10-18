@@ -5,7 +5,7 @@ use arrabbiata_commit::PolynomialCommitment;
 use arrabbiata_field::Field;
 use arrabbiata_ipa::{
     Ipa, RecursionChallenge, Statement, b_poly, b_poly_coefficients, combined_inner_product,
-    evaluation_vector,
+    evaluation_vector, folded_evaluation,
 };
 use arrabbiata_pasta::{Fq, Pallas};
 use arrabbiata_poseidon::{pallas_sponge, vesta_sponge};
@@ -18,6 +18,20 @@ fn b_poly_works() {
         b_poly(&[Fq::from_u64(2)], Fq::from_u64(5)),
         Fq::from_u64(11)
     );
+}
+
+#[test]
+fn folded_evaluation_works() {
+    // One round with challenge 2 at points 5 and 1, scale 10: b(5) + 10
+    // b(1) = 11 + 10 * 3.
+    let chals = [Fq::from_u64(2)];
+    let points = [Fq::from_u64(5), Fq::ONE];
+    let evalscale = Fq::from_u64(10);
+    assert_eq!(
+        folded_evaluation(&chals, &points, evalscale),
+        Fq::from_u64(41)
+    );
+    assert_eq!(folded_evaluation(&chals, &[], evalscale), Fq::ZERO);
 }
 
 #[test]

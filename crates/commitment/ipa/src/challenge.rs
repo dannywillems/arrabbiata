@@ -50,6 +50,23 @@ where
     product
 }
 
+/// `sum_j evalscale^j b(points[j])`: the folded evaluation vector `b0` of
+/// an opening at `points` combined by `evalscale`, a function of the round
+/// challenges alone (Kimchi's `b0`, Pickles' `b`).
+#[must_use]
+pub fn folded_evaluation<F>(chals: &[F], points: &[F], evalscale: F) -> F
+where
+    F: Field,
+{
+    let mut b0 = F::ZERO;
+    let mut scale = F::ONE;
+    for point in points {
+        b0 = b0 + scale * b_poly(chals, *point);
+        scale = scale * evalscale;
+    }
+    b0
+}
+
 /// The `2^k` coefficients of `b`, Kimchi's `b_poly_coefficients`: `s_i` is
 /// the product of `chals[k - 1 - j]` over the bits `j` set in `i`.
 #[must_use]
