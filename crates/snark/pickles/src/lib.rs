@@ -23,5 +23,6 @@ pub mod curve;
 pub mod group;
 pub mod model;
 pub mod scalar;
+pub mod statement;
 pub mod transcript;
 pub mod wrap;

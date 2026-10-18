@@ -253,6 +253,7 @@ dependencies = [
  "arrabbiata-poly",
  "arrabbiata-poseidon",
  "arrabbiata-transcript",
+ "proptest",
 ]
 
 [[package]]
