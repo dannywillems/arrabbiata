@@ -32,6 +32,7 @@ use core::{
 };
 
 pub mod bigint;
+pub mod codec;
 pub mod extension;
 pub mod goldilocks;
 pub mod laws;

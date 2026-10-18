@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+arrabbiata-codec = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

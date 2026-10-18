@@ -46,6 +46,7 @@ pub mod oracle;
 pub mod permutation;
 pub mod prover;
 pub mod rng;
+pub mod serialization;
 pub mod srs;
 pub mod transcript;
 pub mod verifier;

@@ -613,3 +613,25 @@ fn rng_arkworks() {
     let b: F = rng.sample();
     assert_ne!(a, b);
 }
+
+#[test]
+fn codec_byte_len() {
+    use arrabbiata_field::codec::byte_len;
+    assert_eq!(byte_len(255), 32);
+    assert_eq!(byte_len(257), 33);
+    assert_eq!(byte_len(64), 8);
+}
+
+#[test]
+fn codec_to_and_from_le_bytes() {
+    use arrabbiata_field::codec::{from_le_bytes, to_le_bytes};
+    let x = Goldilocks::from_u64(0x0102);
+    assert_eq!(to_le_bytes(x, 3), [2, 1, 0]);
+    assert_eq!(from_le_bytes::<Goldilocks>(&[2, 1, 0]), Some(x));
+    // From the modulus up, no element.
+    assert_eq!(from_le_bytes::<Goldilocks>(&MODULUS.to_le_bytes()), None);
+    assert_eq!(
+        from_le_bytes::<Goldilocks>(&[0; 8].iter().chain(&[1]).copied().collect::<Vec<u8>>()),
+        None
+    );
+}

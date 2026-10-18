@@ -17,6 +17,7 @@
 
 extern crate alloc;
 
+pub mod codec;
 pub mod glv;
 pub mod laws;
 

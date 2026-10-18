@@ -12,6 +12,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-codec"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-commit"
 version = "0.0.0"
 dependencies = [
@@ -30,6 +37,7 @@ name = "arrabbiata-curve"
 version = "0.0.0"
 dependencies = [
  "arrabbiata-bn254",
+ "arrabbiata-codec",
  "arrabbiata-field",
  "arrabbiata-grumpkin",
  "arrabbiata-pasta",
@@ -42,6 +50,7 @@ dependencies = [
 name = "arrabbiata-field"
 version = "0.0.0"
 dependencies = [
+ "arrabbiata-codec",
  "proptest",
 ]
 
@@ -156,6 +165,7 @@ dependencies = [
 name = "arrabbiata-kimchi"
 version = "0.0.0"
 dependencies = [
+ "arrabbiata-codec",
  "arrabbiata-curve",
  "arrabbiata-field",
  "arrabbiata-gadget",

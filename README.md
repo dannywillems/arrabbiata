@@ -72,6 +72,7 @@ the right group.
 | `crates/algebra` | `arrabbiata-field` | the `Field` traits; Montgomery prime fields; quadratic extensions; Goldilocks | yes |
 | | `arrabbiata-mvpoly` | multivariate polynomials in normal form (sparse, and dense through the primes), cross-terms of folding, Hasse derivatives | no |
 | | `arrabbiata-poly` | typed columns, constraint expressions, graded evaluation and homogenization, univariate polynomials, NTT domains | yes |
+| `crates/encoding` | `arrabbiata-codec` | the `Encodable` and `Decodable` traits every binary encoding implements, on Kimchi's byte format (MessagePack, structs as arrays); the laws of a codec | not yet |
 | `crates/ec` | `arrabbiata-curve` | the `Curve` and `Pairing` traits, complete formulas, MSM, GLV, the group laws | not yet |
 | | `arrabbiata-pasta` | Pallas, Vesta and their fields | not yet |
 | | `arrabbiata-bn254` | BN254 fields, `G1`, `G2`, `Fq12`, the pairing | not yet |

@@ -1,0 +1,17 @@
+[package]
+name = "arrabbiata-codec"
+description = "One codec trait for every canonical binary encoding of Arrabbiata"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

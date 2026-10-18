@@ -12,6 +12,7 @@ authors = ["Danny Willems <danny@badaas.be>"]
 
 [workspace.dependencies]
 arrabbiata-bn254 = { path = "crates/ec/bn254" }
+arrabbiata-codec = { path = "crates/encoding/codec" }
 arrabbiata-commit = { path = "crates/commitment/commit" }
 arrabbiata-curve = { path = "crates/ec/curve" }
 arrabbiata-field = { path = "crates/algebra/field" }

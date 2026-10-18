@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+arrabbiata-codec = { workspace = true }
 arrabbiata-curve = { workspace = true }
 arrabbiata-field = { workspace = true }
 arrabbiata-gadget = { workspace = true }

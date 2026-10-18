@@ -31,6 +31,7 @@ use arrabbiata_kimchi::{
         opening_round, permutation_round, prove, quotient_round, shift_scalar, witness_round,
     },
     rng::{Arkworks, RandomSource, Sampler, SplitMix64},
+    serialization,
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
     transcript::{
         self, AfterGamma, Base, Beta, Challenge, Digest, DigestOf, FqTape, Message, Piop, Scalar,
@@ -1575,4 +1576,19 @@ fn transcript_after_gamma() {
     let mut rng = Arkworks(SplitMix64(3));
     let (_, tape) = witness_round(&index, witness, &[], &[], &sponge, &mut rng).unwrap();
     assert!(matches!(tape, AfterGamma::WithoutLookup(_)));
+}
+
+#[test]
+fn serialization_to_and_from_bytes() {
+    // A proof is written as Kimchi writes it and read back to itself; a
+    // proof cut short is refused.
+    let (_, proof, _) = proved();
+    let bytes = serialization::to_bytes(&proof);
+    assert_eq!(
+        &bytes[..2],
+        [0x95, 0x94],
+        "a proof of 5 fields, its commitments of 4"
+    );
+    assert_eq!(serialization::from_bytes::<Vesta>(&bytes), Ok(proof));
+    assert!(serialization::from_bytes::<Vesta>(&bytes[..10]).is_err());
 }

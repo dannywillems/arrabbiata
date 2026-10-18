@@ -258,6 +258,33 @@ challenge reduces at least twice the field's bits, so it is uniform up to
 oracle, and the accumulation laws run on all three. The repository has no
 non-cryptographic stand-in.
 
+### `arrabbiata-codec`
+
+One codec for every canonical binary encoding, after zcash/librustzcash#2809:
+`Encodable` writes (`&self`, total), `Decodable<A>` reads (an associated
+function, partial), `Codec` is the context-free pair. The context `A` is a
+type parameter, so a type relates to a family of contexts rather than one.
+The byte format is Kimchi's, `rmp_serde`'s compact MessagePack: a struct is
+the array of its fields, `Vec` and fixed arrays are arrays, `Option` is
+`nil` or the value, a scalar is a `bin` of its canonical integer
+(little-endian, `ceil(bits / 8)` bytes), a point a `bin` of arkworks'
+compressed form (`x`, then two flags in the top bits of the last byte; 33
+bytes on Pasta). The field and curve crates implement it for their elements,
+`arrabbiata-kimchi` for its proofs.
+
+A codec makes `T` a retract of the byte strings: `read . write = id`, so
+`e = write . read` is idempotent and `T` its splitting. Round trip is the
+retraction law, over values; canonicity, `e = id` on the domain of `read`,
+is a separate law over byte strings, and holds because the decoder accepts
+only MessagePack's smallest forms, coordinates and scalars below their
+moduli, and points on the curve with consistent flags. The container impls
+are the action of the list, option, power and product functors on codecs;
+a codec is invariant in `T`, so it transports along isomorphisms only.
+`arrabbiata_codec::laws` states both laws, and every codec's tests sample
+them; golden bytes come from the format's definition, and Kimchi's own: its
+40 test fixtures decode and encode back byte for byte, and our proof of its
+AND serialization regression is the 6160 bytes its test hard-codes.
+
 ### `arrabbiata-commit`
 
 Two separate traits, because protocols need different things:
