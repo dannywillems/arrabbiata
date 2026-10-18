@@ -1,12 +1,13 @@
 //! The laws of the sorts a statement crosses the cycle in: the retraction,
-//! the bounds, descent for the unbounded word, canonicity for the bounded
-//! ones, and the window: a word below `2^254` is the same element of both
-//! Pasta fields.
+//! the bounds, canonicity, and the window: a word below `2^254` is the same
+//! element of both Pasta fields. And the obstruction that makes canonicity
+//! necessary: one cell, two integers, two meanings.
 
+use arrabbiata_curve::Projective;
 use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_pickles::statement::{
-    Bool, Challenge, Digest, Sort, Type1, Type2, WINDOW_BITS, Word,
+    Bool, BranchData, Challenge, Digest, ProofsVerified, Sort, Type1, Type2, WINDOW_BITS, Word,
 };
 use proptest::prelude::*;
 
@@ -19,10 +20,8 @@ fn element<F: PrimeField>(limbs: [u64; 4]) -> F {
 fn retract<S: Sort>(v: &S::Value) -> Result<(), TestCaseError> {
     let words = S::encode(v);
     prop_assert_eq!(words.len(), S::words());
-    for (w, b) in words.iter().zip(S::BOUNDS) {
-        if let Some(n) = b {
-            prop_assert!(w.below(*n), "a word past its bound");
-        }
+    for (w, n) in words.iter().zip(S::BOUNDS) {
+        prop_assert!(w.below(*n), "a word past its bound");
     }
     prop_assert_eq!(S::decode(&words), Some(v.clone()));
     Ok(())
@@ -30,16 +29,16 @@ fn retract<S: Sort>(v: &S::Value) -> Result<(), TestCaseError> {
 
 proptest! {
     #[test]
-    fn type1_retracts_and_descends(limbs in any::<[u64; 4]>()) {
-        // Vesta's scalars, the smaller field, in Fq: t and t + p decode
-        // alike, the consumer's reduction cannot tell them apart and neither
-        // does the decoding.
+    fn type1_retracts_and_is_canonical(limbs in any::<[u64; 4]>()) {
+        // Vesta's scalars, the smaller field, in Fq: one word below 2^254,
+        // and t + p, past it, is refused. A scalar whose t is past 2^254 has
+        // no encoding (about 2^-128 of them, none drawn here).
         let s: Fp = element(limbs);
-        retract::<Type1<Vesta>>(&s)?;
         let [t] = Type1::<Vesta>::encode(&s)[..] else { unreachable!() };
-        if let Some(alias) = t.checked_add(Word::modulus::<Fp>()) {
-            prop_assert_eq!(Type1::<Vesta>::decode(&[alias]), Some(s));
-        }
+        prop_assume!(t.below(WINDOW_BITS));
+        retract::<Type1<Vesta>>(&s)?;
+        let alias = t.checked_add(Word::modulus::<Fp>()).unwrap();
+        prop_assert_eq!(Type1::<Vesta>::decode(&[alias]), None);
     }
 
     #[test]
@@ -90,21 +89,24 @@ fn booleans_retract() {
 }
 
 #[test]
-fn a_decoding_of_the_integer_is_not_sound() {
-    // The non-standard model the laws must exclude: a decoding that reads
-    // the integer rather than its residue modulo the consumer passes the
-    // retraction, but tells t and t + p apart.
-    let integer_decode = |w: Word| -> Fq { w.reduce() };
-    let s = Fp::from_u64(5);
-    let [t] = Type1::<Vesta>::encode(&s)[..] else {
-        unreachable!()
+fn an_unbounded_lift_gives_one_cell_two_meanings() {
+    // The non-standard model the bounds exclude: a Type1 sort without its
+    // bound passes the retraction, but the cell t of Fq is also the integer
+    // t + q, below 2^255, and the two act differently on Vesta (order p) and
+    // decode to different scalars of Fp: both readings are injective
+    // modulo p, and q is not a multiple of p. Only a canonical lift is sound.
+    let unbounded_decode = |w: Word| -> Fp {
+        let t: Fp = w.reduce();
+        t + t + (Fp::ONE + Fp::ONE).pow(255) + Fp::ONE
     };
-    let alias = t.checked_add(Word::modulus::<Fp>()).unwrap();
-    assert_ne!(integer_decode(t), integer_decode(alias));
-    assert_eq!(
-        Type1::<Vesta>::decode(&[t]),
-        Type1::<Vesta>::decode(&[alias])
-    );
+    let t = Word::of_u128(5);
+    let alias = t.checked_add(Word::modulus::<Fq>()).unwrap();
+    assert!(!alias.below(WINDOW_BITS) && alias.below(255));
+    assert_eq!(t.reduce::<Fq>(), alias.reduce::<Fq>(), "one cell");
+    assert_ne!(unbounded_decode(t), unbounded_decode(alias), "two scalars");
+    let g = Projective::<Vesta>::generator();
+    assert_ne!(g * t.reduce::<Fp>(), g * alias.reduce::<Fp>(), "two points");
+    assert_eq!(Type1::<Vesta>::decode(&[alias]), None);
 }
 
 #[test]
@@ -118,4 +120,23 @@ fn words() {
     assert!(Word([0, 1, 0, 0]) > Word([u64::MAX, 0, 0, 0]));
     assert_eq!(Word::modulus::<Fp>().bits(), 255);
     assert_eq!(Word::modulus::<Fp>().reduce::<Fp>(), Fp::ZERO);
+}
+
+#[test]
+fn branch_data_retracts() {
+    // Every mask and domain round-trips; Mina's packing of N1 is 2; the mask
+    // 1 is no branch's.
+    for proofs in [ProofsVerified::N0, ProofsVerified::N1, ProofsVerified::N2] {
+        for log2 in [0u8, 1, 16, 255] {
+            let words = BranchData::encode(&(proofs, log2));
+            assert!(words[0].below(10));
+            assert_eq!(BranchData::decode(&words), Some((proofs, log2)));
+        }
+    }
+    assert_eq!(
+        BranchData::encode(&(ProofsVerified::N1, 3)),
+        vec![Word([14, 0, 0, 0])]
+    );
+    assert_eq!(BranchData::decode(&[Word([13, 0, 0, 0])]), None);
+    assert_eq!(BranchData::decode(&[Word([1 << 10, 0, 0, 0])]), None);
 }

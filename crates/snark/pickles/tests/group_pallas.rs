@@ -90,7 +90,7 @@ fn the_group_half_of_a_pallas_proof_as_a_circuit_over_fp() {
             .iter()
             .map(|p| PublicWord {
                 value: Word::of(*p).reduce(),
-                bound: Some(254),
+                bound: 254,
             })
             .collect(),
         perm: values.plonk.perm,
@@ -126,8 +126,7 @@ fn the_group_half_of_a_pallas_proof_as_a_circuit_over_fp() {
         width: 2,
     };
     assert_eq!((shape.inputs(), shape.outputs()), (78, 10));
-    let gadget =
-        GroupHalf::<Pallas, 78, 10>::new(constants, &poseidon, shape, vec![Some(254)]).unwrap();
+    let gadget = GroupHalf::<Pallas, 78, 10>::new(constants, &poseidon, shape, vec![254]).unwrap();
     let point = |p: &Projective<Pallas>| {
         let (x, y) = coordinates(p);
         [x, y]

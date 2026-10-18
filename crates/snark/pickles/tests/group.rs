@@ -195,7 +195,7 @@ fn inputs_of(index: &ProverIndex<Vesta>, proof: &ProverProof<Vesta>, public: &[F
             .iter()
             .map(|p| PublicWord {
                 value: Word::of(*p).reduce(),
-                bound: Some(255),
+                bound: 254,
             })
             .collect(),
         perm: values.plonk.perm,
@@ -369,7 +369,7 @@ fn as_a_circuit<const N: usize, const M: usize>(
         width: 1,
     };
     let gadget =
-        GroupHalf::<Vesta, N, M>::new(constants, &poseidon, shape, vec![Some(255); public.len()])
+        GroupHalf::<Vesta, N, M>::new(constants, &poseidon, shape, vec![254; public.len()])
             .unwrap();
     let point = |p: &arrabbiata_curve::Projective<Vesta>| {
         let (x, y) = coordinates(p);

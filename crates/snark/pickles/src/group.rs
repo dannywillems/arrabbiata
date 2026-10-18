@@ -84,8 +84,8 @@ where
     fn endo_inv_scale(&mut self, p: &Self::Point, chal: &Self::Value) -> Self::Point;
 
     /// `[w + 2^255] p` for the constant point `p` and the public word `w`:
-    /// the word lifted to an integer (canonically when it is bounded) and
-    /// acting on `p`. The shift keeps the result off the identity, which a
+    /// the word lifted to its canonical integer, which its bound makes
+    /// unique, and acting on `p`. The shift keeps the result off the identity, which a
     /// circuit cannot hold; `x_hat` takes `[2^255] p` back as a constant.
     fn act_shifted(&mut self, p: &Projective<C>, w: &PublicWord<Self::Value>) -> Self::Point;
 
@@ -283,15 +283,17 @@ pub struct ProofIn<P, S> {
 }
 
 /// A word of the public input of the proof the group half verifies, in the
-/// model, with its bound: `Some(n)` for a word below `2^n`, which the lift
-/// checks so that it is canonical; `None` for a word sound by descent (see
-/// `crate::statement`).
+/// model, with its bound `n`, `1 <= n <= 254`: the word is below `2^n`,
+/// which the lift checks. Below `2^254` a word is one integer of both Pasta
+/// fields; past it, a cell is the residue of two integers below `2^255`,
+/// which act differently on a curve whose order is the other modulus, so a
+/// word that is acted on must be canonical (see `crate::statement`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicWord<V> {
     /// The word, as an element of the model's field.
     pub value: V,
-    /// Its bound.
-    pub bound: Option<u32>,
+    /// Its bound, in bits.
+    pub bound: u32,
 }
 
 /// The deferred values the group half takes on trust, in the model.

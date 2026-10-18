@@ -317,7 +317,7 @@ fn group_inputs(
             .iter()
             .map(|p| PublicWord {
                 value: Word::of(*p).reduce::<Fq>(),
-                bound: Some(WINDOW_BITS),
+                bound: WINDOW_BITS,
             })
             .collect(),
         perm: values.plonk.perm,
@@ -502,7 +502,7 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
                 .iter()
                 .map(|v| PublicWord {
                     value: value(v),
-                    bound: Some(WINDOW_BITS),
+                    bound: WINDOW_BITS,
                 })
                 .collect(),
             perm: type1(&st.perm),

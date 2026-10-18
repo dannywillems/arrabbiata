@@ -43,7 +43,7 @@ use arrabbiata_kimchi_gadgets::{
     LAYOUT,
     complete_add::CompleteAdd,
     endomul::{BITS_PER_ROW, EndoMulOf},
-    varbasemul::VarBaseMulOf,
+    varbasemul::VarBaseMulBelowOf,
 };
 
 use arrabbiata_poseidon::kimchi::KimchiPoseidon;
@@ -51,7 +51,7 @@ use arrabbiata_poseidon::kimchi::KimchiPoseidon;
 use crate::{
     group::{Constants, DeferredIn, GroupModel, ProofIn, PublicWord, group_half_in},
     model::{Affine, Circuit, load},
-    statement::Word,
+    statement::{WINDOW_BITS, Word},
 };
 
 /// The bits of a 128-bit challenge.
@@ -188,6 +188,12 @@ where
     /// `[2 h + 1 + 2^255] p`, then `p` taken off when the low bit is zero, so
     /// `[t + 2^255] p` (Pickles' `scale_fast2`).
     ///
+    /// The top bit of the 255 is zero (a copy of the zero cell), so the bits
+    /// are the canonical integer of the cell: below `2^255` a cell is the
+    /// residue of `x` and possibly `x + m`, `m` the circuit's modulus, and the
+    /// two act differently on a curve of another order. The cost is
+    /// completeness for a value at or past `2^254`, about `2^-128` of them.
+    ///
     /// # Panics
     ///
     /// If the scalars of `C` do not have 255 bits.
@@ -201,7 +207,7 @@ where
         let t = self.cell(&s.high);
         let n0 = self.cell(&Affine::constant(C::Base::ZERO));
         let (acc, n) = self.env().call(
-            &VarBaseMulOf::<SCALAR_BITS>,
+            &VarBaseMulBelowOf::<SCALAR_BITS>,
             (p.clone(), double, t.clone(), n0),
         );
         self.env().connect(&n, &t);
@@ -266,8 +272,7 @@ where
     /// The word split as `w = 2 high + low` (asserted), `high` bounded below
     /// `2^(n - 1)` for a word of bound `n`, so that `2 high + low` is the
     /// integer of `w` and not `w` plus the modulus; then Type2's action,
-    /// `[2 high + low + 2^255] p`. Without a bound the split holds only modulo
-    /// the field, which the word's sort must tolerate (descent).
+    /// `[2 high + low + 2^255] p`.
     fn act_shifted(&mut self, p: &Projective<C>, w: &PublicWord<Self::Value>) -> [E::Var; 2] {
         let high = self.witness([&w.value], |[v]| Word::of(v).halve().0.reduce());
         let low = self.witness([&w.value], |[v]| {
@@ -281,10 +286,10 @@ where
         let twice = self.scale(&high, two);
         let sum = self.add(&twice, &low);
         self.assert_equal(&sum, &w.value);
-        match w.bound {
-            Some(1) => self.assert_equal(&high, &Affine::constant(C::Base::ZERO)),
-            Some(n) => self.assert_below(&high, n - 1),
-            None => {}
+        if w.bound == 1 {
+            self.assert_equal(&high, &Affine::constant(C::Base::ZERO));
+        } else {
+            self.assert_below(&high, w.bound - 1);
         }
         let base = GroupModel::<C>::constant_point(self, p);
         let scalar = Shifted {
@@ -504,7 +509,7 @@ fn unflatten<V: Clone>(
         public: (0..shape.public)
             .map(|_| PublicWord {
                 value: r.value(),
-                bound: None,
+                bound: WINDOW_BITS,
             })
             .collect(),
         perm: r.scalar(w),
@@ -530,7 +535,7 @@ where
     constants: Constants<C>,
     poseidon: &'a KimchiPoseidon<C::Base>,
     shape: Shape,
-    bounds: Vec<Option<u32>>,
+    bounds: Vec<u32>,
 }
 
 /// The input or output size does not match the shape.
@@ -553,14 +558,16 @@ where
     /// # Errors
     ///
     /// [`SizeError`] when `N` or `M` is not the shape's, or the bounds are
-    /// not one per public word.
+    /// not one per public word, each of 1 to 254 bits.
     pub fn new(
         constants: Constants<C>,
         poseidon: &'a KimchiPoseidon<C::Base>,
         shape: Shape,
-        bounds: Vec<Option<u32>>,
+        bounds: Vec<u32>,
     ) -> Result<Self, SizeError> {
-        if shape.inputs() != N || shape.outputs() != M || bounds.len() != shape.public {
+        let in_window = bounds.iter().all(|b| (1..=WINDOW_BITS).contains(b));
+        if shape.inputs() != N || shape.outputs() != M || bounds.len() != shape.public || !in_window
+        {
             return Err(SizeError {
                 inputs: shape.inputs(),
                 outputs: shape.outputs(),
