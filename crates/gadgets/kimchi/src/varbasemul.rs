@@ -307,3 +307,85 @@ where
         (acc, n)
     }
 }
+
+/// The first gate of [`VarBaseMulBelowOf`]: [`VarBaseMulGateOf`] whose most
+/// significant bit is a copy of the cell `zero`, which the caller
+/// constrains to zero. Input `(T, A, n, [x, zero])`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VarBaseMulGateBelowOf {
+    /// The index of the gate's most significant bit.
+    pub top: usize,
+}
+
+impl<F> TypedGadget<F> for VarBaseMulGateBelowOf
+where
+    F: PrimeField,
+{
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar, Array<Scalar, 2>);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "kimchi-varbasemul";
+    const ROWS: usize = ROWS_PER_GATE;
+
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (base, acc, n, [scalar, zero]): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var>
+    where
+        E: Env<F>,
+    {
+        let top = self.top;
+        gate(env, &base, &acc, &n, |env, k, at| {
+            if k == 0 {
+                env.copy(at, &zero)
+            } else {
+                env.advice(at, [&scalar], |[v]| bit_of(v, top - k))
+            }
+        })
+    }
+}
+
+/// [`VarBaseMulOf`] with its most significant bit a copy of `n0`, the cell
+/// the caller constrains to zero: the bits are an integer below
+/// `2^(BITS - 1)`. A field element has two integers below `2^BITS` when
+/// `BITS` exceeds the modulus's bits, `x` and `x + m`; below
+/// `2^(BITS - 1) < m` it has one. So a caller asserting `n` equal to `x`
+/// pins the bits to the canonical integer of `x`, and the multiple of `T`
+/// is a function of the cell, not of the prover's choice of lift (Pickles'
+/// `scale_fast2`, which constrains the same top bit).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VarBaseMulBelowOf<const BITS: usize>;
+
+impl<F, const B: usize> TypedGadget<F> for VarBaseMulBelowOf<B>
+where
+    F: PrimeField,
+{
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar, Scalar);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "kimchi-varbasemul-below-of";
+    const ROWS: usize = <VarBaseMul<B> as TypedGadget<F>>::ROWS;
+
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (base, acc, scalar, n0): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var>
+    where
+        E: Env<F>,
+    {
+        let first = VarBaseMulGateBelowOf { top: B - 1 };
+        let (mut acc, mut n) = env.call(
+            &first,
+            (base.clone(), acc, n0.clone(), [scalar.clone(), n0]),
+        );
+        for g in 1..B / BITS_PER_GATE {
+            let gate = VarBaseMulGateOf {
+                top: B - 1 - g * BITS_PER_GATE,
+            };
+            let (next, n_next) = env.call(&gate, (base.clone(), acc, n, scalar.clone()));
+            acc = next;
+            n = n_next;
+        }
+        (acc, n)
+    }
+}

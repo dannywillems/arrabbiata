@@ -18,8 +18,8 @@ use arrabbiata_ipa::Ipa;
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
     varbasemul::{
-        ACCUMULATORS, BITS, BITS_PER_GATE, N, N_NEXT, SLOPES, VarBaseMul, VarBaseMulGateOf,
-        VarBaseMulOf,
+        ACCUMULATORS, BITS, BITS_PER_GATE, N, N_NEXT, SLOPES, VarBaseMul, VarBaseMulBelowOf,
+        VarBaseMulGateBelowOf, VarBaseMulGateOf, VarBaseMulOf,
     },
 };
 use arrabbiata_pasta::{Fp, Pallas, Vesta};
@@ -338,4 +338,49 @@ fn varbasemul_gate_of() {
     let (_, (_, n)) =
         witness::<Fp, _, VARIABLES, DEGREE>(&MultiplyOf::<5>, LAYOUT, &(t, a, x)).unwrap();
     assert_eq!(n, x);
+}
+
+/// [`VarBaseMulBelowOf`] from advice cells, `n0` zero.
+#[derive(Clone, Copy, Debug)]
+struct MultiplyBelowOf<const B: usize>;
+
+impl<const B: usize> TypedGadget<Fp> for MultiplyBelowOf<B> {
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "multiply-below";
+    const ROWS: usize = <VarBaseMulBelowOf<B> as TypedGadget<Fp>>::ROWS;
+
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        (t, a, x): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var> {
+        let t = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&t[i]], |[v]| v));
+        let a = core::array::from_fn(|i| env.advice(Cell::new(2 + i, 0), [&a[i]], |[v]| v));
+        let n0 = env.advice(Cell::new(4, 0), [], |[]| Fp::ZERO);
+        env.call(&VarBaseMulBelowOf::<B>, (t, a, x, n0))
+    }
+}
+
+#[test]
+fn varbasemul_below_of_and_its_first_gate() {
+    // The top bit is n0's copy: a scalar below 2^(B - 1) is its own bits,
+    // the multiple VarBaseMulOf's; one with the top bit set is not (n is
+    // the scalar without its top bit, so a caller's n = x fails).
+    let g = Projective::<Pallas>::generator().to_affine();
+    let t = coordinates(&g);
+    let a = coordinates(&(g.to_projective() + g.to_projective()).to_affine());
+    assert_eq!(<VarBaseMulGateBelowOf as TypedGadget<Fp>>::ROWS, 2);
+    assert_eq!(VarBaseMulGateBelowOf { top: 9 }.top, 9);
+    let below = Fp::from_u64(0b01_1011_0110);
+    let (_, (q, n)) =
+        witness::<Fp, _, VARIABLES, DEGREE>(&MultiplyBelowOf::<10>, LAYOUT, &(t, a, below))
+            .unwrap();
+    let (_, (q_of, _)) =
+        witness::<Fp, _, VARIABLES, DEGREE>(&MultiplyOf::<10>, LAYOUT, &(t, a, below)).unwrap();
+    assert_eq!((n, q), (below, q_of));
+    let top = Fp::from_u64(0b10_1011_0110);
+    let (_, (_, n)) =
+        witness::<Fp, _, VARIABLES, DEGREE>(&MultiplyBelowOf::<10>, LAYOUT, &(t, a, top)).unwrap();
+    assert_eq!(n, Fp::from_u64(0b00_1011_0110));
 }
