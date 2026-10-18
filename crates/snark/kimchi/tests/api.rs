@@ -26,7 +26,7 @@ use arrabbiata_kimchi::{
         LookupPoint, LookupTableId, PATTERNS, RANGE_CHECK_TABLE_ID, RuntimeTable, XOR_TABLE_ID,
         combine_entry, constraint_count, id_to_field, lookup_value, range_check_table, xor_table,
     },
-    oracle::{CHALLENGE_LIMBS, FqSponge, FrSponge, ScalarChallenge},
+    oracle::{CHALLENGE_LIMBS, ChallengeModel, FqSponge, FrSponge, ScalarChallenge},
     permutation::{PERMUTS, shifts},
     prover::{
         self, CONSTRAINED, EvaluationRound, Hidden, LOOKUP_ALPHA, LookupCommitments,
@@ -39,13 +39,13 @@ use arrabbiata_kimchi::{
     serialization,
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
     transcript::{
-        self, AfterGamma, Base, Beta, Challenge, Digest, DigestOf, FqTape, Message, Piop, Scalar,
-        VerifierIndexDigest,
+        self, AfterGamma, Base, Beta, Challenge, Digest, DigestOf, FqTape, FrSpongeIn, FrTapeIn,
+        Message, Piop, Scalar, VerifierIndexDigest, evaluation_in, previous_challenges_digest_in,
     },
     verifier::{
         BaseTranscript, Challenges, Claim, Linearization, Oracles, VerifyError, base_transcript,
         combined_commitment, combined_inner_product, commitments, evaluation_shape, evaluations,
-        ft_comm, linearization, oracles, scalar_transcript, succinct, verify,
+        ft_comm, linearization, oracles, scalar_transcript, scalar_transcript_in, succinct, verify,
     },
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
@@ -1210,6 +1210,73 @@ fn verifier_scalar_transcript() {
         &proof.evals,
     );
     assert_ne!(w, v);
+}
+
+#[test]
+fn verifier_scalar_transcript_in() {
+    // The same pattern at the model's carrier: natively, the same
+    // challenges as the verifier's own scalar transcript.
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let poseidon = pallas_base();
+    let (xi, r) = scalar_transcript_in(
+        &mut Native,
+        &poseidon,
+        &o.digest,
+        &[],
+        &proof.ft_eval1,
+        &proof.evals,
+    );
+    assert_eq!(
+        (ScalarChallenge(xi), ScalarChallenge(r)),
+        (o.v_chal, o.u_chal)
+    );
+}
+
+#[test]
+fn challenge_model() {
+    // Natively: the two low limbs, and the endomorphism map.
+    let x = Fp::from_limbs(&[1, 2, 3, 0]).unwrap();
+    let mut m = Native;
+    let low = ChallengeModel::<Fp>::lowest_128_bits(&mut m, &x);
+    assert_eq!(low, Fp::from_limbs(&[1, 2]).unwrap());
+    let lambda = Vesta::lambda();
+    assert_eq!(
+        ChallengeModel::<Fp>::endo(&mut m, &low, lambda),
+        ScalarChallenge(low).to_field(lambda)
+    );
+    let mut borrowed = &mut m;
+    assert_eq!(
+        ChallengeModel::<Fp>::lowest_128_bits(&mut borrowed, &x),
+        low
+    );
+}
+
+#[test]
+fn fr_sponge_in() {
+    // The scalar sponge in the native model draws what FrSponge over
+    // Kimchi's sponge draws, on the same typed tape.
+    let model = core::cell::RefCell::new(Native);
+    let poseidon = pallas_base();
+    let chals = vec![vec![Fp::from_u64(5), Fp::from_u64(6)]];
+    let digest = previous_challenges_digest_in(&model, &poseidon, chals.clone());
+    assert_eq!(
+        digest,
+        transcript::previous_challenges_digest(KimchiSponge::new(pallas_base()), chals)
+    );
+    let tape: FrTapeIn<'_, Fp, Native, _, _> = evaluation_in(&model, &poseidon);
+    let native = transcript::evaluation::<Fp, _>(KimchiSponge::new(pallas_base()));
+    let one = Fp::ONE;
+    let (a, b) = (
+        tape.statement(&Message::new(Scalar(one))),
+        native.statement(&Message::new(Scalar(one))),
+    );
+    let sponge: FrSpongeIn<'_, Fp, Native, _> = FrSpongeIn::new(&model, &poseidon);
+    let _ = sponge.clone();
+    let _ = (a, b);
 }
 
 #[test]

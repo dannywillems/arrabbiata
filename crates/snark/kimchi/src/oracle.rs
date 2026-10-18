@@ -31,7 +31,7 @@ use alloc::{vec, vec::Vec};
 use core::cmp::Ordering;
 
 use arrabbiata_curve::{Curve, Projective};
-use arrabbiata_field::{Field, PrimeField};
+use arrabbiata_field::{Field, FieldModel, Native, PrimeField};
 use arrabbiata_transcript::Transcript;
 
 /// The limbs of a challenge (Kimchi's `CHALLENGE_LENGTH_IN_LIMBS`).
@@ -112,6 +112,53 @@ where
     #[must_use]
     pub fn to_field(&self, lambda: F) -> F {
         self.to_field_with_length(64 * CHALLENGE_LIMBS, lambda)
+    }
+}
+
+/// The operations of Kimchi's 128-bit challenges beyond the field
+/// signature, in a model of it ([`FieldModel`]): what the scalar sponge
+/// needs to draw a challenge, and what a verifier needs to use one.
+pub trait ChallengeModel<F>: FieldModel<F>
+where
+    F: Field,
+{
+    /// The lowest 128 bits of `x`: the challenge a squeeze gives (the two
+    /// low limbs of [`FrSponge::challenge`]). A circuit writes `x = lo +
+    /// 2^128 hi`, checks `hi` to 128 bits, and leaves `lo` to the use that
+    /// checks it ([`ChallengeModel::endo`]), as Pickles'
+    /// `lowest_128_bits`.
+    fn lowest_128_bits(&mut self, x: &Self::Value) -> Self::Value;
+
+    /// The scalar `a lambda + b` of the challenge `chal`
+    /// ([`ScalarChallenge::to_field`]); a circuit also checks that `chal`
+    /// has 128 bits, as Pickles' `to_field_checked`.
+    fn endo(&mut self, chal: &Self::Value, lambda: F) -> Self::Value;
+}
+
+impl<F> ChallengeModel<F> for Native
+where
+    F: PrimeField,
+{
+    fn lowest_128_bits(&mut self, x: &F) -> F {
+        pack(&[x.limb(0), x.limb(1)])
+    }
+
+    fn endo(&mut self, chal: &F, lambda: F) -> F {
+        ScalarChallenge(*chal).to_field(lambda)
+    }
+}
+
+impl<F, M> ChallengeModel<F> for &mut M
+where
+    F: Field,
+    M: ChallengeModel<F>,
+{
+    fn lowest_128_bits(&mut self, x: &Self::Value) -> Self::Value {
+        (**self).lowest_128_bits(x)
+    }
+
+    fn endo(&mut self, chal: &Self::Value, lambda: F) -> Self::Value {
+        (**self).endo(chal, lambda)
     }
 }
 

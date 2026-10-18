@@ -32,20 +32,21 @@
 //! `r` and `r'` (from the [`Sampler`]) keep the two from cancelling.
 
 use alloc::{vec, vec::Vec};
-use core::fmt;
+use core::{cell::RefCell, fmt};
 
 use arrabbiata_curve::{Curve, Projective, glv::Glv, msm};
 use arrabbiata_field::{Field, PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_ipa::{RecursionChallenge, Statement, b_poly, b_poly_coefficients};
 use arrabbiata_poly::Domain;
-use arrabbiata_transcript::Transcript;
+use arrabbiata_poseidon::kimchi::WIDTH;
+use arrabbiata_transcript::{PermutationIn, Transcript};
 
 use crate::{
     constraints::GateType,
     gates::Gates,
     ipa::kimchi_ipa,
     lookup::{LookupPattern, LookupPoint, constraint_count, constraints as lookup_constraints},
-    oracle::{FqSponge, ScalarChallenge},
+    oracle::{ChallengeModel, FqSponge, ScalarChallenge},
     permutation::PERMUTS,
     prover::{
         CONSTRAINED, LOOKUP_ALPHA, LookupEvaluations, PERMUTATION_ALPHA, PointEvaluations,
@@ -493,6 +494,39 @@ where
     let (u_chal, tape) = tape.squeeze();
     let _ = tape.into_inner();
     (v_chal, u_chal)
+}
+
+/// [`scalar_transcript`] in a model of the field signature, on Kimchi's
+/// sponge over `permutation` in that model ([`transcript::FrSpongeIn`]):
+/// the same pattern ([`transcript::Evaluation`] at the model's carrier),
+/// step for step, so a verifier in a circuit draws its `xi` and `r` by the
+/// protocol the native verifier follows. The 128-bit challenges come
+/// unmapped.
+pub fn scalar_transcript_in<F, M, P>(
+    model: &mut M,
+    permutation: &P,
+    digest: &M::Value,
+    prev_challenges: &[Vec<M::Value>],
+    ft_eval1: &M::Value,
+    evals: &ProofEvaluations<M::Value>,
+) -> (M::Value, M::Value)
+where
+    F: Field,
+    M: ChallengeModel<F>,
+    P: PermutationIn<M, F, WIDTH>,
+{
+    let shared = RefCell::new(model);
+    let prev_digest =
+        transcript::previous_challenges_digest_in(&shared, permutation, prev_challenges.to_vec());
+    let tape = transcript::evaluation_in(&shared, permutation)
+        .statement(&Message::new(Scalar(digest.clone())))
+        .statement(&Message::new(Scalar(prev_digest)))
+        .receive(&Message::new(Scalar(ft_eval1.clone())))
+        .receive(&Message::new(evals.clone()));
+    let (xi, tape) = tape.squeeze();
+    let (r, tape) = tape.squeeze();
+    let _ = tape.into_inner();
+    (xi, r)
 }
 
 /// The scalars of the linearization (Pickles' `derive_plonk` and

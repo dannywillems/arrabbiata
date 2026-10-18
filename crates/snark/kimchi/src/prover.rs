@@ -1056,10 +1056,7 @@ impl<F> ProofEvaluations<F> {
     }
 }
 
-impl<F> ProofEvaluations<F>
-where
-    F: Copy,
-{
+impl<F> ProofEvaluations<F> {
     /// The evaluations in the order the scalar sponge absorbs them, after
     /// the public ones.
     #[must_use]
