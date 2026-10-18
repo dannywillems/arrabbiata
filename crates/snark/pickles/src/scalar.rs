@@ -11,25 +11,35 @@
 //! as a typed gadget, so the circuit and its witness are the same code
 //! again.
 //!
+//! The scalar sponge is in the model too, on Kimchi's typed pattern
+//! (`arrabbiata_kimchi::verifier::scalar_transcript_in`), so the circuit
+//! draws `xi` and `r` itself from the base digest, and maps every
+//! 128-bit challenge through the endomorphism, as Pickles' finalizer does.
+//! The opening's challenges come mapped.
+//!
 //! The circuit does not yet cover lookups: [`ScalarHalf::new`] refuses an
 //! index with lookups.
 
 use alloc::{vec, vec::Vec};
 use core::fmt;
 
+use arrabbiata_curve::glv::Glv;
 use arrabbiata_field::{Field, FieldModel, PrimeField, TwoAdicField};
 use arrabbiata_gadget::{Array, Env, Of, Scalar, TypedGadget, measure};
 use arrabbiata_kimchi::{
     constraints::GateType,
     gates::KimchiGates,
+    oracle::ChallengeModel,
     permutation::PERMUTS,
     prover::{CONSTRAINED, LOOKUP_ALPHA, PERMUTATION_ALPHA, PointEvaluations, ProofEvaluations},
     srs::num_chunks,
-    verifier::{Challenges, Linearization},
+    verifier::{Challenges, Linearization, scalar_transcript_in},
     verifier_index::VerifierIndex,
 };
 use arrabbiata_kimchi_gadgets::LAYOUT;
 use arrabbiata_poly::Domain;
+use arrabbiata_poseidon::kimchi::{KimchiPoseidon, WIDTH};
+use arrabbiata_transcript::PermutationIn;
 
 use crate::model::{Affine, Circuit, load};
 
@@ -54,6 +64,9 @@ pub struct Constants<F> {
     /// The evaluations' shape: a proof's evaluations of this index, every
     /// value replaced by `()`.
     pub shape: ProofEvaluations<()>,
+    /// The endomorphism's eigenvalue `lambda` the 128-bit challenges map
+    /// through.
+    pub lambda: F,
 }
 
 /// Why the scalar half cannot be built for an index.
@@ -99,7 +112,7 @@ where
     /// [`ScalarError::Domain`] for a domain not of the field.
     pub fn of<C>(index: &VerifierIndex<C>) -> Result<Self, ScalarError>
     where
-        C: arrabbiata_curve::Curve<Scalar = F>,
+        C: Glv<Scalar = F>,
     {
         if index.lookup_index.is_some() {
             return Err(ScalarError::Lookups);
@@ -154,6 +167,7 @@ where
             w_last: d.element(n - 1),
             shift: index.shift,
             shape,
+            lambda: C::lambda(),
         })
     }
 }
@@ -413,15 +427,21 @@ where
     combined
 }
 
-/// What the scalar half reads, as values of a model.
+/// What the scalar half reads, as values of a model: Pickles' deferred
+/// challenges as they cross (the 128-bit `alpha` and `zeta` before their
+/// map), the base sponge's digest, and the proof's evaluations.
 #[derive(Clone, Debug)]
 pub struct Inputs<V> {
-    /// `alpha`, `beta`, `gamma`, `zeta`.
-    pub challenges: Challenges<V>,
-    /// The polynomial combiner.
-    pub xi: V,
-    /// The point combiner.
-    pub r: V,
+    /// The 128-bit challenge `alpha` comes from.
+    pub alpha: V,
+    /// `beta`.
+    pub beta: V,
+    /// `gamma`.
+    pub gamma: V,
+    /// The 128-bit challenge `zeta` comes from.
+    pub zeta: V,
+    /// The base sponge's digest, where the scalar sponge starts.
+    pub digest: V,
     /// `ft(zeta w)`.
     pub ft_eval1: V,
     /// The previous accumulators' challenges.
@@ -442,21 +462,45 @@ pub struct Outputs<V> {
     pub combined_inner_product: V,
     /// `b(zeta) + r b(zeta w)`.
     pub b: V,
+    /// The 128-bit challenge `xi` the scalar sponge draws.
+    pub xi: V,
 }
 
-/// The scalar half on `inputs` against `k`, in the model `m`.
+/// The scalar half on `inputs` against `k`, in the model `m`, the scalar
+/// sponge over `poseidon`: the transcript's `xi` and `r`, the challenges
+/// mapped through the endomorphism, then the linearization, the combined
+/// inner product and `b`.
 pub fn scalar_half<F, M>(
     m: &mut M,
     k: &Constants<F>,
+    poseidon: &KimchiPoseidon<F>,
     inputs: &Inputs<M::Value>,
     gates: &KimchiGates<F>,
 ) -> Outputs<M::Value>
 where
     F: PrimeField,
-    M: FieldModel<F>,
+    M: ChallengeModel<F>,
+    KimchiPoseidon<F>: PermutationIn<M, F, WIDTH>,
 {
-    let lin = linearization(m, k, &inputs.evals, &inputs.challenges, gates);
-    let zeta = &inputs.challenges.zeta;
+    let (xi_chal, r_chal) = scalar_transcript_in(
+        m,
+        poseidon,
+        &inputs.digest,
+        &inputs.prev_challenges,
+        &inputs.ft_eval1,
+        &inputs.evals,
+    );
+    let challenges = Challenges {
+        alpha: m.endo(&inputs.alpha, k.lambda),
+        beta: inputs.beta.clone(),
+        gamma: inputs.gamma.clone(),
+        zeta: m.endo(&inputs.zeta, k.lambda),
+        joint_combiner: None,
+    };
+    let xi = m.endo(&xi_chal, k.lambda);
+    let r = m.endo(&r_chal, k.lambda);
+    let lin = linearization(m, k, &inputs.evals, &challenges, gates);
+    let zeta = &challenges.zeta;
     let points = [zeta.clone(), m.scale(zeta, k.omega)];
     let all = evaluations(
         m,
@@ -465,32 +509,31 @@ where
         [lin.ft_eval0.clone(), inputs.ft_eval1.clone()],
         &points,
     );
-    let cip = combined_inner_product(m, &all, &inputs.xi, &inputs.r);
+    let cip = combined_inner_product(m, &all, &xi, &r);
     let at_zeta = b_poly(m, &inputs.bulletproof_challenges, &points[0]);
     let at_zetaw = b_poly(m, &inputs.bulletproof_challenges, &points[1]);
-    let r_at = m.mul(&inputs.r, &at_zetaw);
+    let r_at = m.mul(&r, &at_zetaw);
     let b = m.add(&at_zeta, &r_at);
     Outputs {
         linearization: lin,
         combined_inner_product: cip,
         b,
+        xi: xi_chal,
     }
 }
 
 /// The values of `inputs`, flat, in the order [`ScalarHalf`] reads them:
-/// `alpha, beta, gamma, zeta, xi, r, ft(zeta w)`, the previous
-/// accumulators' challenges, the opening's challenges, then the
-/// evaluations in the order of their fields.
+/// `alpha, beta, gamma, zeta`, the digest, `ft(zeta w)`, the previous
+/// accumulators' challenges, the opening's challenges, then the evaluations
+/// in the order of their fields.
 #[must_use]
 pub fn flatten<V: Clone>(inputs: &Inputs<V>) -> Vec<V> {
-    let c = &inputs.challenges;
     let mut out = vec![
-        c.alpha.clone(),
-        c.beta.clone(),
-        c.gamma.clone(),
-        c.zeta.clone(),
-        inputs.xi.clone(),
-        inputs.r.clone(),
+        inputs.alpha.clone(),
+        inputs.beta.clone(),
+        inputs.gamma.clone(),
+        inputs.zeta.clone(),
+        inputs.digest.clone(),
         inputs.ft_eval1.clone(),
     ];
     for chals in &inputs.prev_challenges {
@@ -503,39 +546,42 @@ pub fn flatten<V: Clone>(inputs: &Inputs<V>) -> Vec<V> {
 
 /// The scalar half as a circuit: a typed gadget whose input is
 /// [`flatten`] of [`Inputs`], `N` values, and whose output is `ft(zeta)`,
-/// `perm`, `zeta^n`, `zeta^m`, the combined inner product and `b`, in
-/// cells. Its rows depend on the index ([`TypedGadget::rows`]).
+/// `perm`, `zeta^n`, `zeta^m`, the combined inner product, `b` and the
+/// 128-bit `xi`, in cells. Its rows depend on the index
+/// ([`TypedGadget::rows`]).
 #[derive(Clone, Debug)]
 pub struct ScalarHalf<'a, F, const N: usize> {
     constants: Constants<F>,
+    poseidon: &'a KimchiPoseidon<F>,
     gates: &'a KimchiGates<F>,
     prev: Vec<usize>,
     rounds: usize,
 }
 
 /// The values [`ScalarHalf`] outputs.
-pub const OUTPUTS: usize = 6;
+pub const OUTPUTS: usize = 7;
 
 impl<'a, F, const N: usize> ScalarHalf<'a, F, N>
 where
     F: TwoAdicField,
 {
-    /// The circuit for `constants`, with Kimchi's `gates`, previous
-    /// accumulators of `prev[i]` challenges, and an opening of `rounds`
-    /// rounds.
+    /// The circuit for `constants`, with Kimchi's `poseidon` for the scalar
+    /// sponge and its `gates`, previous accumulators of `prev[i]`
+    /// challenges, and an opening of `rounds` rounds.
     ///
     /// # Errors
     ///
     /// [`ScalarError::InputSize`] when `N` is not the input's size.
     pub fn new(
         constants: Constants<F>,
+        poseidon: &'a KimchiPoseidon<F>,
         gates: &'a KimchiGates<F>,
         prev: Vec<usize>,
         rounds: usize,
     ) -> Result<Self, ScalarError> {
         let mut evaluations = 0;
         let _ = constants.shape.map(&mut |()| evaluations += 1);
-        let expected = 7 + prev.iter().sum::<usize>() + rounds + evaluations;
+        let expected = 6 + prev.iter().sum::<usize>() + rounds + evaluations;
         if expected != N {
             return Err(ScalarError::InputSize {
                 declared: N,
@@ -544,6 +590,7 @@ where
         }
         Ok(Self {
             constants,
+            poseidon,
             gates,
             prev,
             rounds,
@@ -557,15 +604,11 @@ where
             Some(v) => v,
             None => unreachable!("the input has the size new checked"),
         };
-        let challenges = Challenges {
-            alpha: take(),
-            beta: take(),
-            gamma: take(),
-            zeta: take(),
-            joint_combiner: None,
-        };
-        let xi = take();
-        let r = take();
+        let alpha = take();
+        let beta = take();
+        let gamma = take();
+        let zeta = take();
+        let digest = take();
         let ft_eval1 = take();
         let prev_challenges = self
             .prev
@@ -575,9 +618,11 @@ where
         let bulletproof_challenges = (0..self.rounds).map(|_| take()).collect();
         let evals = self.constants.shape.map(&mut |()| take());
         Inputs {
-            challenges,
-            xi,
-            r,
+            alpha,
+            beta,
+            gamma,
+            zeta,
+            digest,
             ft_eval1,
             prev_challenges,
             bulletproof_challenges,
@@ -607,7 +652,13 @@ where
         let values: Vec<Affine<E::Var, F>> = cells.into_iter().map(Affine::of).collect();
         let inputs = self.unflatten(&values);
         let mut model = Circuit::new(env);
-        let out = scalar_half(&mut model, &self.constants, &inputs, self.gates);
+        let out = scalar_half(
+            &mut model,
+            &self.constants,
+            self.poseidon,
+            &inputs,
+            self.gates,
+        );
         let lin = &out.linearization;
         let outputs = [
             &lin.ft_eval0,
@@ -616,6 +667,7 @@ where
             &lin.zeta_to_srs_length,
             &out.combined_inner_product,
             &out.b,
+            &out.xi,
         ];
         let placed: Vec<E::Var> = outputs.iter().map(|v| model.cell(v)).collect();
         core::array::from_fn(|i| placed[i].clone())

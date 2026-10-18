@@ -9,6 +9,9 @@
 //!
 //! - [`model`]: the signature of fields, its native model, and its circuit
 //!   model, one Generic row per operation;
+//! - [`transcript`]: what the circuit model needs to run Kimchi's typed
+//!   scalar-sponge transcript (the permutation's rows, the challenges'
+//!   splits and endomorphism rows);
 //! - [`scalar`]: the scalar half written once over that signature, and the
 //!   typed gadget that is its circuit.
 
@@ -18,3 +21,4 @@ extern crate alloc;
 
 pub mod model;
 pub mod scalar;
+pub mod transcript;

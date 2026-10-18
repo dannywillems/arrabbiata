@@ -252,6 +252,7 @@ dependencies = [
  "arrabbiata-pasta",
  "arrabbiata-poly",
  "arrabbiata-poseidon",
+ "arrabbiata-transcript",
 ]
 
 [[package]]

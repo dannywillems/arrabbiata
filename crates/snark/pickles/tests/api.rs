@@ -1,12 +1,13 @@
 //! The behaviour of each public item, one test per item.
 
-use arrabbiata_field::{Field, FieldModel, Native};
+use arrabbiata_curve::glv::Glv;
+use arrabbiata_field::{Field, FieldModel, Native, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Of, Placed, Scalar, TypedGadget, evaluate, measure};
 use arrabbiata_kimchi::{
     constraints::{CircuitGate, ConstraintSystem, GateType, Wire},
+    oracle::{ChallengeModel, ScalarChallenge},
     prover::{PointEvaluations, ProverIndex},
     srs::Srs,
-    verifier::Challenges,
 };
 use arrabbiata_kimchi_gadgets::LAYOUT;
 use arrabbiata_pasta::{Fp, Vesta};
@@ -16,7 +17,10 @@ use arrabbiata_pickles::{
         Constants, Inputs, OUTPUTS, Outputs, ScalarError, b_poly, combine, combined_inner_product,
         evaluations, flatten,
     },
+    transcript::{Permute, Split128},
 };
+use arrabbiata_poseidon::kimchi::pallas_base;
+use arrabbiata_transcript::Permutation;
 
 /// The index of two Generic rows.
 fn index() -> ProverIndex<Vesta> {
@@ -48,6 +52,8 @@ enum Op {
     Mul(usize, usize),
     Inverse(usize),
     Constant(Fp),
+    Low(usize),
+    Endo(usize),
 }
 
 /// A value of a test program: an index into the values computed so far.
@@ -86,6 +92,8 @@ where
                 Op::Mul(a, b) => model.mul(&values[a], &values[b]),
                 Op::Inverse(a) => model.inverse(&values[a]),
                 Op::Constant(c) => model.constant(c),
+                Op::Low(a) => model.lowest_128_bits(&values[a]),
+                Op::Endo(a) => model.endo(&values[a], Vesta::lambda()),
             };
             values.push(v);
             values.len() - 1
@@ -289,23 +297,19 @@ fn scalar_inputs_outputs_and_flatten() {
     let k = Constants::of(&index().verifier_index).unwrap();
     let evals = k.shape.map(&mut |()| Fp::from_u64(9));
     let inputs = Inputs {
-        challenges: Challenges {
-            alpha: Fp::from_u64(1),
-            beta: Fp::from_u64(2),
-            gamma: Fp::from_u64(3),
-            zeta: Fp::from_u64(4),
-            joint_combiner: None,
-        },
-        xi: Fp::from_u64(5),
-        r: Fp::from_u64(6),
+        alpha: Fp::from_u64(1),
+        beta: Fp::from_u64(2),
+        gamma: Fp::from_u64(3),
+        zeta: Fp::from_u64(4),
+        digest: Fp::from_u64(5),
         ft_eval1: Fp::from_u64(7),
         prev_challenges: vec![vec![Fp::from_u64(8)]],
         bulletproof_challenges: vec![Fp::from_u64(11)],
         evals,
     };
     let flat = flatten(&inputs);
-    assert_eq!(flat.len(), 7 + 1 + 1 + 88);
-    assert_eq!(flat[..9], [1, 2, 3, 4, 5, 6, 7, 8, 11].map(Fp::from_u64));
+    assert_eq!(flat.len(), 6 + 1 + 1 + 88);
+    assert_eq!(flat[..8], [1, 2, 3, 4, 5, 7, 8, 11].map(Fp::from_u64));
     let outputs = Outputs {
         linearization: arrabbiata_kimchi::verifier::Linearization {
             ft_eval0: Fp::ONE,
@@ -315,7 +319,57 @@ fn scalar_inputs_outputs_and_flatten() {
         },
         combined_inner_product: Fp::ZERO,
         b: Fp::ZERO,
+        xi: Fp::ZERO,
     };
     assert_eq!(outputs.clone(), outputs);
-    assert_eq!(OUTPUTS, 6);
+    assert_eq!(OUTPUTS, 7);
+}
+
+#[test]
+fn transcript_permute() {
+    // Kimchi's permutation on its gate's rows, the output on the row after.
+    let poseidon = pallas_base();
+    let gadget = Placed {
+        gadget: Permute {
+            poseidon: &poseidon,
+        },
+        cells: vec![Cell::new(0, 0), Cell::new(1, 0), Cell::new(2, 0)],
+    };
+    let input = [1, 2, 3].map(Fp::from_u64);
+    let out = evaluate(&gadget, LAYOUT, &input).unwrap();
+    let mut state = input;
+    poseidon.permute(&mut state);
+    assert_eq!(out, state);
+    assert_eq!(gadget.rows(), 12);
+}
+
+#[test]
+fn transcript_split_128() {
+    // The canonical split: x = lo + 2^128 hi.
+    let gadget = Placed {
+        gadget: Split128,
+        cells: vec![Cell::new(0, 0)],
+    };
+    let x = Fp::from_limbs(&[1, 2, 3, 4]).unwrap();
+    let [lo, hi] = evaluate(&gadget, LAYOUT, &x).unwrap();
+    assert_eq!(lo, Fp::from_limbs(&[1, 2]).unwrap());
+    assert_eq!(hi, Fp::from_limbs(&[3, 4]).unwrap());
+    assert!(arrabbiata_gadget::witness::<Fp, _, 64, 7>(&gadget, LAYOUT, &x).is_ok());
+}
+
+#[test]
+fn transcript_circuit_challenges() {
+    // In the circuit model: the lowest 128 bits of x, then its scalar.
+    let x = Fp::from_limbs(&[5, 6, 7, 0]).unwrap();
+    let (low, _) = run(|ask, x, _| ask(Op::Low(x)), x, Fp::ZERO);
+    assert_eq!(low, Fp::from_limbs(&[5, 6]).unwrap());
+    let (scalar, rows) = run(|ask, x, _| ask(Op::Endo(x)), low, Fp::ZERO);
+    assert_eq!(scalar, ScalarChallenge(low).to_field(Vesta::lambda()));
+    // Load, the constants 0 and 2 (2 wired to both a0 and b0), eight
+    // EndoMulScalar rows, the combination.
+    assert_eq!(rows, 12);
+    assert_eq!(
+        ChallengeModel::<Fp>::endo(&mut Native, &low, Vesta::lambda()),
+        scalar
+    );
 }

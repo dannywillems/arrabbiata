@@ -17,7 +17,7 @@ use arrabbiata_kimchi::{
     prover::{ProverIndex, ProverProof, prove},
     rng::{Arkworks, SplitMix64},
     srs::Srs,
-    verifier::{Challenges, oracles, verify},
+    verifier::{oracles, verify},
 };
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
@@ -164,15 +164,11 @@ fn inputs_of(
     let o = oracles(vi, &index.srs, proof, &[], &gates(), sponges).unwrap();
     let values = expand_deferred(vi, &index.srs, proof, &[], &gates(), sponges).unwrap();
     let inputs = Inputs {
-        challenges: Challenges {
-            alpha: o.alpha,
-            beta: o.beta,
-            gamma: o.gamma,
-            zeta: o.zeta,
-            joint_combiner: None,
-        },
-        xi: o.v,
-        r: o.u,
+        alpha: o.alpha_chal.0,
+        beta: o.beta,
+        gamma: o.gamma,
+        zeta: o.zeta_chal.0,
+        digest: o.digest,
         ft_eval1: proof.ft_eval1,
         prev_challenges: proof
             .prev_challenges
@@ -189,6 +185,7 @@ fn inputs_of(
         values.plonk.zeta_to_srs_length,
         values.combined_inner_product,
         values.b,
+        values.xi.0,
     ];
     (inputs, expected)
 }
@@ -200,7 +197,8 @@ fn both_models<const N: usize>(index: &ProverIndex<Vesta>, proof: &ProverProof<V
     let gates = gates();
     let (inputs, expected) = inputs_of(index, proof);
     let constants = Constants::of(&index.verifier_index).unwrap();
-    let native = scalar_half(&mut Native, &constants, &inputs, &gates);
+    let poseidon = pallas_base();
+    let native = scalar_half(&mut Native, &constants, &poseidon, &inputs, &gates);
     let lin = &native.linearization;
     let natively = [
         lin.ft_eval0,
@@ -209,12 +207,13 @@ fn both_models<const N: usize>(index: &ProverIndex<Vesta>, proof: &ProverProof<V
         lin.zeta_to_srs_length,
         native.combined_inner_product,
         native.b,
+        native.xi,
     ];
     assert_eq!(natively, expected, "native");
 
     let prev: Vec<usize> = inputs.prev_challenges.iter().map(Vec::len).collect();
     let rounds = inputs.bulletproof_challenges.len();
-    let gadget = ScalarHalf::<Fp, N>::new(constants, &gates, prev, rounds).unwrap();
+    let gadget = ScalarHalf::<Fp, N>::new(constants, &poseidon, &gates, prev, rounds).unwrap();
     let flat: [Fp; N] = flatten(&inputs).try_into().unwrap();
     let out = evaluate(&gadget, LAYOUT, &flat).unwrap();
     assert_eq!(out, expected, "circuit output");
@@ -251,7 +250,7 @@ fn the_scalar_half_is_the_verifiers_in_both_models() {
     let input = INPUT.map(Fp::from_u64);
     let (index, columns) = indexed(&fixture, &input, 0, None);
     let proof = proved(&index, columns, &[]);
-    both_models::<99>(&index, &proof);
+    both_models::<98>(&index, &proof);
 }
 
 #[test]
@@ -264,7 +263,7 @@ fn the_scalar_half_with_chunks_and_a_previous_accumulator() {
     let (index, columns) = indexed(&fixture, &input, 1, Some(8));
     let previous = accumulator(&index.srs);
     let proof = proved(&index, columns, &[previous]);
-    both_models::<365>(&index, &proof);
+    both_models::<364>(&index, &proof);
 }
 
 #[test]
@@ -303,12 +302,13 @@ fn an_input_of_the_wrong_size_is_refused() {
     let (index, _) = indexed(&fixture, &input, 0, None);
     let gates = gates();
     let constants = Constants::of(&index.verifier_index).unwrap();
-    let error = ScalarHalf::<Fp, 3>::new(constants, &gates, vec![], 5).unwrap_err();
+    let poseidon = pallas_base();
+    let error = ScalarHalf::<Fp, 3>::new(constants, &poseidon, &gates, vec![], 5).unwrap_err();
     assert_eq!(
         error,
         ScalarError::InputSize {
             declared: 3,
-            expected: 100
+            expected: 99
         }
     );
 }
