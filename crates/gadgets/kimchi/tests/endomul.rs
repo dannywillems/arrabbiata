@@ -11,13 +11,13 @@
 //!   `Q` public.
 
 use arrabbiata_curve::{Affine, Projective, glv::Glv};
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget, witness};
 use arrabbiata_generalized_plonk::{max_coefficients, prove, setup, verify};
 use arrabbiata_ipa::Ipa;
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
-    endomul::{BITS_PER_ROW, EndoMul, column},
+    endomul::{BITS_PER_ROW, EndoMul, EndoMulGateOf, EndoMulOf, column},
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
@@ -292,4 +292,68 @@ fn a_scaling_is_proved() {
         )
         .is_err()
     );
+}
+
+/// [`Multiply`] with the bits taken from the challenge's value.
+#[derive(Clone, Copy, Debug)]
+struct MultiplyOf<const B: usize>;
+
+impl<const B: usize> TypedGadget<Fp> for MultiplyOf<B> {
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "multiply";
+    const ROWS: usize = <EndoMulOf<Fp, B> as TypedGadget<Fp>>::ROWS;
+
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        (t, p, x): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var> {
+        let t =
+            core::array::from_fn(|i| env.advice(Cell::new(column::XT + i, 0), [&t[i]], |[v]| v));
+        let p =
+            core::array::from_fn(|i| env.advice(Cell::new(column::XP + i, 0), [&p[i]], |[v]| v));
+        let gadget = EndoMulOf::<Fp, B> {
+            endo: Pallas::beta(),
+        };
+        env.call(&gadget, (t, p, x))
+    }
+}
+
+/// The element of `Fp` of the 128 bits `x`.
+fn element(x: u128) -> Fp {
+    Fp::from_limbs(&[x as u64, (x >> 64) as u64]).unwrap()
+}
+
+#[test]
+fn endomul_of_is_endomul_of_the_bits() {
+    // The bits taken from the challenge's value are the bits given: the
+    // same cells, the same result, n the challenge, and [k] T.
+    let x: u128 = 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210;
+    let t = generator() * Fq::from_u64(5);
+    let input_t = coordinates(&t.to_affine());
+    let input_p = coordinates(&start(&t).to_affine());
+    let given = (input_t, input_p, bits_msb::<CHALLENGE_BITS>(x));
+    let (bits, (q, n)) =
+        witness::<Fp, _, VARIABLES, DEGREE>(&Multiply::<CHALLENGE_BITS>, LAYOUT, &given).unwrap();
+    let (of, (q_of, n_of)) = witness::<Fp, _, VARIABLES, DEGREE>(
+        &MultiplyOf::<CHALLENGE_BITS>,
+        LAYOUT,
+        &(input_t, input_p, element(x)),
+    )
+    .unwrap();
+    assert_eq!(of.columns, bits.columns);
+    assert_eq!((q_of, n_of), (q, n));
+    assert_eq!(n_of, element(x));
+    assert_eq!(q_of, coordinates(&(t * to_field(x)).to_affine()));
+}
+
+#[test]
+fn endomul_gate_of() {
+    let gate = EndoMulGateOf {
+        endo: Pallas::beta(),
+        top: 3,
+    };
+    assert_eq!(<EndoMulGateOf<Fp> as TypedGadget<Fp>>::ROWS, 1);
+    assert_eq!(gate.top, 3);
 }

@@ -22,7 +22,7 @@
 //! with its slope eliminated; `n'`; and `(xP - xR)(xR - xS) inv = 1`. The
 //! witness is computed as Kimchi's `endosclmul::gen_witness`.
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget};
 
 use self::column::{BITS, INV, N, S1, S3, XP, XR, XT, YP, YR, YT};
@@ -115,68 +115,122 @@ where
     where
         E: Env<F>,
     {
-        let xt = env.copy(Cell::new(XT, 0), &t[0]);
-        let yt = env.copy(Cell::new(YT, 0), &t[1]);
-        let xp = env.copy(Cell::new(XP, 0), &p[0]);
-        let yp = env.copy(Cell::new(YP, 0), &p[1]);
-        let n = env.copy(Cell::new(N, 0), &n);
-        let b: [E::Var; BITS_PER_ROW] =
-            core::array::from_fn(|k| env.advice(Cell::new(BITS[k], 0), [&bits[k]], |[v]| v));
-        let known = [&xt, &yt, &xp, &yp, &b[0], &b[1], &b[2], &b[3]];
-        let endo = self.endo;
-        let at = |env: &mut E, column: usize, row_offset: usize, index: usize| {
-            env.advice(Cell::new(column, row_offset), known, |v| {
-                row(endo, &v)[index]
-            })
-        };
-        let xr = at(env, XR, 0, 0);
-        let yr = at(env, YR, 0, 1);
-        let s1 = at(env, S1, 0, 2);
-        let s3 = at(env, S3, 0, 3);
-        let xs = at(env, XP, 1, 4);
-        let ys = at(env, YP, 1, 5);
-        let inv = at(env, INV, 0, 6);
-        let n_next = env.advice(Cell::new(N, 1), [&n, &b[0], &b[1], &b[2], &b[3]], |v| {
-            v[1..].iter().fold(v[0], |acc, bit| acc + acc + *bit)
-        });
+        gate(env, self.endo, &t, &p, &n, |env, k, at| {
+            env.advice(at, [&bits[k]], |[v]| v)
+        })
+    }
+}
 
-        let one = env.constant(F::ONE);
-        let endo_minus_one = env.constant(endo - F::ONE);
-        let xq1 = (one.clone() + b[0].clone() * endo_minus_one.clone()) * xt.clone();
-        let xq2 = (one.clone() + b[2].clone() * endo_minus_one) * xt;
-        let yq1 = (b[1].clone() + b[1].clone() - one.clone()) * yt.clone();
-        let yq2 = (b[3].clone() + b[3].clone() - one.clone()) * yt;
-        let s1_squared = s1.clone() * s1.clone();
-        let s3_squared = s3.clone() * s3.clone();
-        let xp_xr = xp.clone() - xr.clone();
-        let xr_xs = xr.clone() - xs.clone();
-        let ys_yr = ys.clone() + yr.clone();
-        let yr_yp = yr.clone() + yp.clone();
-        for bit in &b {
-            env.assert_zero(bit.clone() * bit.clone() - bit.clone());
-        }
-        env.assert_zero((xq1.clone() - xp.clone()) * s1.clone() - (yq1 - yp.clone()));
-        env.assert_zero(
-            (xp.clone() + xp.clone() - s1_squared.clone() + xq1.clone())
-                * (xp_xr.clone() * s1 + yr_yp.clone())
-                - (yp.clone() + yp) * xp_xr.clone(),
-        );
-        env.assert_zero(
-            yr_yp.clone() * yr_yp - xp_xr.clone() * xp_xr.clone() * (s1_squared - xq1 + xr.clone()),
-        );
-        env.assert_zero((xq2.clone() - xr.clone()) * s3.clone() - (yq2 - yr.clone()));
-        env.assert_zero(
-            (xr.clone() + xr.clone() - s3_squared.clone() + xq2.clone())
-                * (xr_xs.clone() * s3 + ys_yr.clone())
-                - (yr.clone() + yr) * xr_xs.clone(),
-        );
-        env.assert_zero(
-            ys_yr.clone() * ys_yr - xr_xs.clone() * xr_xs.clone() * (s3_squared - xq2 + xs.clone()),
-        );
-        let combined = b.iter().fold(n, |acc, bit| acc.clone() + acc + bit.clone());
-        env.assert_zero(combined - n_next.clone());
-        env.assert_zero(xp_xr * xr_xs * inv - one);
-        ([xs, ys], n_next)
+/// One row on `t`, `p` and `n`, its bit `k` placed at its cell by `bit`:
+/// the constraints and the witness, whichever gives the bits.
+fn gate<F, E>(
+    env: &mut E,
+    endo: F,
+    t: &[E::Var; 2],
+    p: &[E::Var; 2],
+    n: &E::Var,
+    mut bit: impl FnMut(&mut E, usize, Cell) -> E::Var,
+) -> ([E::Var; 2], E::Var)
+where
+    F: Field,
+    E: Env<F>,
+{
+    let xt = env.copy(Cell::new(XT, 0), &t[0]);
+    let yt = env.copy(Cell::new(YT, 0), &t[1]);
+    let xp = env.copy(Cell::new(XP, 0), &p[0]);
+    let yp = env.copy(Cell::new(YP, 0), &p[1]);
+    let n = env.copy(Cell::new(N, 0), n);
+    let b: [E::Var; BITS_PER_ROW] = core::array::from_fn(|k| bit(env, k, Cell::new(BITS[k], 0)));
+    let known = [&xt, &yt, &xp, &yp, &b[0], &b[1], &b[2], &b[3]];
+    let at = |env: &mut E, column: usize, row_offset: usize, index: usize| {
+        env.advice(Cell::new(column, row_offset), known, |v| {
+            row(endo, &v)[index]
+        })
+    };
+    let xr = at(env, XR, 0, 0);
+    let yr = at(env, YR, 0, 1);
+    let s1 = at(env, S1, 0, 2);
+    let s3 = at(env, S3, 0, 3);
+    let xs = at(env, XP, 1, 4);
+    let ys = at(env, YP, 1, 5);
+    let inv = at(env, INV, 0, 6);
+    let n_next = env.advice(Cell::new(N, 1), [&n, &b[0], &b[1], &b[2], &b[3]], |v| {
+        v[1..].iter().fold(v[0], |acc, bit| acc + acc + *bit)
+    });
+
+    let one = env.constant(F::ONE);
+    let endo_minus_one = env.constant(endo - F::ONE);
+    let xq1 = (one.clone() + b[0].clone() * endo_minus_one.clone()) * xt.clone();
+    let xq2 = (one.clone() + b[2].clone() * endo_minus_one) * xt;
+    let yq1 = (b[1].clone() + b[1].clone() - one.clone()) * yt.clone();
+    let yq2 = (b[3].clone() + b[3].clone() - one.clone()) * yt;
+    let s1_squared = s1.clone() * s1.clone();
+    let s3_squared = s3.clone() * s3.clone();
+    let xp_xr = xp.clone() - xr.clone();
+    let xr_xs = xr.clone() - xs.clone();
+    let ys_yr = ys.clone() + yr.clone();
+    let yr_yp = yr.clone() + yp.clone();
+    for bit in &b {
+        env.assert_zero(bit.clone() * bit.clone() - bit.clone());
+    }
+    env.assert_zero((xq1.clone() - xp.clone()) * s1.clone() - (yq1 - yp.clone()));
+    env.assert_zero(
+        (xp.clone() + xp.clone() - s1_squared.clone() + xq1.clone())
+            * (xp_xr.clone() * s1 + yr_yp.clone())
+            - (yp.clone() + yp) * xp_xr.clone(),
+    );
+    env.assert_zero(
+        yr_yp.clone() * yr_yp - xp_xr.clone() * xp_xr.clone() * (s1_squared - xq1 + xr.clone()),
+    );
+    env.assert_zero((xq2.clone() - xr.clone()) * s3.clone() - (yq2 - yr.clone()));
+    env.assert_zero(
+        (xr.clone() + xr.clone() - s3_squared.clone() + xq2.clone())
+            * (xr_xs.clone() * s3 + ys_yr.clone())
+            - (yr.clone() + yr) * xr_xs.clone(),
+    );
+    env.assert_zero(
+        ys_yr.clone() * ys_yr - xr_xs.clone() * xr_xs.clone() * (s3_squared - xq2 + xs.clone()),
+    );
+    let combined = b.iter().fold(n, |acc, bit| acc.clone() + acc + bit.clone());
+    env.assert_zero(combined - n_next.clone());
+    env.assert_zero(xp_xr * xr_xs * inv - one);
+    ([xs, ys], n_next)
+}
+
+/// One row of [`EndoMulOf`]: its four bits those of the scalar it reads,
+/// taken from the scalar's value, from bit `top` down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndoMulGateOf<F> {
+    /// `endo`: the curve's GLV `beta`.
+    pub endo: F,
+    /// The index of the row's most significant bit.
+    pub top: usize,
+}
+
+impl<F> TypedGadget<F> for EndoMulGateOf<F>
+where
+    F: PrimeField,
+{
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar, Scalar);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "kimchi-endomul";
+    const ROWS: usize = 1;
+
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (t, p, n, scalar): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var>
+    where
+        E: Env<F>,
+    {
+        let top = self.top;
+        gate(env, self.endo, &t, &p, &n, |env, k, at| {
+            env.advice(at, [&scalar], |[v]| {
+                let i = top - k;
+                F::from_u64((v.limb(i / 64) >> (i % 64)) & 1)
+            })
+        })
     }
 }
 
@@ -223,6 +277,51 @@ where
         for chunk in bits.chunks(BITS_PER_ROW) {
             let four: [E::Var; BITS_PER_ROW] = core::array::from_fn(|k| chunk[k].clone());
             let (next, n_next) = env.call(&gate, (t.clone(), acc, n, four));
+            acc = next;
+            n = n_next;
+        }
+        (acc, n)
+    }
+}
+
+/// [`EndoMul`] of the scalar it reads, its bits taken from the scalar's
+/// value, most significant first: input `(T, P, x)`, output `(P', n)`. The
+/// rows pin `n` to the bits, so a caller asserting `n` equal to `x` checks
+/// that `x` has `BITS` bits and that the bits are its own; from
+/// `P = 2 (phi(T) + T)`, `P'` is `[k] T` for `ScalarChallenge::to_field` of
+/// `x` (Pickles' `endo`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndoMulOf<F, const BITS: usize> {
+    /// `endo`: the curve's GLV `beta`.
+    pub endo: F,
+}
+
+impl<F, const B: usize> TypedGadget<F> for EndoMulOf<F, B>
+where
+    F: PrimeField,
+{
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "kimchi-endomul-of";
+    const ROWS: usize = <EndoMul<F, B> as TypedGadget<F>>::ROWS;
+
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (t, p, scalar): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var>
+    where
+        E: Env<F>,
+    {
+        let zero = env.constant(F::ZERO);
+        let mut n = env.define(Cell::new(N, 0), zero);
+        let mut acc = p;
+        for r in 0..B / BITS_PER_ROW {
+            let gate = EndoMulGateOf {
+                endo: self.endo,
+                top: B - 1 - r * BITS_PER_ROW,
+            };
+            let (next, n_next) = env.call(&gate, (t.clone(), acc, n, scalar.clone()));
             acc = next;
             n = n_next;
         }

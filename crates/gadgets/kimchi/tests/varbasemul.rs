@@ -17,7 +17,10 @@ use arrabbiata_generalized_plonk::{max_coefficients, prove, setup, verify};
 use arrabbiata_ipa::Ipa;
 use arrabbiata_kimchi_gadgets::{
     LAYOUT,
-    varbasemul::{ACCUMULATORS, BITS, BITS_PER_GATE, N, N_NEXT, SLOPES, VarBaseMul},
+    varbasemul::{
+        ACCUMULATORS, BITS, BITS_PER_GATE, N, N_NEXT, SLOPES, VarBaseMul, VarBaseMulGateOf,
+        VarBaseMulOf,
+    },
 };
 use arrabbiata_pasta::{Fp, Pallas, Vesta};
 use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
@@ -274,4 +277,64 @@ fn a_multiplication_is_proved() {
         )
         .is_err()
     );
+}
+
+/// [`Multiply`] with the bits taken from the scalar's value.
+#[derive(Clone, Copy, Debug)]
+struct MultiplyOf<const B: usize>;
+
+impl<const B: usize> TypedGadget<Fp> for MultiplyOf<B> {
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "multiply";
+    const ROWS: usize = <VarBaseMulOf<B> as TypedGadget<Fp>>::ROWS;
+
+    fn synthesize<E: Env<Fp>>(
+        &self,
+        env: &mut E,
+        (t, a, x): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var> {
+        let t = core::array::from_fn(|i| env.advice(Cell::new(i, 0), [&t[i]], |[v]| v));
+        let a = core::array::from_fn(|i| env.advice(Cell::new(2 + i, 0), [&a[i]], |[v]| v));
+        env.call(&VarBaseMulOf::<B>, (t, a, x))
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4))]
+
+    #[test]
+    fn varbasemul_of_is_varbasemul_of_the_bits(seed in any::<u64>()) {
+        // The bits taken from the scalar's value are the bits given: the same
+        // cells, the same result, n the scalar.
+        let x = Fp::from_u64(seed) * Fp::from_u64(0x9e37_79b9_7f4a_7c15) + Fp::from_u64(seed ^ 0xff);
+        let g = Projective::<Pallas>::generator().to_affine();
+        let t = coordinates(&g);
+        let a = coordinates(&(g.to_projective() + g.to_projective()).to_affine());
+        let given = (t, a, bits_msb::<KIMCHI_BITS>(&x));
+        let (bits, (q, n)) =
+            witness::<Fp, _, VARIABLES, DEGREE>(&Multiply::<KIMCHI_BITS>, LAYOUT, &given).unwrap();
+        let (of, (q_of, n_of)) =
+            witness::<Fp, _, VARIABLES, DEGREE>(&MultiplyOf::<KIMCHI_BITS>, LAYOUT, &(t, a, x))
+                .unwrap();
+        prop_assert_eq!(&of.columns, &bits.columns);
+        prop_assert_eq!((q_of, n_of), (q, n));
+        prop_assert_eq!(n_of, x);
+        prop_assert_eq!(q_of, coordinates(&mul(&g, &shifted::<KIMCHI_BITS>(&x))));
+    }
+}
+
+#[test]
+fn varbasemul_gate_of() {
+    // One gate reading bits 4..0 of 0b10110: the gate of those bits.
+    let g = Projective::<Pallas>::generator().to_affine();
+    let t = coordinates(&g);
+    let a = coordinates(&(g.to_projective() + g.to_projective()).to_affine());
+    let x = Fp::from_u64(0b10110);
+    let gate = VarBaseMulGateOf { top: 4 };
+    assert_eq!(<VarBaseMulGateOf as TypedGadget<Fp>>::ROWS, 2);
+    assert_eq!(gate.top, 4);
+    let (_, (_, n)) =
+        witness::<Fp, _, VARIABLES, DEGREE>(&MultiplyOf::<5>, LAYOUT, &(t, a, x)).unwrap();
+    assert_eq!(n, x);
 }

@@ -26,7 +26,7 @@
 //!
 //! The witness is computed as Kimchi's `varbasemul::witness`.
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, PrimeField};
 use arrabbiata_gadget::{Array, Cell, Env, Of, Scalar, TypedGadget};
 
 /// The steps, that is bits, of one gate.
@@ -112,59 +112,112 @@ where
     where
         E: Env<F>,
     {
-        let xt = env.copy(Cell::new(0, 0), &base[0]);
-        let yt = env.copy(Cell::new(1, 0), &base[1]);
-        let x0 = env.copy(Cell::new(ACCUMULATORS[0].1, 0), &acc[0]);
-        let y0 = env.copy(Cell::new(ACCUMULATORS[0].1 + 1, 0), &acc[1]);
-        let n = env.copy(Cell::new(N, 0), &n);
-        let b: [E::Var; BITS_PER_GATE] =
-            core::array::from_fn(|k| env.advice(Cell::new(BITS[k], 1), [&bits[k]], |[v]| v));
-        // The values the witness needs: T, A0, and the bits.
-        let known: [&E::Var; 4 + BITS_PER_GATE] =
-            [&xt, &yt, &x0, &y0, &b[0], &b[1], &b[2], &b[3], &b[4]];
-        let s: [E::Var; BITS_PER_GATE] = core::array::from_fn(|k| {
-            env.advice(Cell::new(SLOPES[k], 1), known, |v| trace(&v).0[k])
-        });
-        let accumulators: [(E::Var, E::Var); BITS_PER_GATE + 1] = core::array::from_fn(|k| {
-            if k == 0 {
-                return (x0.clone(), y0.clone());
-            }
-            let (row, column) = ACCUMULATORS[k];
-            let x = env.advice(Cell::new(column, row), known, |v| trace(&v).1[k][0]);
-            let y = env.advice(Cell::new(column + 1, row), known, |v| trace(&v).1[k][1]);
-            (x, y)
-        });
-        let n_next = env.advice(
-            Cell::new(N_NEXT, 0),
-            [&n, &b[0], &b[1], &b[2], &b[3], &b[4]],
-            |v| v[1..].iter().fold(v[0], |acc, bit| acc + acc + *bit),
-        );
+        gate(env, &base, &acc, &n, |env, k, at| {
+            env.advice(at, [&bits[k]], |[v]| v)
+        })
+    }
+}
 
-        // n' = 32 n + bits, each step a scaling by 2 (not `acc + acc`, which
-        // copies the term at every bit).
-        let two = env.constant(F::from_u64(2));
-        let combined = b.iter().fold(n, |acc, bit| acc * two.clone() + bit.clone());
-        env.assert_zero(n_next.clone() - combined);
-        let one = env.constant(F::ONE);
-        for k in 0..BITS_PER_GATE {
-            let (xi, yi) = accumulators[k].clone();
-            let (xo, yo) = accumulators[k + 1].clone();
-            let bit = b[k].clone();
-            let slope = s[k].clone();
-            let sign = bit.clone() + bit.clone() - one.clone();
-            let slope_squared = slope.clone() * slope.clone();
-            let t = xi.clone() + xi.clone() + xt.clone() - slope_squared.clone();
-            let u = yi.clone() + yi.clone() - t.clone() * slope.clone();
-            env.assert_zero(bit.clone() * bit.clone() - bit);
-            env.assert_zero((xi.clone() - xt.clone()) * slope - (yi.clone() - sign * yt.clone()));
-            env.assert_zero(
-                u.clone() * u.clone()
-                    - t.clone() * t.clone() * (xo.clone() - xt.clone() + slope_squared),
-            );
-            env.assert_zero((yo + yi) * t - (xi - xo) * u);
+/// One gate on `base`, `acc` and `n`, its bit `k` placed at its cell by
+/// `bit`: the constraints and the witness, whichever gives the bits.
+fn gate<F, E>(
+    env: &mut E,
+    base: &[E::Var; 2],
+    acc: &[E::Var; 2],
+    n: &E::Var,
+    mut bit: impl FnMut(&mut E, usize, Cell) -> E::Var,
+) -> ([E::Var; 2], E::Var)
+where
+    F: Field,
+    E: Env<F>,
+{
+    let xt = env.copy(Cell::new(0, 0), &base[0]);
+    let yt = env.copy(Cell::new(1, 0), &base[1]);
+    let x0 = env.copy(Cell::new(ACCUMULATORS[0].1, 0), &acc[0]);
+    let y0 = env.copy(Cell::new(ACCUMULATORS[0].1 + 1, 0), &acc[1]);
+    let n = env.copy(Cell::new(N, 0), n);
+    let b: [E::Var; BITS_PER_GATE] = core::array::from_fn(|k| bit(env, k, Cell::new(BITS[k], 1)));
+    // The values the witness needs: T, A0, and the bits.
+    let known: [&E::Var; 4 + BITS_PER_GATE] =
+        [&xt, &yt, &x0, &y0, &b[0], &b[1], &b[2], &b[3], &b[4]];
+    let s: [E::Var; BITS_PER_GATE] =
+        core::array::from_fn(|k| env.advice(Cell::new(SLOPES[k], 1), known, |v| trace(&v).0[k]));
+    let accumulators: [(E::Var, E::Var); BITS_PER_GATE + 1] = core::array::from_fn(|k| {
+        if k == 0 {
+            return (x0.clone(), y0.clone());
         }
-        let (x5, y5) = accumulators[BITS_PER_GATE].clone();
-        ([x5, y5], n_next)
+        let (row, column) = ACCUMULATORS[k];
+        let x = env.advice(Cell::new(column, row), known, |v| trace(&v).1[k][0]);
+        let y = env.advice(Cell::new(column + 1, row), known, |v| trace(&v).1[k][1]);
+        (x, y)
+    });
+    let n_next = env.advice(
+        Cell::new(N_NEXT, 0),
+        [&n, &b[0], &b[1], &b[2], &b[3], &b[4]],
+        |v| v[1..].iter().fold(v[0], |acc, bit| acc + acc + *bit),
+    );
+
+    // n' = 32 n + bits, each step a scaling by 2 (not `acc + acc`, which
+    // copies the term at every bit).
+    let two = env.constant(F::from_u64(2));
+    let combined = b.iter().fold(n, |acc, bit| acc * two.clone() + bit.clone());
+    env.assert_zero(n_next.clone() - combined);
+    let one = env.constant(F::ONE);
+    for k in 0..BITS_PER_GATE {
+        let (xi, yi) = accumulators[k].clone();
+        let (xo, yo) = accumulators[k + 1].clone();
+        let bit = b[k].clone();
+        let slope = s[k].clone();
+        let sign = bit.clone() + bit.clone() - one.clone();
+        let slope_squared = slope.clone() * slope.clone();
+        let t = xi.clone() + xi.clone() + xt.clone() - slope_squared.clone();
+        let u = yi.clone() + yi.clone() - t.clone() * slope.clone();
+        env.assert_zero(bit.clone() * bit.clone() - bit);
+        env.assert_zero((xi.clone() - xt.clone()) * slope - (yi.clone() - sign * yt.clone()));
+        env.assert_zero(
+            u.clone() * u.clone()
+                - t.clone() * t.clone() * (xo.clone() - xt.clone() + slope_squared),
+        );
+        env.assert_zero((yo + yi) * t - (xi - xo) * u);
+    }
+    let (x5, y5) = accumulators[BITS_PER_GATE].clone();
+    ([x5, y5], n_next)
+}
+
+/// The bit of `scalar` at `index`, the least significant `0`.
+fn bit_of<F: PrimeField>(scalar: F, index: usize) -> F {
+    F::from_u64((scalar.limb(index / 64) >> (index % 64)) & 1)
+}
+
+/// One gate of [`VarBaseMulOf`]: its five bits those of the scalar it
+/// reads, taken from the scalar's value, from bit `top` down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VarBaseMulGateOf {
+    /// The index of the gate's most significant bit.
+    pub top: usize,
+}
+
+impl<F> TypedGadget<F> for VarBaseMulGateOf
+where
+    F: PrimeField,
+{
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar, Scalar);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "kimchi-varbasemul";
+    const ROWS: usize = ROWS_PER_GATE;
+
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (base, acc, n, scalar): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var>
+    where
+        E: Env<F>,
+    {
+        let top = self.top;
+        gate(env, &base, &acc, &n, |env, k, at| {
+            env.advice(at, [&scalar], |[v]| bit_of(v, top - k))
+        })
     }
 }
 
@@ -206,6 +259,47 @@ where
         for chunk in bits.chunks(BITS_PER_GATE) {
             let five: [E::Var; BITS_PER_GATE] = core::array::from_fn(|k| chunk[k].clone());
             let (next, n_next) = env.call(&VarBaseMulGate, (base.clone(), acc, n, five));
+            acc = next;
+            n = n_next;
+        }
+        (acc, n)
+    }
+}
+
+/// [`VarBaseMul`] of the scalar it reads, its bits taken from the scalar's
+/// value, most significant first: input `(T, A, x)`, output `(A', n)`. The
+/// gates pin `n` to the bits, so a caller asserting `n` equal to `x` checks
+/// that `x` has `BITS` bits and that the bits are its own; from `A = 2 T`,
+/// `A' = (1 + 2^BITS + 2 x) T`, Pickles' `scale_fast` of the shifted value
+/// `x` (`Shifted_value.Type1`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VarBaseMulOf<const BITS: usize>;
+
+impl<F, const B: usize> TypedGadget<F> for VarBaseMulOf<B>
+where
+    F: PrimeField,
+{
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar);
+    type Output = (Array<Scalar, 2>, Scalar);
+    const NAME: &'static str = "kimchi-varbasemul-of";
+    const ROWS: usize = <VarBaseMul<B> as TypedGadget<F>>::ROWS;
+
+    fn synthesize<E>(
+        &self,
+        env: &mut E,
+        (base, acc, scalar): Of<Self::Input, E::Var>,
+    ) -> Of<Self::Output, E::Var>
+    where
+        E: Env<F>,
+    {
+        let zero = env.constant(F::ZERO);
+        let mut n = env.define(Cell::new(N, 0), zero);
+        let mut acc = acc;
+        for g in 0..B / BITS_PER_GATE {
+            let gate = VarBaseMulGateOf {
+                top: B - 1 - g * BITS_PER_GATE,
+            };
+            let (next, n_next) = env.call(&gate, (base.clone(), acc, n, scalar.clone()));
             acc = next;
             n = n_next;
         }
