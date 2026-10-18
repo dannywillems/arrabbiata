@@ -1,10 +1,10 @@
 //! The behaviour of each public item, one test per item (these were
 //! the rustdoc examples).
 
-use arrabbiata_field::{Field, Goldilocks as F};
+use arrabbiata_field::{Field, Goldilocks as F, Native};
 use arrabbiata_poseidon::{goldilocks, goldilocks_sponge};
 use arrabbiata_transcript::{
-    Absorb, Duplex, Permutation, Transcript, absorb_length, absorb_slice,
+    Absorb, Duplex, Permutation, PermutationIn, Transcript, absorb_length, absorb_slice,
     hlist::{HCons, HList, HNil, Reverse},
     typed::{
         Branch, Challenge, Draw, Either, End, Label, Labeled, Message, Pattern, Peek, ProofOf,
@@ -566,4 +566,36 @@ fn typed_new_nodes_describe() {
     <A as Pattern>::describe::<F, _>(&mut a);
     <B as Pattern>::describe::<F, _>(&mut b);
     assert_ne!(a.squeeze(), b.squeeze());
+}
+
+#[test]
+fn permutation_in() {
+    // In the native model, the permutation itself; through a borrowed
+    // model, the same.
+    let p = goldilocks();
+    let start: [F; 12] = core::array::from_fn(|i| F::new(i as u64));
+    let native = <_ as PermutationIn<Native, F, 12>>::permute_in(&p, &mut Native, start);
+    let mut state = start;
+    p.permute(&mut state);
+    assert_eq!(native, state);
+    let mut model = Native;
+    let borrowed = <_ as PermutationIn<&mut Native, F, 12>>::permute_in(&p, &mut &mut model, start);
+    assert_eq!(borrowed, state);
+}
+
+/// Absorb `x`, squeeze: on any transcript.
+fn absorb_then_squeeze<T: Transcript<F>>(transcript: &mut T, x: F) -> F {
+    transcript.absorb(x);
+    transcript.squeeze()
+}
+
+#[test]
+fn transcript_borrowed() {
+    // A borrowed transcript is the transcript: the same challenge, and its
+    // state is the owner's.
+    let mut owned = goldilocks_sponge(0);
+    let mut direct = goldilocks_sponge(0);
+    let through = absorb_then_squeeze(&mut &mut owned, F::new(7));
+    assert_eq!(through, absorb_then_squeeze(&mut direct, F::new(7)));
+    assert_eq!(owned.squeeze(), direct.squeeze());
 }

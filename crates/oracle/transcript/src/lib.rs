@@ -31,7 +31,7 @@ pub mod hash;
 pub mod hlist;
 pub mod typed;
 
-use arrabbiata_field::Field;
+use arrabbiata_field::{Field, FieldModel, Native};
 
 /// A Fiat-Shamir transcript over the field `F`.
 pub trait Transcript<F>
@@ -44,6 +44,22 @@ where
     /// Squeeze one challenge. The challenge depends on everything absorbed
     /// and squeezed so far.
     fn squeeze(&mut self) -> F;
+}
+
+/// A transcript borrowed mutably is the same transcript: a tape can run a
+/// protocol on a caller's sponge and hand it back.
+impl<F, T> Transcript<F> for &mut T
+where
+    F: Field,
+    T: Transcript<F>,
+{
+    fn absorb(&mut self, value: F) {
+        (**self).absorb(value);
+    }
+
+    fn squeeze(&mut self) -> F {
+        (**self).squeeze()
+    }
 }
 
 /// A value that can be absorbed into a transcript over `F`.
@@ -135,6 +151,42 @@ where
 {
     /// Apply the permutation in place.
     fn permute(&self, state: &mut [F; WIDTH]);
+}
+
+/// A permutation of `F^WIDTH` in a model of the field signature
+/// ([`FieldModel`]): in [`Native`] it is the [`Permutation`] itself (every
+/// permutation is one, by the blanket implementation); in a circuit model
+/// it lays out the gates that compute it.
+pub trait PermutationIn<M, F, const WIDTH: usize>
+where
+    M: FieldModel<F>,
+    F: Field,
+{
+    /// The permutation of `state`, in `model`.
+    fn permute_in(&self, model: &mut M, state: [M::Value; WIDTH]) -> [M::Value; WIDTH];
+}
+
+impl<F, P, const WIDTH: usize> PermutationIn<Native, F, WIDTH> for P
+where
+    F: Field,
+    P: Permutation<F, WIDTH>,
+{
+    fn permute_in(&self, _: &mut Native, mut state: [F; WIDTH]) -> [F; WIDTH] {
+        self.permute(&mut state);
+        state
+    }
+}
+
+/// A permutation in a model is one in the model borrowed mutably.
+impl<'a, M, F, P, const WIDTH: usize> PermutationIn<&'a mut M, F, WIDTH> for P
+where
+    M: FieldModel<F>,
+    F: Field,
+    P: PermutationIn<M, F, WIDTH>,
+{
+    fn permute_in(&self, model: &mut &'a mut M, state: [M::Value; WIDTH]) -> [M::Value; WIDTH] {
+        self.permute_in(&mut **model, state)
+    }
 }
 
 /// A duplex sponge over the permutation `P`, with a state of `WIDTH`

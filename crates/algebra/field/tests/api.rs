@@ -700,3 +700,32 @@ fn native() {
     assert_eq!(FieldModel::<F>::pow(&mut m, &a, 5), a.pow(5));
     assert_eq!(FieldModel::<F>::square(&mut m, &a), a * a);
 }
+
+/// Every operation of `m` on `a` and `b`, in order.
+fn every_operation<M: FieldModel<F, Value = F>>(m: &mut M, a: F, b: F) -> [F; 10] {
+    [
+        m.mul(&a, &b),
+        m.pow(&a, 2),
+        m.sub(&a, &b),
+        m.scale(&a, b),
+        m.shift(&a, b),
+        m.square(&b),
+        m.neg(&a),
+        m.inverse(&a),
+        m.constant(a),
+        m.add(&a, &b),
+    ]
+}
+
+#[test]
+fn field_model_borrowed() {
+    // A borrowed model is the model: the same values, and the effects (the
+    // products counted) land on the owner.
+    let (a, b) = (F::from_u64(7), F::from_u64(3));
+    let mut owned = Counting::default();
+    let mut direct = Counting::default();
+    let through = every_operation(&mut &mut owned, a, b);
+    assert_eq!(through, every_operation(&mut direct, a, b));
+    assert_eq!(owned.products, direct.products);
+    assert!(owned.products > 0);
+}

@@ -84,6 +84,56 @@ where
     }
 }
 
+/// A model borrowed mutably is the same model: a computation can hand its
+/// model to a part of it (a transcript) and take it back.
+impl<F, M> FieldModel<F> for &mut M
+where
+    F: Field,
+    M: FieldModel<F>,
+{
+    type Value = M::Value;
+
+    fn constant(&mut self, c: F) -> Self::Value {
+        (**self).constant(c)
+    }
+
+    fn add(&mut self, a: &Self::Value, b: &Self::Value) -> Self::Value {
+        (**self).add(a, b)
+    }
+
+    fn mul(&mut self, a: &Self::Value, b: &Self::Value) -> Self::Value {
+        (**self).mul(a, b)
+    }
+
+    fn neg(&mut self, a: &Self::Value) -> Self::Value {
+        (**self).neg(a)
+    }
+
+    fn inverse(&mut self, a: &Self::Value) -> Self::Value {
+        (**self).inverse(a)
+    }
+
+    fn sub(&mut self, a: &Self::Value, b: &Self::Value) -> Self::Value {
+        (**self).sub(a, b)
+    }
+
+    fn scale(&mut self, a: &Self::Value, c: F) -> Self::Value {
+        (**self).scale(a, c)
+    }
+
+    fn shift(&mut self, a: &Self::Value, c: F) -> Self::Value {
+        (**self).shift(a, c)
+    }
+
+    fn square(&mut self, a: &Self::Value) -> Self::Value {
+        (**self).square(a)
+    }
+
+    fn pow(&mut self, a: &Self::Value, exp: u64) -> Self::Value {
+        (**self).pow(a, exp)
+    }
+}
+
 /// The field itself, the model in which a computation evaluates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Native;
