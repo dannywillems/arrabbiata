@@ -66,7 +66,7 @@ where
     G: GateSet<F, W, X>,
 {
     let out = Embed(params)
-        .prove(vesta_sponge(7), &witness.public_inputs().to_vec(), witness)
+        .prove_on(vesta_sponge(7), &witness.public_inputs().to_vec(), witness)
         .unwrap();
     let i = &out.instance;
     prop_assert_eq!(i.u(), F::ONE);
@@ -144,11 +144,11 @@ proptest! {
         let good = custom(x, q).1;
         let bad = break_cell(&custom(y, q).1, column, row);
         prop_assert!(params.satisfiability().check(&bad.public_inputs().to_vec(), &bad).is_err());
-        let embedded = Embed(&params).prove(vesta_sponge(3), &bad.public_inputs().to_vec(), &bad).unwrap();
+        let embedded = Embed(&params).prove_on(vesta_sponge(3), &bad.public_inputs().to_vec(), &bad).unwrap();
         prop_assert!(params.relaxed().check(&embedded.instance, &embedded.witness).is_err());
         let (acc, acc_w) = chain(&params, &[good], 4)?;
         let input = (bad.public_inputs().to_vec(), acc);
-        let out = accumulate(&params).prove(vesta_sponge(5), &input, &(bad, acc_w)).unwrap();
+        let out = accumulate(&params).prove_on(vesta_sponge(5), &input, &(bad, acc_w)).unwrap();
         prop_assert!(params.relaxed().check(&out.instance, &out.witness).is_err());
     }
 
@@ -167,7 +167,7 @@ proptest! {
         let acc = RelaxedInstance::new(acc.u(), acc.coefficients().to_vec(), acc.public().to_vec(), *acc.columns(), params.commit_column(corrupted.error()).unwrap());
         prop_assert_eq!(params.relaxed().check(&acc, &corrupted), Err(Error::Unsatisfied));
         let input = (w[2].public_inputs().to_vec(), acc);
-        let out = accumulate(&params).prove(vesta_sponge(5), &input, &(w[2].clone(), corrupted)).unwrap();
+        let out = accumulate(&params).prove_on(vesta_sponge(5), &input, &(w[2].clone(), corrupted)).unwrap();
         prop_assert!(params.relaxed().check(&out.instance, &out.witness).is_err());
     }
 
@@ -178,14 +178,14 @@ proptest! {
         let params = custom_params(q, 2);
         let e: Vec<_> = xs.iter().map(|x| {
             let w = custom(*x, q).1;
-            Embed(&params).prove(vesta_sponge(3), &w.public_inputs().to_vec(), &w).unwrap()
+            Embed(&params).prove_on(vesta_sponge(3), &w.public_inputs().to_vec(), &w).unwrap()
         }).collect();
         let inputs = (e[0].instance.clone(), e[1].instance.clone());
         let witnesses = (e[0].witness.clone(), e[1].witness.clone());
-        let out = Fold(&params).prove(vesta_sponge(4), &inputs, &witnesses).unwrap();
+        let out = Fold(&params).prove_on(vesta_sponge(4), &inputs, &witnesses).unwrap();
         let mut proof = out.proof.clone();
         proof.head.0[k] = params.ck().add(&proof.head.0[k], &proof.head.0[(k + 1) % 5]);
-        let (verified, _) = Fold(&params).verify(vesta_sponge(4), &inputs, proof).unwrap();
+        let (verified, _) = Fold(&params).verify_on(vesta_sponge(4), &inputs, proof).unwrap();
         prop_assert_ne!(&verified, &out.instance);
         prop_assert!(params.relaxed().check(&verified, &out.witness).is_err());
     }
@@ -197,13 +197,13 @@ proptest! {
         let params = vanilla_params(2);
         let e: Vec<_> = xs.iter().map(|x| {
             let w = vanilla(*x, k).1;
-            Embed(&params).prove(vesta_sponge(3), &w.public_inputs().to_vec(), &w).unwrap()
+            Embed(&params).prove_on(vesta_sponge(3), &w.public_inputs().to_vec(), &w).unwrap()
         }).collect();
         prop_assume!(e[0].instance != e[1].instance);
         let inputs = (e[0].instance.clone(), e[1].instance.clone());
-        let out = Fold(&params).prove(vesta_sponge(4), &inputs, &(e[0].witness.clone(), e[1].witness.clone())).unwrap();
+        let out = Fold(&params).prove_on(vesta_sponge(4), &inputs, &(e[0].witness.clone(), e[1].witness.clone())).unwrap();
         let swapped = (inputs.1, inputs.0);
-        let (verified, _) = Fold(&params).verify(vesta_sponge(4), &swapped, out.proof).unwrap();
+        let (verified, _) = Fold(&params).verify_on(vesta_sponge(4), &swapped, out.proof).unwrap();
         prop_assert!(params.relaxed().check(&verified, &out.witness).is_err());
     }
 
@@ -215,7 +215,7 @@ proptest! {
         let w = vanilla(x, k).1;
         let public = w.public_inputs().to_vec();
         let embed = Embed(&params);
-        let out = embed.prove(vesta_sponge(3), &public, &w).unwrap();
+        let out = embed.prove_on(vesta_sponge(3), &public, &w).unwrap();
         let left = Then(Identity(params.satisfiability()), Embed(&params));
         let right = Then(Embed(&params), Identity(params.relaxed()));
         prop_assert!(laws::same_instance::<F, _, _, _>(&embed, &left, || vesta_sponge(3), &public, out.proof.clone(), ((), out.proof.clone())).unwrap());
@@ -235,20 +235,20 @@ fn the_digest_binds_the_circuit() {
         .iter()
         .map(|w| {
             Embed(&a)
-                .prove(vesta_sponge(3), &w.public_inputs().to_vec(), w)
+                .prove_on(vesta_sponge(3), &w.public_inputs().to_vec(), w)
                 .unwrap()
         })
         .collect();
     let inputs = (e[0].instance.clone(), e[1].instance.clone());
     let out = Fold(&a)
-        .prove(
+        .prove_on(
             vesta_sponge(4),
             &inputs,
             &(e[0].witness.clone(), e[1].witness.clone()),
         )
         .unwrap();
     let (other, _) = Fold(&b)
-        .verify(vesta_sponge(4), &inputs, out.proof)
+        .verify_on(vesta_sponge(4), &inputs, out.proof)
         .unwrap();
     assert_ne!(other, out.instance);
 }
@@ -261,11 +261,13 @@ fn shapes_are_checked() {
     let public = w.public_inputs().to_vec();
     assert_eq!(
         Embed(&params)
-            .prove(vesta_sponge(0), &vec![], &w)
+            .prove_on(vesta_sponge(0), &vec![], &w)
             .unwrap_err(),
         Error::Shape
     );
-    let out = Embed(&params).prove(vesta_sponge(0), &public, &w).unwrap();
+    let out = Embed(&params)
+        .prove_on(vesta_sponge(0), &public, &w)
+        .unwrap();
     let wide = RelaxedInstance::new(
         out.instance.u(),
         vec![F::ONE; 2],
@@ -281,7 +283,7 @@ fn shapes_are_checked() {
     let witnesses = (out.witness.clone(), out.witness.clone());
     assert_eq!(
         Fold(&params)
-            .prove(vesta_sponge(0), &inputs, &witnesses)
+            .prove_on(vesta_sponge(0), &inputs, &witnesses)
             .unwrap_err(),
         Error::Shape
     );
@@ -289,7 +291,7 @@ fn shapes_are_checked() {
     let inputs = (out.instance.clone(), out.instance.clone());
     assert_eq!(
         Fold(&params)
-            .prove(vesta_sponge(0), &inputs, &(short, out.witness))
+            .prove_on(vesta_sponge(0), &inputs, &(short, out.witness))
             .unwrap_err(),
         Error::Shape
     );
@@ -301,7 +303,7 @@ fn commitments_are_checked() {
     let params = vanilla_params(2);
     let w = vanilla(2, 3).1;
     let out = Embed(&params)
-        .prove(vesta_sponge(0), &w.public_inputs().to_vec(), &w)
+        .prove_on(vesta_sponge(0), &w.public_inputs().to_vec(), &w)
         .unwrap();
     let mut columns = *out.instance.columns();
     columns.swap(0, 1);

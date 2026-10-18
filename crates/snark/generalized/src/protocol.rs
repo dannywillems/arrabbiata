@@ -49,8 +49,8 @@ use arrabbiata_transcript::{
     Absorb, Transcript, absorb_length, absorb_slice,
     hlist::HCons,
     typed::{
-        Challenge, End, Label, Message, Pattern, ProofOf, Protocol, Prover, Public, Verifier,
-        prover_tape, verifier_tape,
+        Challenge, End, Label, Message, Pattern, ProofOf, Protocol, Prover, Public, Tail, Tape,
+        Verifier, prove_within, verify_within,
     },
 };
 
@@ -1120,79 +1120,104 @@ where
     PC: BatchOpening<F, Family = Univariate> + Label,
     T: Transcript<F>,
 {
-    let tape = prover_tape::<F, T, GeneralizedPlonk<F, PC, N, D>>(transcript);
-    let (polys, _, challenges, tape) = prove_rounds(pk, pcs, tape, public, columns)?;
-    let Polynomials {
-        wires,
-        before: before_polys,
-        z,
-        after: after_polys,
-        t,
-    } = polys;
-    let circuit = &pk.circuit;
-    let domain = &pk.domain;
-    let zeta = challenges.zeta;
+    let (proof, tape) = prove_tape(pk, pcs, Tape::start(transcript), public, columns)?;
+    Ok((proof, tape.finish()))
+}
 
-    // Round 5: evaluations and openings.
-    let zeta_next = zeta * domain.generator();
-    let rotated_vars = rotated(circuit.variables());
-    let mut lookup_claims = Vec::new();
-    for ((l, before), after) in circuit
-        .lookups()
-        .iter()
-        .zip(&before_polys)
-        .zip(&after_polys)
-    {
-        for p in before.iter().chain(after) {
-            lookup_claims.push((p, zeta));
-            lookup_claims.push((p, zeta_next));
-        }
-        if l.argument() == Argument::Plookup {
-            for k in l.table() {
-                lookup_claims.push((&pk.fixed[*k], zeta_next));
+/// [`prove`] as steps of a longer protocol: on a tape at
+/// [`GeneralizedTranscript`] followed by `R`, handed back at `R`.
+///
+/// # Errors
+///
+/// As [`prove`].
+#[allow(clippy::type_complexity, clippy::too_many_lines)]
+pub fn prove_tape<F, PC, T, R, const N: usize, const D: usize>(
+    pk: &ProverKey<F, PC, N, D>,
+    pcs: &PC,
+    tape: Tape<F, T, Tail<GeneralizedTranscript<F, PC, N, D>, R>>,
+    public: &[F],
+    columns: &[Vec<F>],
+) -> Result<(Proof<F, PC, N, D>, Tape<F, T, R>), Error>
+where
+    F: TwoAdicField + PrimeField,
+    PC: BatchOpening<F, Family = Univariate> + Label,
+    T: Transcript<F>,
+{
+    let ((), proof, tape) =
+        prove_within::<F, T, GeneralizedTranscript<F, PC, N, D>, R, _, _, Error>(tape, |tape| {
+            let (polys, _, challenges, tape) = prove_rounds(pk, pcs, tape, public, columns)?;
+            let Polynomials {
+                wires,
+                before: before_polys,
+                z,
+                after: after_polys,
+                t,
+            } = polys;
+            let circuit = &pk.circuit;
+            let domain = &pk.domain;
+            let zeta = challenges.zeta;
+
+            // Round 5: evaluations and openings.
+            let zeta_next = zeta * domain.generator();
+            let rotated_vars = rotated(circuit.variables());
+            let mut lookup_claims = Vec::new();
+            for ((l, before), after) in circuit
+                .lookups()
+                .iter()
+                .zip(&before_polys)
+                .zip(&after_polys)
+            {
+                for p in before.iter().chain(after) {
+                    lookup_claims.push((p, zeta));
+                    lookup_claims.push((p, zeta_next));
+                }
+                if l.argument() == Argument::Plookup {
+                    for k in l.table() {
+                        lookup_claims.push((&pk.fixed[*k], zeta_next));
+                    }
+                }
             }
-        }
-    }
-    let claims = Opened {
-        witness: wires.iter().map(|p| (p, zeta)).collect(),
-        fixed: pk.fixed.iter().map(|p| (p, zeta)).collect(),
-        selectors: pk.selectors.iter().map(|p| (p, zeta)).collect(),
-        sigmas: pk.sigmas.iter().map(|p| (p, zeta)).collect(),
-        z: (&z, zeta),
-        t: (&t, zeta),
-        z_next: (&z, zeta_next),
-        rotated: rotated_vars
-            .iter()
-            .map(|v| match v {
-                Variable::Witness { column, rotation } => {
-                    (&wires[*column], zeta * root_power(domain, *rotation))
-                }
-                Variable::Fixed { column, rotation } => {
-                    (&pk.fixed[*column], zeta * root_power(domain, *rotation))
-                }
-                Variable::Public(_) => unreachable!("rotated variables read columns"),
-            })
-            .collect(),
-        lookups: lookup_claims,
-    };
-    let evaluations = claims
-        .clone()
-        .map(|(p, point)| <Univariate as PolynomialFamily<F>>::evaluate(p.coefficients(), &point));
-    let tape = tape.send(evaluations);
-    let (nu, tape) = tape.challenge();
-    let claims: Vec<(&UniPoly<F>, F)> = claims.iter().copied().collect();
-    let points: Vec<F> = claims.iter().map(|(_, point)| *point).collect();
-    let mut proofs = Vec::new();
-    for (point, indices) in opening_groups(&points) {
-        let polynomials: Vec<&[F]> = indices
-            .iter()
-            .map(|i| claims[*i].0.coefficients())
-            .collect();
-        let (_, proof) = pcs.open_batch(&polynomials, &point, nu);
-        proofs.push(proof);
-    }
-    let (transcript, proof) = tape.send(Tagged::new(Proofs(proofs))).finish();
-    Ok((proof, transcript))
+            let claims = Opened {
+                witness: wires.iter().map(|p| (p, zeta)).collect(),
+                fixed: pk.fixed.iter().map(|p| (p, zeta)).collect(),
+                selectors: pk.selectors.iter().map(|p| (p, zeta)).collect(),
+                sigmas: pk.sigmas.iter().map(|p| (p, zeta)).collect(),
+                z: (&z, zeta),
+                t: (&t, zeta),
+                z_next: (&z, zeta_next),
+                rotated: rotated_vars
+                    .iter()
+                    .map(|v| match v {
+                        Variable::Witness { column, rotation } => {
+                            (&wires[*column], zeta * root_power(domain, *rotation))
+                        }
+                        Variable::Fixed { column, rotation } => {
+                            (&pk.fixed[*column], zeta * root_power(domain, *rotation))
+                        }
+                        Variable::Public(_) => unreachable!("rotated variables read columns"),
+                    })
+                    .collect(),
+                lookups: lookup_claims,
+            };
+            let evaluations = claims.clone().map(|(p, point)| {
+                <Univariate as PolynomialFamily<F>>::evaluate(p.coefficients(), &point)
+            });
+            let tape = tape.send(evaluations);
+            let (nu, tape) = tape.challenge();
+            let claims: Vec<(&UniPoly<F>, F)> = claims.iter().copied().collect();
+            let points: Vec<F> = claims.iter().map(|(_, point)| *point).collect();
+            let mut proofs = Vec::new();
+            for (point, indices) in opening_groups(&points) {
+                let polynomials: Vec<&[F]> = indices
+                    .iter()
+                    .map(|i| claims[*i].0.coefficients())
+                    .collect();
+                let (_, proof) = pcs.open_batch(&polynomials, &point, nu);
+                proofs.push(proof);
+            }
+            Ok(((), tape.send(Tagged::new(Proofs(proofs)))))
+        })?;
+    Ok((proof, tape))
 }
 
 /// Verify `proof` for the public inputs `public` against `vk`. Returns the
@@ -1208,7 +1233,7 @@ where
 ///
 /// A complete run, from a circuit to a verified proof, is in
 /// `tests/examples.rs`.
-#[allow(clippy::type_complexity, clippy::too_many_lines)]
+#[allow(clippy::type_complexity)]
 pub fn verify<F, PC, T, const N: usize, const D: usize>(
     vk: &VerifierKey<F, PC, N, D>,
     pcs: &PC,
@@ -1221,17 +1246,46 @@ where
     PC: BatchOpening<F, Family = Univariate> + Label,
     T: Transcript<F>,
 {
+    let (wires, tape) = verify_tape(vk, pcs, Tape::start(transcript), public, proof)?;
+    Ok((wires, tape.finish()))
+}
+
+/// [`verify`] as steps of a longer protocol: on a tape at
+/// [`GeneralizedTranscript`] followed by `R`, handed back at `R`.
+///
+/// # Errors
+///
+/// As [`verify`].
+#[allow(clippy::type_complexity, clippy::too_many_lines)]
+pub fn verify_tape<F, PC, T, R, const N: usize, const D: usize>(
+    vk: &VerifierKey<F, PC, N, D>,
+    pcs: &PC,
+    tape: Tape<F, T, Tail<GeneralizedTranscript<F, PC, N, D>, R>>,
+    public: &[F],
+    proof: Proof<F, PC, N, D>,
+) -> Result<(Vec<Com<F, PC>>, Tape<F, T, R>), Error>
+where
+    F: TwoAdicField,
+    PC: BatchOpening<F, Family = Univariate> + Label,
+    T: Transcript<F>,
+{
     let key = &vk.value;
     if public.len() != key.public_inputs {
         return Err(Error::PublicInputs);
     }
     let domain = Domain::<F>::new(key.log_size).ok_or(Error::DomainTooLarge)?;
-    let tape = verifier_tape::<F, T, GeneralizedPlonk<F, PC, N, D>>(transcript, proof);
-    let (committed, challenges, tape) = verify_rounds(vk, tape, public)?;
-    let (evaluations, tape) = tape.read();
-    let (nu, tape) = tape.challenge();
-    let (proofs, tape) = tape.read();
-    let transcript = tape.finish();
+    let ((committed, challenges, evaluations, nu, proofs), transcript) =
+        verify_within::<F, T, GeneralizedTranscript<F, PC, N, D>, R, _, Error>(
+            tape,
+            proof,
+            |tape| {
+                let (committed, challenges, tape) = verify_rounds(vk, tape, public)?;
+                let (evaluations, tape) = tape.read();
+                let (nu, tape) = tape.challenge();
+                let (proofs, tape) = tape.read();
+                Ok(((committed, challenges, evaluations, nu, proofs), tape))
+            },
+        )?;
     let proofs = proofs.value.0;
     let Committed {
         wires,

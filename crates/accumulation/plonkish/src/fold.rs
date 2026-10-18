@@ -12,7 +12,8 @@ use arrabbiata_reduction::{
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_length, tag,
     typed::{
-        Challenge, End, Label, Message, ProofOf, Protocol, Public, prover_tape, verifier_tape,
+        Challenge, End, Label, Message, ProofOf, Protocol, Public, Tail, Tape, prove_within,
+        verify_within,
     },
 };
 
@@ -239,6 +240,7 @@ where
     type Target = Relaxed<'a, F, PC, G, W, X, Q, N, D>;
     type Proof = ProofOf<Self>;
     type Error = Error;
+    type Pattern = <Self as Protocol>::Transcript;
 
     fn source(&self) -> Self::Source {
         Product(self.0.relaxed(), self.0.relaxed())
@@ -248,12 +250,12 @@ where
         self.0.relaxed()
     }
 
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         instance: &<Self::Source as Relation>::Instance,
         witness: &<Self::Source as Relation>::Witness,
-    ) -> Result<OutputOf<F, Self, T>, Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Error>
     where
         T: Transcript<F>,
     {
@@ -271,41 +273,46 @@ where
             Ok(c) => c,
             Err(_) => unreachable!("D cross-terms"),
         });
-        let (r, tape) = prover_tape::<F, T, Self>(transcript)
-            .public(self.0.digest())
-            .public(acc)
-            .public(fresh)
-            .send(cross_terms.clone())
-            .challenge();
-        let (transcript, proof) = tape.finish();
+        let (r, proof, tape) =
+            prove_within::<F, T, Self::Pattern, R, _, _, Error>(tape, |prover| {
+                Ok(prover
+                    .public(self.0.digest())
+                    .public(acc)
+                    .public(fresh)
+                    .send(cross_terms.clone())
+                    .challenge())
+            })?;
         Ok(Output {
             instance: self.fold_instances(acc, fresh, &cross_terms, r),
             witness: fold_witness::<F, W, D>(&witness.0, &witness.1, &terms, r),
             proof,
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         instance: &<Self::Source as Relation>::Instance,
         proof: Self::Proof,
-    ) -> Result<(<Self::Target as Relation>::Instance, T), Error>
+    ) -> Result<(<Self::Target as Relation>::Instance, Tape<F, T, R>), Error>
     where
         T: Transcript<F>,
     {
         let (acc, fresh) = instance;
         self.check_instance(acc)?;
         self.check_instance(fresh)?;
-        let (cross_terms, tape) = verifier_tape::<F, T, Self>(transcript, proof)
-            .public(self.0.digest())
-            .public(acc)
-            .public(fresh)
-            .read();
-        let (r, tape) = tape.challenge();
-        let transcript = tape.finish();
-        Ok((self.fold_instances(acc, fresh, &cross_terms, r), transcript))
+        let ((cross_terms, r), tape) =
+            verify_within::<F, T, Self::Pattern, R, _, Error>(tape, proof, |verifier| {
+                let (cross_terms, verifier) = verifier
+                    .public(self.0.digest())
+                    .public(acc)
+                    .public(fresh)
+                    .read();
+                let (r, verifier) = verifier.challenge();
+                Ok(((cross_terms, r), verifier))
+            })?;
+        Ok((self.fold_instances(acc, fresh, &cross_terms, r), tape))
     }
 }
 

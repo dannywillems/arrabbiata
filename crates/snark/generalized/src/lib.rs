@@ -40,7 +40,7 @@ pub use crate::{
     protocol::{
         Commitments, GeneralizedPlonk, GeneralizedTranscript, Keys, Opened, Preprocessed, Proof,
         ProverKey, PublicInputs, Tagged, VerifierKey, max_coefficients, opening_groups, prove,
-        quotient_factor, rotated, setup, verify,
+        prove_tape, quotient_factor, rotated, setup, verify, verify_tape,
     },
 };
 

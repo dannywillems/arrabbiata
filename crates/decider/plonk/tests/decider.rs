@@ -61,13 +61,13 @@ where
 {
     let first = &witnesses[0];
     let out = Embed(params)
-        .prove(sponge(), &first.public_inputs().to_vec(), first)
+        .prove_on(sponge(), &first.public_inputs().to_vec(), first)
         .unwrap();
     let (mut instance, mut witness) = (out.instance, out.witness);
     for w in &witnesses[1..] {
         let input = (w.public_inputs().to_vec(), instance);
         let out = accumulate(params)
-            .prove(sponge(), &input, &(w.clone(), witness))
+            .prove_on(sponge(), &input, &(w.clone(), witness))
             .unwrap();
         (instance, witness) = (out.instance, out.witness);
     }
@@ -104,7 +104,11 @@ where
     let out = laws::complete::<Fd, _, _>(decider, &sponge, instance, witness)
         .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
     for other in others {
-        prop_assert!(decider.verify(sponge(), other, out.proof.clone()).is_err());
+        prop_assert!(
+            decider
+                .verify_on(sponge(), other, out.proof.clone())
+                .is_err()
+        );
     }
     Ok(())
 }
@@ -254,7 +258,7 @@ proptest! {
         prop_assert!(out.is_ok(), "{:?}", out.err());
         let proof = out.unwrap().proof;
         let wrong = vec![public[0] + F::ONE];
-        prop_assert!(s.verify(vesta_sponge(SNARK_DOMAIN), &wrong, proof).is_err());
+        prop_assert!(s.verify_on(vesta_sponge(SNARK_DOMAIN), &wrong, proof).is_err());
     }
 }
 
@@ -295,10 +299,10 @@ fn kzg_accumulators_are_decided() {
     });
     let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     let out = decider
-        .prove(bn254_scalar_sponge(DECIDER_DOMAIN), &instance, &witness)
+        .prove_on(bn254_scalar_sponge(DECIDER_DOMAIN), &instance, &witness)
         .unwrap();
     decider
-        .verify(bn254_scalar_sponge(DECIDER_DOMAIN), &instance, out.proof)
+        .verify_on(bn254_scalar_sponge(DECIDER_DOMAIN), &instance, out.proof)
         .unwrap();
 }
 
@@ -332,7 +336,7 @@ fn the_prover_refuses_an_unsatisfied_accumulator() {
     assert!(params.relaxed().check(&bad_instance, &bad).is_err());
     assert_eq!(
         decider
-            .prove(vesta_sponge(DECIDER_DOMAIN), &bad_instance, &bad)
+            .prove_on(vesta_sponge(DECIDER_DOMAIN), &bad_instance, &bad)
             .unwrap_err(),
         Error::Plonk(PlonkError::Unsatisfied)
     );
@@ -340,7 +344,7 @@ fn the_prover_refuses_an_unsatisfied_accumulator() {
     // column, commitment 3.
     assert_eq!(
         decider
-            .prove(vesta_sponge(DECIDER_DOMAIN), &bad_instance, &witness)
+            .prove_on(vesta_sponge(DECIDER_DOMAIN), &bad_instance, &witness)
             .unwrap_err(),
         Error::Commitment(3)
     );
@@ -364,14 +368,14 @@ fn the_error_opening_is_checked() {
         accumulated(&params, &witnesses, || vesta_sponge(ACCUMULATION_DOMAIN));
     let decider = Decider::<_, _, _, 3, 5, 1, 3, 2, 11, 4>::new(&params).unwrap();
     let out = decider
-        .prove(vesta_sponge(DECIDER_DOMAIN), &instance, &witness)
+        .prove_on(vesta_sponge(DECIDER_DOMAIN), &instance, &witness)
         .unwrap();
     let mut proof = out.proof.clone();
     // The evaluations are the sixth message; the error column is witness
     // column 3, opened at `zeta`, the first point of the batch openings.
     proof.tail.tail.tail.tail.tail.head.witness[3] =
         proof.tail.tail.tail.tail.tail.head.witness[3] + F::ONE;
-    let result = decider.verify(vesta_sponge(DECIDER_DOMAIN), &instance, proof);
+    let result = decider.verify_on(vesta_sponge(DECIDER_DOMAIN), &instance, proof);
     assert!(
         matches!(result, Err(Error::Plonk(PlonkError::Opening(0)))),
         "{result:?}"
@@ -384,11 +388,11 @@ fn the_error_opening_is_checked() {
     let (other, other_witness) =
         accumulated(&params, &others, || vesta_sponge(ACCUMULATION_DOMAIN));
     let foreign = decider
-        .prove(vesta_sponge(DECIDER_DOMAIN), &other, &other_witness)
+        .prove_on(vesta_sponge(DECIDER_DOMAIN), &other, &other_witness)
         .unwrap();
     assert!(
         decider
-            .verify(vesta_sponge(DECIDER_DOMAIN), &instance, foreign.proof)
+            .verify_on(vesta_sponge(DECIDER_DOMAIN), &instance, foreign.proof)
             .is_err()
     );
 }

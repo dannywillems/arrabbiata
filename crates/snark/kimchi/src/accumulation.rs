@@ -47,10 +47,10 @@
 //! values are not yet. The composite outputs the accumulator
 //! [`KimchiSuccinct`] outputs, on the same transcript.
 //!
-//! The reduction's transcript (over the scalar field) is the composition's:
-//! Kimchi's Fiat-Shamir runs on its own two sponges, and the reduction
-//! absorbs its output accumulator into the composition's transcript, so
-//! what follows (a fold) is bound to it.
+//! The reduction's tape (over the scalar field) is the composition's:
+//! Kimchi's Fiat-Shamir runs on its own two sponges, and the reduction's
+//! one step on the composition tape is its output accumulator, public
+//! ([`Published`]), so what follows (a fold) is bound to it.
 
 use core::{cell::RefCell, fmt};
 
@@ -61,7 +61,10 @@ use arrabbiata_ipa::{Ipa, RecursionChallenge};
 use arrabbiata_reduction::{
     Batch, Concat, Each, Identity, Output, OutputOf, Parallel, Reduction, Relation, Single, Then,
 };
-use arrabbiata_transcript::{Absorb, Transcript};
+use arrabbiata_transcript::{
+    Transcript,
+    typed::{End, Public, Tail, Tape},
+};
 
 use crate::{
     constraints::COLUMNS,
@@ -238,6 +241,11 @@ where
     }
 }
 
+/// The step a reduction to an accumulator takes on the composition tape:
+/// the accumulator, which the verifier computes itself, public, so what
+/// follows (a fold) is bound to it.
+pub type Published<C> = Public<RecursionChallenge<C>, End>;
+
 /// `Satisfied -> Accumulated`: Kimchi's prover, and its succinct verifier
 /// outputting the accumulator `(u, sg)`. The prover's randomness is the
 /// sampler it holds.
@@ -278,6 +286,7 @@ where
     type Target = Accumulated<'a, C::Scalar, Ipa<C, T>>;
     type Proof = ProverProof<C>;
     type Error = Error;
+    type Pattern = Published<C>;
 
     fn source(&self) -> Self::Source {
         self.relation
@@ -287,12 +296,12 @@ where
         Accumulated::new(self.relation.ipa)
     }
 
-    fn prove<X>(
+    fn prove<X, Rest>(
         &self,
-        mut transcript: X,
+        tape: Tape<C::Scalar, X, Tail<Self::Pattern, Rest>>,
         statement: &Statement<C>,
         assignment: &Assignment<C::Scalar>,
-    ) -> Result<OutputOf<C::Scalar, Self, X>, Error>
+    ) -> Result<OutputOf<C::Scalar, Self, Tape<C::Scalar, X, Rest>>, Error>
     where
         X: Transcript<C::Scalar>,
     {
@@ -316,21 +325,21 @@ where
             (r.base, r.scalar),
         )
         .map_err(Error::Verify)?;
-        accumulator.absorb_into(&mut transcript);
+        let tape = tape.public(&accumulator);
         Ok(Output {
             instance: accumulator,
             witness: (),
             proof,
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<X>(
+    fn verify<X, Rest>(
         &self,
-        mut transcript: X,
+        tape: Tape<C::Scalar, X, Tail<Self::Pattern, Rest>>,
         statement: &Statement<C>,
         proof: ProverProof<C>,
-    ) -> Result<(RecursionChallenge<C>, X), Error>
+    ) -> Result<(RecursionChallenge<C>, Tape<C::Scalar, X, Rest>), Error>
     where
         X: Transcript<C::Scalar>,
     {
@@ -347,8 +356,8 @@ where
             (r.base, r.scalar),
         )
         .map_err(Error::Verify)?;
-        accumulator.absorb_into(&mut transcript);
-        Ok((accumulator, transcript))
+        let tape = tape.public(&accumulator);
+        Ok((accumulator, tape))
     }
 }
 
@@ -549,6 +558,7 @@ where
     type Target = Unfinalized<'a, C, G, T>;
     type Proof = (ProverProof<C>, DeferredValues<C::Scalar>);
     type Error = Error;
+    type Pattern = End;
 
     fn source(&self) -> Self::Source {
         self.relation
@@ -564,12 +574,12 @@ where
         }
     }
 
-    fn prove<X>(
+    fn prove<X, Rest>(
         &self,
-        transcript: X,
+        tape: Tape<C::Scalar, X, Tail<Self::Pattern, Rest>>,
         statement: &Statement<C>,
         assignment: &Assignment<C::Scalar>,
-    ) -> Result<OutputOf<C::Scalar, Self, X>, Error>
+    ) -> Result<OutputOf<C::Scalar, Self, Tape<C::Scalar, X, Rest>>, Error>
     where
         X: Transcript<C::Scalar>,
     {
@@ -598,21 +608,21 @@ where
             instance,
             witness: Evaluations::from(&proof),
             proof: (proof, values),
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<X>(
+    fn verify<X, Rest>(
         &self,
-        transcript: X,
+        tape: Tape<C::Scalar, X, Tail<Self::Pattern, Rest>>,
         statement: &Statement<C>,
         (proof, values): (ProverProof<C>, DeferredValues<C::Scalar>),
-    ) -> Result<(Deferred<C>, X), Error>
+    ) -> Result<(Deferred<C>, Tape<C::Scalar, X, Rest>), Error>
     where
         X: Transcript<C::Scalar>,
     {
         let instance = self.check(statement, &proof, &values)?;
-        Ok((instance, transcript))
+        Ok((instance, tape))
     }
 }
 
@@ -651,6 +661,7 @@ where
     type Target = Accumulated<'a, C::Scalar, Ipa<C, T>>;
     type Proof = Evaluations<C::Scalar>;
     type Error = Error;
+    type Pattern = Published<C>;
 
     fn source(&self) -> Self::Source {
         self.relation
@@ -660,38 +671,38 @@ where
         Accumulated::new(self.relation.ipa)
     }
 
-    fn prove<X>(
+    fn prove<X, Rest>(
         &self,
-        transcript: X,
+        tape: Tape<C::Scalar, X, Tail<Self::Pattern, Rest>>,
         deferred: &Deferred<C>,
         opened: &Evaluations<C::Scalar>,
-    ) -> Result<OutputOf<C::Scalar, Self, X>, Error>
+    ) -> Result<OutputOf<C::Scalar, Self, Tape<C::Scalar, X, Rest>>, Error>
     where
         X: Transcript<C::Scalar>,
     {
-        let (instance, transcript) = self.verify(transcript, deferred, opened.clone())?;
+        let (instance, tape) = self.verify(tape, deferred, opened.clone())?;
         Ok(Output {
             instance,
             witness: (),
             proof: opened.clone(),
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<X>(
+    fn verify<X, Rest>(
         &self,
-        mut transcript: X,
+        tape: Tape<C::Scalar, X, Tail<Self::Pattern, Rest>>,
         deferred: &Deferred<C>,
         opened: Evaluations<C::Scalar>,
-    ) -> Result<(RecursionChallenge<C>, X), Error>
+    ) -> Result<(RecursionChallenge<C>, Tape<C::Scalar, X, Rest>), Error>
     where
         X: Transcript<C::Scalar>,
     {
         let r = &self.relation;
         let accumulator =
             scalar_half(r.index, deferred, &opened, r.gates, r.scalar).map_err(Error::Deferred)?;
-        accumulator.absorb_into(&mut transcript);
-        Ok((accumulator, transcript))
+        let tape = tape.public(&accumulator);
+        Ok((accumulator, tape))
     }
 }
 

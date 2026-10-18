@@ -55,7 +55,7 @@ fn incremental_verification() {
     let params = params();
     let (_, first) = step(3);
     let fresh = Embed(&params)
-        .prove(
+        .prove_on(
             vesta_sponge(ACCUMULATION_DOMAIN),
             &first.public_inputs().to_vec(),
             &first,
@@ -66,17 +66,17 @@ fn incremental_verification() {
         let (_, next) = step(x);
         let input = (next.public_inputs().to_vec(), instance);
         let out = accumulate(&params)
-            .prove(vesta_sponge(ACCUMULATION_DOMAIN), &input, &(next, witness))
+            .prove_on(vesta_sponge(ACCUMULATION_DOMAIN), &input, &(next, witness))
             .unwrap();
         (instance, witness) = (out.instance, out.witness);
     }
     // One proof for the five steps.
     let decider = VanillaDecider::new(&params).unwrap();
     let out = decider
-        .prove(vesta_sponge(DECIDER_DOMAIN), &instance, &witness)
+        .prove_on(vesta_sponge(DECIDER_DOMAIN), &instance, &witness)
         .unwrap();
     decider
-        .verify(vesta_sponge(DECIDER_DOMAIN), &instance, out.proof)
+        .verify_on(vesta_sponge(DECIDER_DOMAIN), &instance, out.proof)
         .unwrap();
 }
 
@@ -90,15 +90,15 @@ fn a_snark_by_composition() {
     let (_, w) = step(9);
     let statement = w.public_inputs().to_vec();
     let out = s
-        .prove(vesta_sponge(DECIDER_DOMAIN), &statement, &w)
+        .prove_on(vesta_sponge(DECIDER_DOMAIN), &statement, &w)
         .unwrap();
     assert!(
-        s.verify(vesta_sponge(DECIDER_DOMAIN), &statement, out.proof.clone())
+        s.verify_on(vesta_sponge(DECIDER_DOMAIN), &statement, out.proof.clone())
             .is_ok()
     );
     let other = vec![statement[0] + F::ONE];
     assert!(
-        s.verify(vesta_sponge(DECIDER_DOMAIN), &other, out.proof)
+        s.verify_on(vesta_sponge(DECIDER_DOMAIN), &other, out.proof)
             .is_err()
     );
 }

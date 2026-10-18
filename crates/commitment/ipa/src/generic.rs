@@ -73,11 +73,13 @@ where
 }
 
 /// A scalar-field transcript as an oracle: points absorbed by their
-/// coordinates as `arrabbiata-curve`'s `absorb_point` does.
+/// coordinates as `arrabbiata-curve`'s `absorb_point` does. It owns its
+/// transcript, which may be a borrow (`ScalarOracle(&mut sponge)`), so a
+/// typed tape can continue through it.
 #[derive(Debug)]
-pub struct ScalarOracle<'a, T>(pub &'a mut T);
+pub struct ScalarOracle<T>(pub T);
 
-impl<C, T> IpaOracle<C> for ScalarOracle<'_, T>
+impl<C, T> IpaOracle<C> for ScalarOracle<T>
 where
     C: Curve,
     C::Base: PrimeField,
@@ -88,7 +90,7 @@ where
     }
 
     fn absorb_point(&mut self, p: &Projective<C>) {
-        absorb_point(p, self.0);
+        absorb_point(p, &mut self.0);
     }
 
     fn squeeze_scalar(&mut self) -> C::Scalar {
@@ -161,14 +163,14 @@ where
     const LABEL: u64 = 0x6904;
 }
 
-impl<C, T> Write<&mut ScalarOracle<'_, T>> for BoundStatement<C>
+impl<C, T> Write<&mut ScalarOracle<T>> for BoundStatement<C>
 where
     C: Curve,
     C::Base: PrimeField,
     T: Transcript<C::Scalar>,
 {
-    fn write(&self, oracle: &mut &mut ScalarOracle<'_, T>) {
-        let transcript = &mut *oracle.0;
+    fn write(&self, oracle: &mut &mut ScalarOracle<T>) {
+        let transcript = &mut oracle.0;
         transcript.absorb(C::Scalar::from_u64(DOMAIN));
         absorb_point(&self.commitment, transcript);
         absorb_slice(transcript, &self.points);
@@ -294,10 +296,15 @@ where
 pub type Round<C> = Send<RoundPoints<C>, Squeeze<ScalarDraw<C, RoundChallenge>, End>>;
 
 /// The transcript of an opening with the binding `B`, the value base `V`
-/// and the hiding `H` on the oracle `O`.
-pub type OpeningTranscript<C, B, V, H, O> = <B as Binding<C, O>>::Step<
-    <V as ValueBase<C, O>>::Step<Rounds<Round<C>, <H as Hiding<C>>::Step<End>>>,
+/// and the hiding `H` on the oracle `O`, then `Next`: what a protocol that
+/// runs an opening as one of its steps continues with.
+pub type OpeningThen<C, B, V, H, O, Next> = <B as Binding<C, O>>::Step<
+    <V as ValueBase<C, O>>::Step<Rounds<Round<C>, <H as Hiding<C>>::Step<Next>>>,
 >;
+
+/// The transcript of an opening with the binding `B`, the value base `V`
+/// and the hiding `H` on the oracle `O`.
+pub type OpeningTranscript<C, B, V, H, O> = OpeningThen<C, B, V, H, O, End>;
 
 /// A tape borrowing the oracle `O` at the start of [`OpeningTranscript`].
 pub type OpeningTape<'a, C, B, V, H, O> =
@@ -312,7 +319,7 @@ pub const DOMAIN: u64 = 0x6970_615f_6f70_656e;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BindStatement;
 
-impl<'b, C, T> Binding<C, ScalarOracle<'b, T>> for BindStatement
+impl<C, T> Binding<C, ScalarOracle<T>> for BindStatement
 where
     C: Curve,
     C::Base: PrimeField,
@@ -322,9 +329,9 @@ where
 
     fn bind<'a, F, Next>(
         &self,
-        tape: Tape<F, &'a mut ScalarOracle<'b, T>, Self::Step<Next>>,
+        tape: Tape<F, &'a mut ScalarOracle<T>, Self::Step<Next>>,
         statement: &Statement<'_, C>,
-    ) -> Tape<F, &'a mut ScalarOracle<'b, T>, Next> {
+    ) -> Tape<F, &'a mut ScalarOracle<T>, Next> {
         tape.statement(&BoundStatement {
             commitment: *statement.commitment,
             points: statement.points.to_vec(),
@@ -818,6 +825,36 @@ where
         V: ValueBase<C, O>,
         R: Sampler<C::Scalar>,
     {
+        let tape: OpeningTape<'_, C, B, V, H, O> = Tape::undescribed(oracle);
+        let (opening, accumulator, tape) = self.prove_tape(tape, statement, witness, rng);
+        let _ = tape.into_inner();
+        (opening, accumulator)
+    }
+
+    /// [`GenericIpa::prove`] as a step of a longer protocol: on a tape at the
+    /// opening's transcript followed by `Next`, handed back at `Next`.
+    ///
+    /// # Panics
+    ///
+    /// If there are more coefficients than generators.
+    #[allow(clippy::type_complexity)]
+    pub fn prove_tape<'a, O, R, Next>(
+        &self,
+        tape: Tape<C::Scalar, &'a mut O, OpeningThen<C, B, V, H, O, Next>>,
+        statement: &Statement<'_, C>,
+        witness: &Witness<'_, C::Scalar>,
+        rng: &mut R,
+    ) -> (
+        Opening<C, H::Final>,
+        RecursionChallenge<C>,
+        Tape<C::Scalar, &'a mut O, Next>,
+    )
+    where
+        O: IpaOracle<C>,
+        B: Binding<C, O>,
+        V: ValueBase<C, O>,
+        R: Sampler<C::Scalar>,
+    {
         let n = self.generators.len();
         assert!(
             witness.coefficients.len() <= n,
@@ -826,7 +863,6 @@ where
         let mut a = witness.coefficients.to_vec();
         a.resize(n, C::Scalar::ZERO);
         let mut b = evaluation_vector(statement.points, statement.evalscale, n);
-        let tape: OpeningTape<'_, C, B, V, H, O> = Tape::undescribed(oracle);
         let tape = self.binding.bind(tape, statement);
         let (u, mut tape) = self.value_base.base(tape, &self.u);
         let mut g = self.generators.clone();
@@ -882,7 +918,6 @@ where
         let (last, tape) = self
             .hiding
             .prove_final(tape.done(), &self.challenges, &folded, rng);
-        let _ = tape.into_inner();
         let accumulator = RecursionChallenge {
             chals,
             comm: folded.sg,
@@ -892,7 +927,7 @@ where
             last,
             sg: folded.sg,
         };
-        (opening, accumulator)
+        (opening, accumulator, tape)
     }
 
     /// The succinct verifier, on `oracle`: the accumulator `(x, sg)` and
@@ -935,11 +970,38 @@ where
         V: ValueBase<C, O>,
         F0: FnOnce(&[C::Scalar]) -> C::Scalar,
     {
+        let tape: OpeningTape<'_, C, B, V, H, O> = Tape::undescribed(oracle);
+        let (accumulator, expression, tape) =
+            self.check_given_tape(tape, statement, opening, b0)?;
+        let _ = tape.into_inner();
+        Some((accumulator, expression))
+    }
+
+    /// [`GenericIpa::check_given`] as a step of a longer protocol: on a
+    /// tape at the opening's transcript followed by `Next`, handed back at
+    /// `Next`.
+    #[allow(clippy::type_complexity)]
+    pub fn check_given_tape<'a, O, F0, Next>(
+        &self,
+        tape: Tape<C::Scalar, &'a mut O, OpeningThen<C, B, V, H, O, Next>>,
+        statement: &Statement<'_, C>,
+        opening: &Opening<C, H::Final>,
+        b0: F0,
+    ) -> Option<(
+        RecursionChallenge<C>,
+        Projective<C>,
+        Tape<C::Scalar, &'a mut O, Next>,
+    )>
+    where
+        O: IpaOracle<C>,
+        B: Binding<C, O>,
+        V: ValueBase<C, O>,
+        F0: FnOnce(&[C::Scalar]) -> C::Scalar,
+    {
         let k = self.rounds();
         if opening.rounds.len() != k {
             return None;
         }
-        let tape: OpeningTape<'_, C, B, V, H, O> = Tape::undescribed(oracle);
         let tape = self.binding.bind(tape, statement);
         let (u, mut tape) = self.value_base.base(tape, &self.u);
         let mut chals = Vec::with_capacity(k);
@@ -963,12 +1025,11 @@ where
             u,
             self.h,
         );
-        let _ = tape.into_inner();
         let accumulator = RecursionChallenge {
             chals,
             comm: opening.sg,
         };
-        Some((accumulator, expression))
+        Some((accumulator, expression, tape))
     }
 
     /// [`GenericIpa::check`] with the expression required to vanish: the

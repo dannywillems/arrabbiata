@@ -89,7 +89,8 @@ use arrabbiata_field::Field;
 use arrabbiata_reduction::{Batch, Each, Output, OutputOf, Reduction, Relation, Then, Top};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_slice,
-    typed::{Challenge, End, Label, ProofOf, Protocol, Public, prover_tape, verifier_tape},
+    hlist::HNil,
+    typed::{Challenge, End, Label, Public, Sequence, Tail, Tape},
 };
 
 /// Why a pair is not in a relation, or a proof was rejected.
@@ -229,8 +230,10 @@ where
 /// - succinctness (a cost, not testable): `check_claims` and `check_fold`
 ///   cost a polynomial in `log n` and in the sizes of the batch, never `n`.
 ///
-/// The methods take the transcript by value and return it, as reductions
-/// do, so that an implementation can itself be a composite of reductions.
+/// The methods run on a tape at their pattern followed by any `R` and
+/// hand it back at `R`, as reductions do, so that an implementation can
+/// itself be a composite of reductions and its Fiat-Shamir steps are in its
+/// type ([`Accumulation::OpenPattern`], [`Accumulation::FoldPattern`]).
 pub trait Accumulation<F>: PolynomialCommitment<F>
 where
     F: Field,
@@ -244,43 +247,49 @@ where
     /// What the prover sends for one fold.
     type FoldProof: Clone + Debug + PartialEq;
 
+    /// The Fiat-Shamir steps of opening one batch of claims.
+    type OpenPattern: Sequence;
+
+    /// The Fiat-Shamir steps of one fold.
+    type FoldPattern: Sequence;
+
     /// Open `polynomials` against `claims`: the message and the
     /// accumulator, which [`Accumulation::check_claims`] outputs too.
-    fn open_claims<T>(
+    fn open_claims<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::OpenPattern, R>>,
         claims: &ClaimsOf<F, Self>,
         polynomials: &[Vec<F>],
-    ) -> (Self::Opening, Self::Accumulator, T)
+    ) -> (Self::Opening, Self::Accumulator, Tape<F, T, R>)
     where
         T: Transcript<F>;
 
     /// The succinct verifier of a batch: its accumulator, or `None`.
-    fn check_claims<T>(
+    fn check_claims<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::OpenPattern, R>>,
         claims: &ClaimsOf<F, Self>,
         opening: Self::Opening,
-    ) -> Option<(Self::Accumulator, T)>
+    ) -> Option<(Self::Accumulator, Tape<F, T, R>)>
     where
         T: Transcript<F>;
 
     /// Fold `accumulators` into one.
-    fn fold<T>(
+    fn fold<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::FoldPattern, R>>,
         accumulators: &[Self::Accumulator],
-    ) -> (Self::FoldProof, Self::Accumulator, T)
+    ) -> (Self::FoldProof, Self::Accumulator, Tape<F, T, R>)
     where
         T: Transcript<F>;
 
     /// The succinct verifier of a fold: its accumulator, or `None`.
-    fn check_fold<T>(
+    fn check_fold<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::FoldPattern, R>>,
         accumulators: &[Self::Accumulator],
         proof: Self::FoldProof,
-    ) -> Option<(Self::Accumulator, T)>
+    ) -> Option<(Self::Accumulator, Tape<F, T, R>)>
     where
         T: Transcript<F>;
 
@@ -436,13 +445,9 @@ where
     }
 }
 
-impl<F, PC> Protocol for Combine<'_, F, PC>
-where
-    F: Field,
-    PC: PolynomialCommitment<F>,
-{
-    type Transcript = Public<ClaimsOf<F, PC>, Challenge<End>>;
-}
+/// [`Combine`]'s Fiat-Shamir steps: the claims are public, then
+/// `polyscale` is drawn.
+pub type CombinePattern<F, PC> = Public<ClaimsOf<F, PC>, Challenge<End>>;
 
 impl<F, PC> Combine<'_, F, PC>
 where
@@ -482,8 +487,9 @@ where
 {
     type Source = Evaluations<'a, F, PC>;
     type Target = Opened<'a, F, PC>;
-    type Proof = ProofOf<Self>;
+    type Proof = HNil;
     type Error = Error;
+    type Pattern = CombinePattern<F, PC>;
 
     fn source(&self) -> Self::Source {
         Evaluations::new(self.pcs)
@@ -493,46 +499,42 @@ where
         Opened::new(self.pcs)
     }
 
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         claims: &ClaimsOf<F, PC>,
         polynomials: &Vec<Vec<F>>,
-    ) -> Result<OutputOf<F, Self, T>, Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Error>
     where
         T: Transcript<F>,
     {
         if !claims.has_shape() || polynomials.len() != claims.commitments.len() {
             return Err(Error::Shape);
         }
-        let tape = prover_tape::<F, T, Self>(transcript).public(claims);
-        let (polyscale, tape) = tape.challenge();
-        let (transcript, proof) = tape.finish();
+        let (polyscale, tape) = tape.public(claims).challenge();
         let slices: Vec<&[F]> = polynomials.iter().map(Vec::as_slice).collect();
         Ok(Output {
             instance: self.claim(claims, polyscale),
             witness: combine_polynomials(&slices, polyscale),
-            proof,
-            transcript,
+            proof: HNil,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         claims: &ClaimsOf<F, PC>,
-        proof: Self::Proof,
-    ) -> Result<(PointClaimOf<F, PC>, T), Error>
+        HNil: HNil,
+    ) -> Result<(PointClaimOf<F, PC>, Tape<F, T, R>), Error>
     where
         T: Transcript<F>,
     {
         if !claims.has_shape() {
             return Err(Error::Shape);
         }
-        let tape = verifier_tape::<F, T, Self>(transcript, proof).public(claims);
-        let (polyscale, tape) = tape.challenge();
-        let transcript = tape.finish();
-        Ok((self.claim(claims, polyscale), transcript))
+        let (polyscale, tape) = tape.public(claims).challenge();
+        Ok((self.claim(claims, polyscale), tape))
     }
 }
 
@@ -545,6 +547,7 @@ where
     type Target = Accumulated<'a, F, PC>;
     type Proof = PC::Opening;
     type Error = Error;
+    type Pattern = PC::OpenPattern;
 
     fn source(&self) -> Self::Source {
         Evaluations::new(self.pcs)
@@ -554,34 +557,33 @@ where
         Accumulated::new(self.pcs)
     }
 
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         claims: &ClaimsOf<F, PC>,
         polynomials: &Vec<Vec<F>>,
-    ) -> Result<OutputOf<F, Self, T>, Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Error>
     where
         T: Transcript<F>,
     {
         if !claims.has_shape() || polynomials.len() != claims.commitments.len() {
             return Err(Error::Shape);
         }
-        let (proof, accumulator, transcript) =
-            self.pcs.open_claims(transcript, claims, polynomials);
+        let (proof, accumulator, tape) = self.pcs.open_claims(tape, claims, polynomials);
         Ok(Output {
             instance: accumulator,
             witness: (),
             proof,
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         claims: &ClaimsOf<F, PC>,
         proof: PC::Opening,
-    ) -> Result<(PC::Accumulator, T), Error>
+    ) -> Result<(PC::Accumulator, Tape<F, T, R>), Error>
     where
         T: Transcript<F>,
     {
@@ -589,7 +591,7 @@ where
             return Err(Error::Shape);
         }
         self.pcs
-            .check_claims(transcript, claims, proof)
+            .check_claims(tape, claims, proof)
             .ok_or(Error::Succinct)
     }
 }
@@ -603,6 +605,7 @@ where
     type Target = Accumulated<'a, F, PC>;
     type Proof = PC::FoldProof;
     type Error = Error;
+    type Pattern = PC::FoldPattern;
 
     fn source(&self) -> Self::Source {
         Batch(Accumulated::new(self.pcs))
@@ -612,35 +615,35 @@ where
         Accumulated::new(self.pcs)
     }
 
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         accumulators: &Vec<PC::Accumulator>,
         _witness: &Vec<()>,
-    ) -> Result<OutputOf<F, Self, T>, Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Error>
     where
         T: Transcript<F>,
     {
-        let (proof, accumulator, transcript) = self.pcs.fold(transcript, accumulators);
+        let (proof, accumulator, tape) = self.pcs.fold(tape, accumulators);
         Ok(Output {
             instance: accumulator,
             witness: (),
             proof,
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         accumulators: &Vec<PC::Accumulator>,
         proof: PC::FoldProof,
-    ) -> Result<(PC::Accumulator, T), Error>
+    ) -> Result<(PC::Accumulator, Tape<F, T, R>), Error>
     where
         T: Transcript<F>,
     {
         self.pcs
-            .check_fold(transcript, accumulators, proof)
+            .check_fold(tape, accumulators, proof)
             .ok_or(Error::Fold)
     }
 }
@@ -654,6 +657,7 @@ where
     type Target = Top;
     type Proof = ();
     type Error = Error;
+    type Pattern = End;
 
     fn source(&self) -> Self::Source {
         Accumulated::new(self.pcs)
@@ -663,12 +667,12 @@ where
         Top
     }
 
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, R>,
         _accumulator: &PC::Accumulator,
         (): &(),
-    ) -> Result<OutputOf<F, Self, T>, Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Error>
     where
         T: Transcript<F>,
     {
@@ -676,21 +680,21 @@ where
             instance: (),
             witness: (),
             proof: (),
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, R>,
         accumulator: &PC::Accumulator,
         (): (),
-    ) -> Result<((), T), Error>
+    ) -> Result<((), Tape<F, T, R>), Error>
     where
         T: Transcript<F>,
     {
         if self.pcs.decide(accumulator) {
-            Ok(((), transcript))
+            Ok(((), tape))
         } else {
             Err(Error::Decide)
         }

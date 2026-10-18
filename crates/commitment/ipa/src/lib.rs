@@ -49,7 +49,11 @@ use arrabbiata_commit::{
 };
 use arrabbiata_curve::{Curve, Projective, absorb_point, msm, points_from_transcript};
 use arrabbiata_field::{Field, PrimeField, Sqrt};
-use arrabbiata_transcript::{Absorb, Transcript, absorb_length, typed::Label};
+use arrabbiata_transcript::{
+    Absorb, Transcript, absorb_length,
+    typed::{self, Label, Tape},
+};
+use challenge::folded_evaluation as folded;
 use generic::{
     BindStatement, Full, GenericIpa, NoRandomness, NotHiding, Opening, ScalarOracle,
     ScaledGenerator, Witness,
@@ -58,6 +62,18 @@ use generic::{
 pub mod accumulation;
 pub mod challenge;
 pub mod generic;
+
+/// The Fiat-Shamir steps of this IPA's opening, then `Next`: the statement
+/// bound, the value base's scale drawn, then the rounds (`L` and `R` sent,
+/// a challenge drawn). It is [`generic::OpeningThen`] for this scheme's
+/// parameters, named without the oracle it runs on.
+pub type OpeningSteps<C, Next> = typed::Statement<
+    generic::BoundStatement<C>,
+    typed::Squeeze<
+        generic::ScalarDraw<C, generic::ValueChallenge>,
+        typed::Rounds<generic::Round<C>, Next>,
+    >,
+>;
 
 pub use accumulation::{Accumulators, Lift};
 pub use challenge::{
@@ -331,6 +347,79 @@ where
         };
         let mut oracle = ScalarOracle(transcript);
         self.generic().succinct(&mut oracle, statement, &opening)
+    }
+
+    /// [`Ipa::prove`] as a step of a longer protocol: on a tape at the
+    /// opening's steps ([`OpeningSteps`]) followed by `Next`, handed back at
+    /// `Next`.
+    ///
+    /// # Panics
+    ///
+    /// If the polynomial has more coefficients than generators.
+    #[allow(clippy::type_complexity)]
+    pub fn prove_tape<Tr, Next>(
+        &self,
+        tape: Tape<C::Scalar, Tr, OpeningSteps<C, Next>>,
+        statement: &Statement<'_, C>,
+        coefficients: &[C::Scalar],
+    ) -> (
+        IpaProof<C>,
+        RecursionChallenge<C>,
+        Tape<C::Scalar, Tr, Next>,
+    )
+    where
+        Tr: Transcript<C::Scalar>,
+    {
+        let witness = Witness {
+            coefficients,
+            blinder: C::Scalar::ZERO,
+        };
+        let generic = self.generic();
+        let ((opening, accumulator), tape) = tape.through(
+            ScalarOracle,
+            |t| {
+                let (opening, accumulator, t) =
+                    generic.prove_tape(t, statement, &witness, &mut NoRandomness);
+                ((opening, accumulator), t)
+            },
+            |oracle| oracle.0,
+        );
+        let proof = IpaProof {
+            rounds: opening.rounds,
+            a: opening.last,
+            sg: opening.sg,
+        };
+        (proof, accumulator, tape)
+    }
+
+    /// [`Ipa::succinct`] as a step of a longer protocol: on a tape at the
+    /// opening's transcript followed by `Next`, handed back at `Next`.
+    #[allow(clippy::type_complexity)]
+    pub fn succinct_tape<Tr, Next>(
+        &self,
+        tape: Tape<C::Scalar, Tr, OpeningSteps<C, Next>>,
+        statement: &Statement<'_, C>,
+        proof: &IpaProof<C>,
+    ) -> Option<(RecursionChallenge<C>, Tape<C::Scalar, Tr, Next>)>
+    where
+        Tr: Transcript<C::Scalar>,
+    {
+        let opening = Opening {
+            rounds: proof.rounds.clone(),
+            last: proof.a,
+            sg: proof.sg,
+        };
+        let generic = self.generic();
+        tape.try_through(
+            ScalarOracle,
+            |t| {
+                let b0 = |chals: &[C::Scalar]| folded(chals, statement.points, statement.evalscale);
+                let (accumulator, expression, t) =
+                    generic.check_given_tape(t, statement, &opening, b0)?;
+                expression.is_identity().then_some((accumulator, t))
+            },
+            |oracle| oracle.0,
+        )
     }
 
     /// The deferred half of the verifier: whether `accumulator.comm` is the

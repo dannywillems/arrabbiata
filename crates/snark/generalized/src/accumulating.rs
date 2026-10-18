@@ -31,7 +31,7 @@ use arrabbiata_poly::{Domain, Rotation, UniPoly};
 use arrabbiata_reduction::{Output, OutputOf, Reduction, Relation};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_length, absorb_slice,
-    typed::{End, Label, Message, ProofOf, Protocol, prover_tape, verifier_tape},
+    typed::{End, Label, Message, ProofOf, Protocol, Seq, Tail, Tape, prove_within, verify_within},
 };
 
 use crate::{
@@ -70,9 +70,9 @@ where
     }
 }
 
-/// The transcript: the [`Rounds`], then the [`Values`]. The scheme's
-/// opening follows on the same transcript, outside the typed pattern,
-/// since its shape is the scheme's.
+/// The transcript of the PlonK part: the [`Rounds`], then the [`Values`].
+/// The reduction's whole pattern is this, then the scheme's opening
+/// ([`Accumulation::OpenPattern`]).
 pub type AccumulatingTranscript<F, PC, const N: usize, const D: usize> =
     Rounds<F, PC, N, D, Message<Values<F>, End>>;
 
@@ -374,6 +374,7 @@ where
     type Target = Accumulated<'a, F, PC>;
     type Proof = AccumulatingProof<F, PC, N, D>;
     type Error = Error;
+    type Pattern = Seq<AccumulatingTranscript<F, PC, N, D>, PC::OpenPattern>;
 
     fn source(&self) -> Self::Source {
         Satisfiability(self.pk.circuit())
@@ -383,59 +384,60 @@ where
         Accumulated::new(self.pcs)
     }
 
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         public: &Vec<F>,
         columns: &Vec<Vec<F>>,
-    ) -> Result<OutputOf<F, Self, T>, Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Error>
     where
         T: Transcript<F>,
     {
         let pk = self.pk;
         let key = &pk.verifier_key().value;
-        let tape = prover_tape::<F, T, AccumulatingPlonk<F, PC, N, D>>(transcript);
-        let (polys, committed, challenges, tape) =
-            prove_rounds(pk, self.pcs, tape, public, columns)?;
-        let rotations = rotations(key.variables());
-        let points = points(pk.domain(), challenges.zeta, &rotations);
-        let polynomials = polynomials(
-            pk.fixed_polynomials(),
-            pk.selector_polynomials(),
-            pk.sigma_polynomials(),
-            &polys,
-        );
-        let values: Vec<Vec<F>> = polynomials
-            .iter()
-            .map(|p| {
-                points
-                    .iter()
-                    .map(|x| <Univariate as PolynomialFamily<F>>::evaluate(p, x))
-                    .collect()
-            })
-            .collect();
-        let (transcript, messages) = tape.send(Values(values.clone())).finish();
-        let claims = Claims {
-            commitments: commitments(key, &committed),
-            points,
-            values,
-        };
-        let (opening, accumulator, transcript) =
-            self.pcs.open_claims(transcript, &claims, &polynomials);
+        let ((claims, polynomials), messages, tape) = prove_within(tape, |prover| {
+            let (polys, committed, challenges, prover) =
+                prove_rounds(pk, self.pcs, prover, public, columns)?;
+            let rotations = rotations(key.variables());
+            let points = points(pk.domain(), challenges.zeta, &rotations);
+            let polynomials = polynomials(
+                pk.fixed_polynomials(),
+                pk.selector_polynomials(),
+                pk.sigma_polynomials(),
+                &polys,
+            );
+            let values: Vec<Vec<F>> = polynomials
+                .iter()
+                .map(|p| {
+                    points
+                        .iter()
+                        .map(|x| <Univariate as PolynomialFamily<F>>::evaluate(p, x))
+                        .collect()
+                })
+                .collect();
+            let prover = prover.send(Values(values.clone()));
+            let claims = Claims {
+                commitments: commitments(key, &committed),
+                points,
+                values,
+            };
+            Ok(((claims, polynomials), prover))
+        })?;
+        let (opening, accumulator, tape) = self.pcs.open_claims(tape, &claims, &polynomials);
         Ok(Output {
             instance: accumulator,
             witness: (),
             proof: AccumulatingProof { messages, opening },
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         public: &Vec<F>,
         proof: AccumulatingProof<F, PC, N, D>,
-    ) -> Result<(PC::Accumulator, T), Error>
+    ) -> Result<(PC::Accumulator, Tape<F, T, R>), Error>
     where
         T: Transcript<F>,
     {
@@ -445,11 +447,12 @@ where
             return Err(Error::PublicInputs);
         }
         let domain = Domain::<F>::new(key.log_size()).ok_or(Error::DomainTooLarge)?;
-        let tape =
-            verifier_tape::<F, T, AccumulatingPlonk<F, PC, N, D>>(transcript, proof.messages);
-        let (committed, challenges, tape) = verify_rounds(vk, tape, public)?;
-        let (values, tape) = tape.read();
-        let transcript = tape.finish();
+        let ((committed, challenges, values), tape) =
+            verify_within(tape, proof.messages, |verifier| {
+                let (committed, challenges, verifier) = verify_rounds(vk, verifier, public)?;
+                let (values, verifier) = verifier.read();
+                Ok(((committed, challenges, values), verifier))
+            })?;
         let rotations = rotations(key.variables());
         let layout = Layout::of(key);
         if values.0.len() != layout.total || values.0.iter().any(|row| row.len() != rotations.len())
@@ -465,7 +468,7 @@ where
             values: values.0,
         };
         self.pcs
-            .check_claims(transcript, &claims, proof.opening)
+            .check_claims(tape, &claims, proof.opening)
             .ok_or(Error::Accumulation)
     }
 }

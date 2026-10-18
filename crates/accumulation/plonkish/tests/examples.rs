@@ -57,18 +57,18 @@ fn an_incremental_computation() {
     let (_, first) = step(3);
     let public = first.public_inputs().to_vec();
     let fresh = Embed(&params)
-        .prove(vesta_sponge(ACCUMULATION_DOMAIN), &public, &first)
+        .prove_on(vesta_sponge(ACCUMULATION_DOMAIN), &public, &first)
         .unwrap();
     let (mut instance, mut witness) = (fresh.instance, fresh.witness);
     for x in [4, 5, 6] {
         let (_, next) = step(x);
         let input = (next.public_inputs().to_vec(), instance);
         let out = accumulate(&params)
-            .prove(vesta_sponge(ACCUMULATION_DOMAIN), &input, &(next, witness))
+            .prove_on(vesta_sponge(ACCUMULATION_DOMAIN), &input, &(next, witness))
             .unwrap();
         // The verifier folds from the instances and the proof alone.
         let (verified, _) = accumulate(&params)
-            .verify(vesta_sponge(ACCUMULATION_DOMAIN), &input, out.proof)
+            .verify_on(vesta_sponge(ACCUMULATION_DOMAIN), &input, out.proof)
             .unwrap();
         assert_eq!(verified, out.instance);
         (instance, witness) = (verified, out.witness);
@@ -84,7 +84,7 @@ fn two_accumulators_fold_into_one() {
     let accumulator = |xs: [u64; 2]| {
         let (_, first) = step(xs[0]);
         let fresh = Embed(&params)
-            .prove(
+            .prove_on(
                 vesta_sponge(ACCUMULATION_DOMAIN),
                 &first.public_inputs().to_vec(),
                 &first,
@@ -93,7 +93,7 @@ fn two_accumulators_fold_into_one() {
         let (_, second) = step(xs[1]);
         let input = (second.public_inputs().to_vec(), fresh.instance);
         let out = accumulate(&params)
-            .prove(
+            .prove_on(
                 vesta_sponge(ACCUMULATION_DOMAIN),
                 &input,
                 &(second, fresh.witness),
@@ -106,10 +106,10 @@ fn two_accumulators_fold_into_one() {
     let instances = (left.0, right.0);
     let witnesses = (left.1, right.1);
     let out = Fold(&params)
-        .prove(vesta_sponge(ACCUMULATION_DOMAIN), &instances, &witnesses)
+        .prove_on(vesta_sponge(ACCUMULATION_DOMAIN), &instances, &witnesses)
         .unwrap();
     let (folded, _) = Fold(&params)
-        .verify(vesta_sponge(ACCUMULATION_DOMAIN), &instances, out.proof)
+        .verify_on(vesta_sponge(ACCUMULATION_DOMAIN), &instances, out.proof)
         .unwrap();
     assert_eq!(folded, out.instance);
     params.relaxed().check(&folded, &out.witness).unwrap();

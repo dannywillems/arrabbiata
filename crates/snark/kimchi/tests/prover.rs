@@ -1339,12 +1339,14 @@ fn the_reduction_is_complete_and_its_composites_verify() {
         );
         // KimchiSuccinct ; Decide, Kimchi's whole verifier.
         let whole = accumulation::verify(reduction);
-        let proved = whole.prove(transcript(), &statement, &assignment).unwrap();
+        let proved = whole
+            .prove_on(transcript(), &statement, &assignment)
+            .unwrap();
         let mut tampered = proved.proof.clone();
         tampered.0.proof.z1 = tampered.0.proof.z1 + Fp::ONE;
-        let accepted = whole.verify(transcript(), &statement, proved.proof);
+        let accepted = whole.verify_on(transcript(), &statement, proved.proof);
         assert!(accepted.is_ok(), "{name}");
-        let refused = whole.verify(transcript(), &statement, tampered);
+        let refused = whole.verify_on(transcript(), &statement, tampered);
         assert!(refused.is_err(), "{name}");
     }
 }
@@ -1394,7 +1396,7 @@ fn a_false_previous_accumulator_is_caught() {
     // fails inside the opening.
     let reduction = KimchiSuccinct::new(relation, Arkworks(SplitMix64(5)));
     let transcript = || KimchiSponge::new(pallas_base());
-    let result = reduction.prove(transcript(), &statement, &assignment);
+    let result = reduction.prove_on(transcript(), &statement, &assignment);
     assert_eq!(
         result.err(),
         Some(accumulation::Error::Verify(VerifyError::OpeningProof))
@@ -1430,7 +1432,7 @@ fn merged_and_separate_folding_decide_the_same_statements() {
     // A valid previous accumulator: both accept.
     let merged = KimchiSuccinct::new(merged_relation, Arkworks(SplitMix64(11)));
     let out = merged
-        .prove(transcript(), &merged_statement, &merged_assignment)
+        .prove_on(transcript(), &merged_statement, &merged_assignment)
         .unwrap();
     assert!(merged_ipa.decide(&out.instance));
     let folded = separate(KimchiSuccinct::new(
@@ -1452,13 +1454,15 @@ fn merged_and_separate_folding_decide_the_same_statements() {
     false_statement.prev_challenges = false_previous.clone();
     assert!(
         merged
-            .prove(transcript(), &false_statement, &merged_assignment)
+            .prove_on(transcript(), &false_statement, &merged_assignment)
             .is_err()
     );
     let instance = (separate_statement, false_previous);
     let assignment = (separate_assignment, witnesses);
-    let out = folded.prove(transcript(), &instance, &assignment).unwrap();
-    let verified = folded.verify(transcript(), &instance, out.proof);
+    let out = folded
+        .prove_on(transcript(), &instance, &assignment)
+        .unwrap();
+    let verified = folded.verify_on(transcript(), &instance, out.proof);
     assert!(verified.is_err());
 }
 
@@ -1607,12 +1611,12 @@ fn the_factored_reduction_is_kimchi_succinct() {
         let out = laws::complete(&whole, transcript, &statement, &assignment).unwrap();
         let reduction = KimchiSuccinct::new(relation, Arkworks(SplitMix64(5)));
         let expected = reduction
-            .prove(transcript(), &statement, &assignment)
+            .prove_on(transcript(), &statement, &assignment)
             .unwrap();
         assert_eq!(out.instance, expected.instance, "{name}");
         let (group_proof, mut opened) = out.proof.clone();
         opened.evals.z.zeta[0] = opened.evals.z.zeta[0] + Fp::ONE;
-        let refused = whole.verify(transcript(), &statement, (group_proof, opened));
+        let refused = whole.verify_on(transcript(), &statement, (group_proof, opened));
         assert!(
             matches!(refused, Err(arrabbiata_reduction::Either::Right(_))),
             "{name}"

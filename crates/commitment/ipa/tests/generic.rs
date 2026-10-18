@@ -57,8 +57,8 @@ fn eval(p: &[F], x: F) -> F {
 /// The laws, for one instance.
 fn laws<B, Ch, H>(ipa: &GenericIpa<Pallas, B, Ch, ScaledGenerator, H>, hiding: bool)
 where
-    B: for<'a> Binding<Pallas, ScalarOracle<'a, PoseidonSponge<Fq>>>,
-    ScaledGenerator: for<'a> ValueBase<Pallas, ScalarOracle<'a, PoseidonSponge<Fq>>>,
+    B: for<'a> Binding<Pallas, ScalarOracle<&'a mut PoseidonSponge<Fq>>>,
+    ScaledGenerator: for<'a> ValueBase<Pallas, ScalarOracle<&'a mut PoseidonSponge<Fq>>>,
     Ch: ChallengeMap<F>,
     H: Hiding<Pallas>,
 {

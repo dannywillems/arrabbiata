@@ -32,10 +32,11 @@ use arrabbiata_poseidon::{
     kimchi::{KimchiSponge, vesta_base as kimchi_vesta_base},
     pallas_sponge, vesta_sponge,
 };
-use arrabbiata_reduction::{Each, Reduction, Relation, Then, laws};
+use arrabbiata_reduction::{Each, Reduction, Relation, Then, laws, tape as laws_tape};
 use arrabbiata_transcript::{
     Transcript,
     hash::{ByteHash, HashTranscript},
+    typed::{End, Pattern, Tail, Tape},
 };
 use proptest::prelude::*;
 use sha2::{Digest, Sha256};
@@ -147,6 +148,17 @@ where
     (claims, polynomials)
 }
 
+/// The tape of `reduction`'s whole protocol on `transcript`.
+fn tape_of<F, R, T>(_reduction: &R, transcript: T) -> Tape<F, T, Tail<R::Pattern, End>>
+where
+    F: Field,
+    R: Reduction<F>,
+    T: Transcript<F>,
+    Tail<R::Pattern, End>: Pattern,
+{
+    laws_tape::<F, R, T>(transcript)
+}
+
 /// Completeness of a batched opening, and a wrong value rejected.
 fn opening_laws<F, PC, T>(
     pcs: &PC,
@@ -157,6 +169,9 @@ fn opening_laws<F, PC, T>(
 where
     F: Field,
     PC: Accumulation<F, Family = Univariate>,
+    PC::OpenPattern: Pattern,
+    Tail<PC::OpenPattern, End>: Pattern,
+    Tail<PC::FoldPattern, End>: Pattern,
     T: Transcript<F>,
 {
     let (claims, polynomials) = build::<F, PC>(pcs, raw);
@@ -167,14 +182,14 @@ where
     let opened = laws::complete::<F, _, _>(&open(pcs), &transcript, &claims, &polynomials);
     prop_assert!(opened.is_ok(), "open: {:?}", opened.err());
     let proof = open(pcs)
-        .prove(transcript(), &claims, &polynomials)
+        .prove_on(transcript(), &claims, &polynomials)
         .unwrap()
         .proof;
     let mut wrong = claims.clone();
     let row = which % wrong.values.len();
     let column = (which / 7) % wrong.points.len();
     wrong.values[row][column] = wrong.values[row][column] + F::ONE;
-    prop_assert!(open(pcs).verify(transcript(), &wrong, proof).is_err());
+    prop_assert!(open(pcs).verify_on(transcript(), &wrong, proof).is_err());
     Ok(())
 }
 
@@ -187,13 +202,16 @@ fn accumulators<F, PC, T>(
 where
     F: Field,
     PC: Accumulation<F, Family = Univariate>,
+    PC::OpenPattern: Pattern,
+    Tail<PC::OpenPattern, End>: Pattern,
+    Tail<PC::FoldPattern, End>: Pattern,
     T: Transcript<F>,
 {
     raws.iter()
         .map(|raw| {
             let (claims, polynomials) = build::<F, PC>(pcs, raw);
             Succinct::new(pcs)
-                .prove(transcript(), &claims, &polynomials)
+                .prove_on(transcript(), &claims, &polynomials)
                 .unwrap()
                 .instance
         })
@@ -210,6 +228,9 @@ fn accumulation_laws<F, PC, T>(
 where
     F: Field,
     PC: Accumulation<F, Family = Univariate>,
+    PC::OpenPattern: Pattern,
+    Tail<PC::OpenPattern, End>: Pattern,
+    Tail<PC::FoldPattern, End>: Pattern,
     T: Transcript<F>,
 {
     let accumulators = accumulators(pcs, &transcript, raws);
@@ -226,10 +247,16 @@ where
     prop_assert!(out.is_ok(), "accumulate: {:?}", out.err());
 
     let whole = accumulate(pcs)
-        .prove(transcript(), &claims, &polynomials)
+        .prove_on(transcript(), &claims, &polynomials)
         .unwrap();
+    // The composite's tape, described once, split between its parts: the
+    // type checker accepts `Each` on its prefix and `Fold` on the rest.
     let middle = Each(Succinct::new(pcs))
-        .prove(transcript(), &claims, &polynomials)
+        .prove(
+            tape_of(&accumulate(pcs), transcript()),
+            &claims,
+            &polynomials,
+        )
         .unwrap();
     let rest = Fold::new(pcs)
         .prove(middle.transcript, &middle.instance, &middle.witness)
@@ -250,6 +277,9 @@ fn a_false_accumulator_is_caught<F, PC, T>(
 where
     F: Field,
     PC: Accumulation<F, Family = Univariate>,
+    PC::OpenPattern: Pattern,
+    Tail<PC::OpenPattern, End>: Pattern,
+    Tail<PC::FoldPattern, End>: Pattern,
     T: Transcript<F>,
 {
     let mut accumulators = accumulators(pcs, &transcript, raws);
@@ -259,10 +289,10 @@ where
     let units = vec![(); accumulators.len()];
     let fold = Fold::new(pcs);
     let proof = fold
-        .prove(transcript(), &accumulators, &units)
+        .prove_on(transcript(), &accumulators, &units)
         .unwrap()
         .proof;
-    match fold.verify(transcript(), &accumulators, proof) {
+    match fold.verify_on(transcript(), &accumulators, proof) {
         Err(_) => {}
         Ok((folded, _)) => prop_assert!(!pcs.decide(&folded)),
     }

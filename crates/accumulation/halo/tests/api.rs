@@ -5,14 +5,15 @@ use arrabbiata_commit::PolynomialCommitment;
 use arrabbiata_curve::Projective;
 use arrabbiata_field::Field;
 use arrabbiata_halo::{
-    Accumulated, Accumulation, Claims, ClaimsOf, Combine, Decide, Error, Evaluations, Fold, Opened,
-    PointClaim, Succinct, accumulate, decide_all, open,
+    Accumulated, Accumulation, Claims, ClaimsOf, Combine, CombinePattern, Decide, Error,
+    Evaluations, Fold, Opened, PointClaim, Succinct, accumulate, decide_all, open,
 };
 use arrabbiata_ipa::{Accumulators, Ipa, Lift};
 use arrabbiata_kzg::{Kzg, PairingAccumulator};
 use arrabbiata_pasta::{Fq, Pallas};
 use arrabbiata_poseidon::{PoseidonSponge, bn254_scalar_sponge, pallas_sponge, vesta_sponge};
 use arrabbiata_reduction::{Reduction, Relation};
+use arrabbiata_transcript::typed::{End, Pattern, Tape};
 
 type Scheme = Ipa<Pallas, PoseidonSponge<Fq>>;
 
@@ -75,7 +76,7 @@ fn combine() {
     let ipa = ipa();
     let (claims, polynomials) = claims::<Fq, _>(&ipa);
     let out = Combine::new(&ipa)
-        .prove(vesta_sponge(2), &claims, &polynomials)
+        .prove_on(vesta_sponge(2), &claims, &polynomials)
         .unwrap();
     assert!(Opened::new(&ipa).check(&out.instance, &out.witness).is_ok());
 }
@@ -85,7 +86,7 @@ fn succinct_and_accumulated() {
     let ipa = ipa();
     let (claims, polynomials) = claims::<Fq, _>(&ipa);
     let out = Succinct::new(&ipa)
-        .prove(vesta_sponge(2), &claims, &polynomials)
+        .prove_on(vesta_sponge(2), &claims, &polynomials)
         .unwrap();
     assert!(Accumulated::new(&ipa).check(&out.instance, &()).is_ok());
 }
@@ -95,15 +96,16 @@ fn accumulation() {
     // The trait directly, on KZG: open, check, fold, check, decide.
     let kzg = kzg();
     let (claims, polynomials) = claims::<Fr, _>(&kzg);
-    let (opening, accumulator, _) = kzg.open_claims(bn254_scalar_sponge(2), &claims, &polynomials);
+    let (opening, accumulator, _) =
+        kzg.open_claims::<_, End>(Tape::start(bn254_scalar_sponge(2)), &claims, &polynomials);
     let (checked, _) = kzg
-        .check_claims(bn254_scalar_sponge(2), &claims, opening)
+        .check_claims::<_, End>(Tape::start(bn254_scalar_sponge(2)), &claims, opening)
         .unwrap();
     assert_eq!(checked, accumulator);
     let list = [accumulator.clone(), accumulator];
-    let (proof, folded, _) = kzg.fold(bn254_scalar_sponge(3), &list);
+    let (proof, folded, _) = kzg.fold::<_, End>(Tape::start(bn254_scalar_sponge(3)), &list);
     let (checked, _) = kzg
-        .check_fold(bn254_scalar_sponge(3), &list, proof)
+        .check_fold::<_, End>(Tape::start(bn254_scalar_sponge(3)), &list, proof)
         .unwrap();
     assert_eq!(checked, folded);
     assert!(kzg.decide(&folded));
@@ -128,12 +130,12 @@ fn decide() {
     let ipa = ipa();
     let (claims, polynomials) = claims::<Fq, _>(&ipa);
     let accumulator = Succinct::new(&ipa)
-        .prove(vesta_sponge(2), &claims, &polynomials)
+        .prove_on(vesta_sponge(2), &claims, &polynomials)
         .unwrap()
         .instance;
     assert!(
         Decide::new(&ipa)
-            .verify(vesta_sponge(3), &accumulator, ())
+            .verify_on(vesta_sponge(3), &accumulator, ())
             .is_ok()
     );
 }
@@ -143,21 +145,21 @@ fn fold_and_decide_all() {
     let ipa = ipa();
     let (claims, polynomials) = claims::<Fq, _>(&ipa);
     let accumulator = Succinct::new(&ipa)
-        .prove(vesta_sponge(2), &claims, &polynomials)
+        .prove_on(vesta_sponge(2), &claims, &polynomials)
         .unwrap()
         .instance;
     let list = vec![accumulator.clone(), accumulator];
     let units = vec![(); 2];
     let folded = Fold::new(&ipa)
-        .prove(vesta_sponge(3), &list, &units)
+        .prove_on(vesta_sponge(3), &list, &units)
         .unwrap();
     assert!(ipa.decide(&folded.instance));
     let out = decide_all(&ipa)
-        .prove(vesta_sponge(3), &list, &units)
+        .prove_on(vesta_sponge(3), &list, &units)
         .unwrap();
     assert!(
         decide_all(&ipa)
-            .verify(vesta_sponge(3), &list, out.proof)
+            .verify_on(vesta_sponge(3), &list, out.proof)
             .is_ok()
     );
 }
@@ -168,12 +170,12 @@ fn lift_and_accumulators() {
     let ipa = ipa();
     let (claims, polynomials) = claims::<Fq, _>(&ipa);
     let accumulator = Succinct::new(&ipa)
-        .prove(vesta_sponge(2), &claims, &polynomials)
+        .prove_on(vesta_sponge(2), &claims, &polynomials)
         .unwrap()
         .instance;
     assert_eq!(Accumulators(vec![accumulator.clone()]).0.len(), 1);
     let out = Lift(&ipa)
-        .prove(vesta_sponge(3), &vec![accumulator], &vec![()])
+        .prove_on(vesta_sponge(3), &vec![accumulator], &vec![()])
         .unwrap();
     assert_eq!(out.instance.points.len(), 1);
     assert!(
@@ -188,11 +190,11 @@ fn open_works() {
     let kzg = kzg();
     let (claims, polynomials) = claims::<Fr, _>(&kzg);
     let out = open(&kzg)
-        .prove(bn254_scalar_sponge(2), &claims, &polynomials)
+        .prove_on(bn254_scalar_sponge(2), &claims, &polynomials)
         .unwrap();
     assert!(
         open(&kzg)
-            .verify(bn254_scalar_sponge(2), &claims, out.proof)
+            .verify_on(bn254_scalar_sponge(2), &claims, out.proof)
             .is_ok()
     );
 }
@@ -204,7 +206,18 @@ fn accumulate_works() {
     let batches = vec![claims.clone(), claims];
     let witnesses = vec![polynomials.clone(), polynomials];
     let out = accumulate(&kzg)
-        .prove(bn254_scalar_sponge(2), &batches, &witnesses)
+        .prove_on(bn254_scalar_sponge(2), &batches, &witnesses)
         .unwrap();
     assert!(kzg.decide(&out.instance));
+}
+
+#[test]
+fn combine_pattern() {
+    // The claims public, then the combiner drawn: no message, so Combine's
+    // proof is empty, and it is `Combine`'s pattern.
+    type P = CombinePattern<Fq, Ipa<Pallas, PoseidonSponge<Fq>>>;
+    assert_eq!(<P as Pattern>::MESSAGES, 0);
+    assert_eq!(<P as Pattern>::CHALLENGES, 1);
+    fn pattern_of<R: Reduction<Fq, Pattern = P>>(_: &R) {}
+    pattern_of(&Combine::new(&ipa()));
 }

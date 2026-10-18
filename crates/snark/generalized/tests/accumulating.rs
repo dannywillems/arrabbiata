@@ -33,7 +33,7 @@ use arrabbiata_reduction::{Each, Reduction, Then, laws};
 use arrabbiata_transcript::{
     Transcript,
     hash::{ByteHash, HashTranscript},
-    typed::Label,
+    typed::{End, Label, Pattern, Tail},
 };
 use proptest::prelude::*;
 use sha2::{Digest, Sha256};
@@ -171,6 +171,9 @@ fn laws_on<F, PC, T>(
 where
     F: TwoAdicField + arrabbiata_field::PrimeField,
     PC: Accumulation<F, Family = arrabbiata_commit::Univariate> + Label,
+    PC::OpenPattern: Pattern,
+    Tail<PC::OpenPattern, End>: Pattern,
+    Tail<PC::FoldPattern, End>: Pattern,
     T: Transcript<F>,
 {
     let (pk, _) = setup(circuit, pcs).unwrap();
@@ -188,19 +191,19 @@ where
 
     // Another statement, or a changed evaluation, is rejected.
     let proof = reduction
-        .prove(transcript(), public, columns)
+        .prove_on(transcript(), public, columns)
         .unwrap()
         .proof;
     let wrong = vec![public[0] + F::ONE];
     prop_assert!(
         reduction
-            .verify(transcript(), &wrong, proof.clone())
+            .verify_on(transcript(), &wrong, proof.clone())
             .is_err()
     );
     let mut tampered = proof;
     let values = &mut tampered.messages.tail.tail.tail.tail.tail.head.0;
     values[0][0] = values[0][0] + F::ONE;
-    prop_assert!(reduction.verify(transcript(), public, tampered).is_err());
+    prop_assert!(reduction.verify_on(transcript(), public, tampered).is_err());
 
     // Many proofs, one accumulator, one decider.
     let (publics, witnesses): (Vec<_>, Vec<_>) = statements.into_iter().unzip();

@@ -4,9 +4,14 @@
 use arrabbiata_pasta::Fq as F;
 use arrabbiata_poseidon::vesta_sponge;
 use arrabbiata_reduction::{
-    Argument, Batch, Concat, Each, Either, Identity, Indexed, Output, Parallel, Product, Reduction,
-    Relation, Single, Then, Top, Unit,
+    Argument, Batch, Concat, Each, Either, Identity, Indexed, Output, OutputOf, Parallel, Product,
+    Reduction, Relation, Single, Then, Top, Unit,
     laws::{Failure, complete, same_instance},
+    tape,
+};
+use arrabbiata_transcript::{
+    Transcript,
+    typed::{Challenge, End, Seq, Tail, Tape},
 };
 
 #[test]
@@ -82,8 +87,8 @@ fn output() {
 fn reduction() {
     let id = Identity(Top);
     // Top has one instance, `()`: proving and verifying both succeed.
-    let proved = Reduction::<F>::prove(&id, vesta_sponge(0), &(), &());
-    let verified = Reduction::<F>::verify(&id, vesta_sponge(0), &(), ());
+    let proved = Reduction::<F>::prove_on(&id, vesta_sponge(0), &(), &());
+    let verified = Reduction::<F>::verify_on(&id, vesta_sponge(0), &(), ());
     assert!(proved.is_ok());
     assert!(verified.is_ok());
 }
@@ -100,13 +105,13 @@ fn product_target() {
 
 #[test]
 fn product_prove() {
-    let out = Reduction::<F>::prove(&Identity(Top), vesta_sponge(0), &(), &()).unwrap();
+    let out = Reduction::<F>::prove_on(&Identity(Top), vesta_sponge(0), &(), &()).unwrap();
     assert_eq!(out.witness, ());
 }
 
 #[test]
 fn product_verify() {
-    let (u, _) = Reduction::<F>::verify(&Identity(Top), vesta_sponge(0), &(), ()).unwrap();
+    let (u, _) = Reduction::<F>::verify_on(&Identity(Top), vesta_sponge(0), &(), ()).unwrap();
     assert_eq!(u, ());
 }
 
@@ -114,7 +119,7 @@ fn product_verify() {
 fn r_impl() {
     let id = Identity(Top);
     let both = Then(&id, &id);
-    assert!(Reduction::<F>::prove(&both, vesta_sponge(0), &(), &()).is_ok());
+    assert!(Reduction::<F>::prove_on(&both, vesta_sponge(0), &(), &()).is_ok());
 }
 
 #[test]
@@ -125,14 +130,14 @@ fn argument() {
 
 #[test]
 fn identity() {
-    let out = Reduction::<F>::prove(&Identity(Unit), vesta_sponge(0), &(), &()).unwrap();
+    let out = Reduction::<F>::prove_on(&Identity(Unit), vesta_sponge(0), &(), &()).unwrap();
     assert_eq!((out.instance, out.witness, out.proof), ((), (), ()));
 }
 
 #[test]
 fn then() {
     let both = Then(Identity(Top), Identity(Top));
-    let out = Reduction::<F>::prove(&both, vesta_sponge(0), &(), &()).unwrap();
+    let out = Reduction::<F>::prove_on(&both, vesta_sponge(0), &(), &()).unwrap();
     assert_eq!(out.proof, ((), ()));
 }
 
@@ -140,7 +145,7 @@ fn then() {
 fn parallel() {
     let both = Parallel(Identity(Top), Identity(Unit));
     assert_eq!(Reduction::<F>::source(&both), Product(Top, Unit));
-    let out = Reduction::<F>::prove(&both, vesta_sponge(0), &((), ()), &((), ())).unwrap();
+    let out = Reduction::<F>::prove_on(&both, vesta_sponge(0), &((), ()), &((), ())).unwrap();
     assert_eq!(out.instance, ((), ()));
 }
 
@@ -186,24 +191,206 @@ fn each() {
     // The identity on each element of a list of three.
     let each = Each(Identity(Top));
     let (instances, _) =
-        Reduction::<F>::verify(&each, vesta_sponge(0), &vec![(); 3], vec![(); 3]).unwrap();
+        Reduction::<F>::verify_on(&each, vesta_sponge(0), &vec![(); 3], vec![(); 3]).unwrap();
     assert_eq!(instances.len(), 3);
     assert_eq!(
-        Reduction::<F>::verify(&each, vesta_sponge(0), &vec![(); 3], vec![(); 2]),
-        Err(Indexed::Length)
+        Reduction::<F>::verify_on(&each, vesta_sponge(0), &vec![(); 3], vec![(); 2]).err(),
+        Some(Indexed::Length)
     );
 }
 
 #[test]
 fn single() {
-    let (list, _) = Reduction::<F>::verify(&Single(Top), vesta_sponge(0), &(), ()).unwrap();
+    let (list, _) = Reduction::<F>::verify_on(&Single(Top), vesta_sponge(0), &(), ()).unwrap();
     assert_eq!(list, vec![()]);
 }
 
 #[test]
 fn concat() {
     let (list, _) =
-        Reduction::<F>::verify(&Concat(Top), vesta_sponge(0), &(vec![()], vec![(), ()]), ())
+        Reduction::<F>::verify_on(&Concat(Top), vesta_sponge(0), &(vec![()], vec![(), ()]), ())
             .unwrap();
     assert_eq!(list.len(), 3);
+}
+
+/// Every field element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Anything;
+
+impl Relation for Anything {
+    type Instance = F;
+    type Witness = ();
+    type Error = ();
+    fn check(&self, _: &F, (): &()) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+/// From `Top` to a challenge: one step, a draw.
+struct Draw;
+
+impl Reduction<F> for Draw {
+    type Source = Top;
+    type Target = Anything;
+    type Proof = ();
+    type Error = ();
+    type Pattern = Challenge<End>;
+
+    fn source(&self) -> Top {
+        Top
+    }
+
+    fn target(&self) -> Anything {
+        Anything
+    }
+
+    fn prove<T, R>(
+        &self,
+        tape: Tape<F, T, Tail<Challenge<End>, R>>,
+        (): &(),
+        (): &(),
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, ()>
+    where
+        T: Transcript<F>,
+    {
+        let (x, tape) = tape.challenge();
+        Ok(Output {
+            instance: x,
+            witness: (),
+            proof: (),
+            transcript: tape,
+        })
+    }
+
+    fn verify<T, R>(
+        &self,
+        tape: Tape<F, T, Tail<Challenge<End>, R>>,
+        (): &(),
+        (): (),
+    ) -> Result<(F, Tape<F, T, R>), ()>
+    where
+        T: Transcript<F>,
+    {
+        Ok(tape.challenge())
+    }
+}
+
+#[test]
+fn reduction_pattern() {
+    // A composite's pattern is its parts' in sequence.
+    fn pattern_of<R: Reduction<F, Pattern = P>, P>(_: &R) {}
+    pattern_of::<_, Seq<Challenge<End>, Challenge<End>>>(&Then(Draw, Draw2));
+    pattern_of::<_, Seq<Challenge<End>, End>>(&Then(Draw, Identity(Anything)));
+    pattern_of::<_, End>(&Identity(Top));
+}
+
+#[test]
+fn reduction_prove() {
+    // On a longer tape: the reduction's steps, then the tape handed back
+    // at the rest of the protocol.
+    let tape = Tape::<F, _, Tail<Challenge<End>, Challenge<End>>>::undescribed(vesta_sponge(0));
+    let out = Draw.prove(tape, &(), &()).unwrap();
+    let (next, _) = out.transcript.challenge();
+    let (a, b) = {
+        let mut sponge = vesta_sponge(0);
+        (sponge.squeeze(), sponge.squeeze())
+    };
+    assert_eq!((out.instance, next), (a, b));
+}
+
+#[test]
+fn reduction_verify() {
+    let tape = Tape::<F, _, Tail<Challenge<End>, End>>::undescribed(vesta_sponge(0));
+    let (x, _) = Draw.verify(tape, &(), ()).unwrap();
+    assert_eq!(x, vesta_sponge(0).squeeze());
+}
+
+#[test]
+fn reduction_prove_on() {
+    // On its own tape: the pattern described first, so the challenge is not
+    // the bare sponge's.
+    let out = Draw.prove_on(vesta_sponge(0), &(), &()).unwrap();
+    assert_ne!(out.instance, vesta_sponge(0).squeeze());
+    let (x, _) = Draw.verify_on(vesta_sponge(0), &(), ()).unwrap();
+    assert_eq!(out.instance, x);
+}
+
+#[test]
+fn reduction_verify_on() {
+    let (x, after) = Draw.verify_on(vesta_sponge(0), &(), ()).unwrap();
+    let (y, again) = Draw.verify_on(vesta_sponge(0), &(), ()).unwrap();
+    assert_eq!(x, y);
+    assert_eq!(after.finish().squeeze(), again.finish().squeeze());
+}
+
+#[test]
+fn reduction_tape() {
+    // The tape `prove_on` starts from.
+    let started = tape::<F, Draw, _>(vesta_sponge(0));
+    let out = Draw.prove(started, &(), &()).unwrap();
+    let direct = Draw.prove_on(vesta_sponge(0), &(), &()).unwrap();
+    assert_eq!(out.instance, direct.instance);
+}
+
+#[test]
+fn then_splits_its_tape() {
+    // `Then(A, B)`'s tape is `A`'s steps then `B`'s: its parts run on it in
+    // turn reach the composite's instance.
+    let both = Then(Draw, Draw2);
+    let whole = both.prove_on(vesta_sponge(0), &(), &()).unwrap();
+    let first = Draw
+        .prove(tape::<F, Then<Draw, Draw2>, _>(vesta_sponge(0)), &(), &())
+        .unwrap();
+    let second = Draw2.prove(first.transcript, &first.instance, &()).unwrap();
+    assert_eq!(whole.instance, second.instance);
+}
+
+/// From a field element to a challenge drawn after it.
+struct Draw2;
+
+impl Reduction<F> for Draw2 {
+    type Source = Anything;
+    type Target = Anything;
+    type Proof = ();
+    type Error = ();
+    type Pattern = Challenge<End>;
+
+    fn source(&self) -> Anything {
+        Anything
+    }
+
+    fn target(&self) -> Anything {
+        Anything
+    }
+
+    fn prove<T, R>(
+        &self,
+        tape: Tape<F, T, Tail<Challenge<End>, R>>,
+        x: &F,
+        (): &(),
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, ()>
+    where
+        T: Transcript<F>,
+    {
+        let (y, tape) = tape.challenge();
+        Ok(Output {
+            instance: *x + y,
+            witness: (),
+            proof: (),
+            transcript: tape,
+        })
+    }
+
+    fn verify<T, R>(
+        &self,
+        tape: Tape<F, T, Tail<Challenge<End>, R>>,
+        x: &F,
+        (): (),
+    ) -> Result<(F, Tape<F, T, R>), ()>
+    where
+        T: Transcript<F>,
+    {
+        let (y, tape) = tape.challenge();
+        Ok((*x + y, tape))
+    }
 }

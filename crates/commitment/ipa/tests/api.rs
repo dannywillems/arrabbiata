@@ -8,21 +8,23 @@ use arrabbiata_field::{
     rng::{Arkworks, Sampler, SplitMix64},
 };
 use arrabbiata_ipa::{
-    Ipa, IpaProof, RecursionChallenge, Statement, folded_evaluation,
+    Ipa, IpaProof, OpeningSteps, RecursionChallenge, Statement,
+    accumulation::{Evalscale, LiftPattern, OpenPattern},
+    folded_evaluation,
     generic::{
         BaseDraw, BaseOracle, BindStatement, BindValue, Binding, Blinded, BoundStatement,
         CHALLENGE_BITS, ChallengeMap, DOMAIN, Delta, Endo, FinalChallenge, Folded, Full,
         GenericIpa, HashToCurve, HashedToCurve, Hiding, IpaOracle, NoRandomness, NotHiding,
-        Opening, OpeningTape, OpeningTranscript, Round, RoundChallenge, RoundPoints, ScalarDraw,
-        ScalarOracle, ScaledGenerator, Schnorr, ShiftedValue, ValueBase, ValueChallenge, Witness,
-        shift_scalar,
+        Opening, OpeningTape, OpeningThen, OpeningTranscript, Round, RoundChallenge, RoundPoints,
+        ScalarDraw, ScalarOracle, ScaledGenerator, Schnorr, ShiftedValue, ValueBase,
+        ValueChallenge, Witness, shift_scalar,
     },
 };
 use arrabbiata_pasta::{Fp, Fq, Pallas};
 use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
 use arrabbiata_transcript::{
     Transcript,
-    typed::{Draw, End, Label, Pattern, Tape, Write},
+    typed::{Challenge, Draw, End, Label, Pattern, Tape, Write},
 };
 
 #[test]
@@ -701,7 +703,7 @@ fn generic_delta() {
 #[test]
 fn generic_scalar_draw() {
     let mut sponge = vesta_sponge(1);
-    let x = <ScalarDraw<Pallas, RoundChallenge> as Draw<&mut ScalarOracle<'_, _>>>::draw(
+    let x = <ScalarDraw<Pallas, RoundChallenge> as Draw<&mut ScalarOracle<&mut _>>>::draw(
         &mut &mut ScalarOracle(&mut sponge),
     );
     assert_eq!(x, vesta_sponge(1).squeeze());
@@ -740,7 +742,7 @@ fn generic_opening_transcript() {
         BindStatement,
         ScaledGenerator,
         NotHiding,
-        ScalarOracle<'a, PoseidonSponge<Fq>>,
+        ScalarOracle<&'a mut PoseidonSponge<Fq>>,
     >;
     type Blinding = OpeningTranscript<Pallas, BindValue, ScaledGenerator, Blinded, TwoSponges>;
     assert_eq!(<Ours<'_> as Pattern>::MESSAGES, 0);
@@ -773,4 +775,175 @@ fn generic_opening_tape() {
         &statement,
     );
     assert_eq!(u, g * reference.squeeze());
+}
+
+/// `1 + 2X + 3X^2` committed on a key of 4, and its statement at 2.
+fn committed(ipa: &Ipa<Pallas, PoseidonSponge<Fq>>) -> ([Fq; 3], Projective<Pallas>) {
+    let p = [Fq::from_u64(1), Fq::from_u64(2), Fq::from_u64(3)];
+    let commitment = ipa.commit(&p);
+    (p, commitment)
+}
+
+#[test]
+fn opening_steps() {
+    // The bound statement, `xi`, the rounds: no message, one challenge.
+    assert_eq!(<OpeningSteps<Pallas, End> as Pattern>::MESSAGES, 0);
+    assert_eq!(<OpeningSteps<Pallas, End> as Pattern>::CHALLENGES, 1);
+    assert_eq!(
+        <OpeningSteps<Pallas, Challenge<End>> as Pattern>::CHALLENGES,
+        2
+    );
+}
+
+#[test]
+fn ipa_prove_tape() {
+    // On a longer tape: the proof and accumulator of `prove`, and the tape
+    // handed back at the rest, where it continues from the opening's state.
+    let ipa = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    let (p, commitment) = committed(&ipa);
+    let points = [Fq::from_u64(2)];
+    let statement = Statement {
+        commitment: &commitment,
+        points: &points,
+        evalscale: Fq::ONE,
+        value: Fq::from_u64(17),
+    };
+    let tape = Tape::<Fq, _, OpeningSteps<Pallas, Challenge<End>>>::undescribed(vesta_sponge(1));
+    let (proof, accumulator, rest) = ipa.prove_tape(tape, &statement, &p);
+    let (next, _) = rest.challenge();
+    let mut sponge = vesta_sponge(1);
+    let (expected_proof, expected_accumulator) = ipa.prove(&mut sponge, &statement, &p);
+    assert_eq!((proof, accumulator), (expected_proof, expected_accumulator));
+    assert_eq!(next, sponge.squeeze());
+}
+
+#[test]
+fn ipa_succinct_tape() {
+    // The verifier on a tape: the prover's accumulator, a wrong value
+    // refused.
+    let ipa = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    let (p, commitment) = committed(&ipa);
+    let points = [Fq::from_u64(2)];
+    let statement = Statement {
+        commitment: &commitment,
+        points: &points,
+        evalscale: Fq::ONE,
+        value: Fq::from_u64(17),
+    };
+    let (proof, accumulator) = ipa.prove(&mut vesta_sponge(1), &statement, &p);
+    let tape = Tape::<Fq, _, OpeningSteps<Pallas, End>>::undescribed(vesta_sponge(1));
+    let (checked, _) = ipa.succinct_tape(tape, &statement, &proof).unwrap();
+    assert_eq!(checked, accumulator);
+    let wrong = Statement {
+        value: Fq::from_u64(18),
+        ..statement
+    };
+    let tape = Tape::<Fq, _, OpeningSteps<Pallas, End>>::undescribed(vesta_sponge(1));
+    assert!(ipa.succinct_tape(tape, &wrong, &proof).is_none());
+}
+
+#[test]
+fn generic_opening_then() {
+    // The opening followed by more steps: one more challenge than the
+    // opening alone.
+    type Then<'a> = OpeningThen<
+        Pallas,
+        BindStatement,
+        ScaledGenerator,
+        NotHiding,
+        ScalarOracle<&'a mut PoseidonSponge<Fq>>,
+        Challenge<End>,
+    >;
+    type Alone<'a> = OpeningTranscript<
+        Pallas,
+        BindStatement,
+        ScaledGenerator,
+        NotHiding,
+        ScalarOracle<&'a mut PoseidonSponge<Fq>>,
+    >;
+    assert_eq!(
+        <Then<'_> as Pattern>::CHALLENGES,
+        <Alone<'_> as Pattern>::CHALLENGES + 1
+    );
+}
+
+#[test]
+fn generic_ipa_prove_tape() {
+    // The prover on a borrowed tape: the accumulator of `prove`.
+    let ipa = scheme(BindStatement, Full, NotHiding);
+    let (p, commitment) = opened(&ipa.generators);
+    let points = [Fq::from_u64(2)];
+    let statement = Statement {
+        commitment: &commitment,
+        points: &points,
+        evalscale: Fq::ONE,
+        value: Fq::from_u64(17),
+    };
+    let witness = Witness {
+        coefficients: &p,
+        blinder: Fq::ZERO,
+    };
+    let mut oracle = ScalarOracle(vesta_sponge(1));
+    let tape = Tape::undescribed(&mut oracle);
+    let (_, accumulator, _) =
+        ipa.prove_tape::<_, _, End>(tape, &statement, &witness, &mut NoRandomness);
+    assert_eq!(checked(Fq::from_u64(17)), Some(accumulator));
+}
+
+#[test]
+fn generic_ipa_check_given_tape() {
+    // The check on a borrowed tape, with the honest b0: the expression
+    // vanishes.
+    let ipa = scheme(BindStatement, Full, NotHiding);
+    let (p, commitment) = opened(&ipa.generators);
+    let points = [Fq::from_u64(2)];
+    let statement = Statement {
+        commitment: &commitment,
+        points: &points,
+        evalscale: Fq::ONE,
+        value: Fq::from_u64(17),
+    };
+    let witness = Witness {
+        coefficients: &p,
+        blinder: Fq::ZERO,
+    };
+    let (opening, _) = ipa.prove(
+        &mut ScalarOracle(&mut vesta_sponge(1)),
+        &statement,
+        &witness,
+        &mut NoRandomness,
+    );
+    let mut oracle = ScalarOracle(vesta_sponge(1));
+    let tape = Tape::undescribed(&mut oracle);
+    let honest = |chals: &[Fq]| folded_evaluation(chals, &points, Fq::ONE);
+    let (_, expression, _) = ipa
+        .check_given_tape::<_, _, End>(tape, &statement, &opening, honest)
+        .unwrap();
+    assert_eq!(expression, Projective::<Pallas>::identity());
+}
+
+#[test]
+fn accumulation_evalscale() {
+    // The combined claim, then `evalscale`.
+    type P = Evalscale<Pallas, PoseidonSponge<Fq>>;
+    assert_eq!(<P as Pattern>::MESSAGES, 0);
+    assert_eq!(<P as Pattern>::CHALLENGES, 1);
+}
+
+#[test]
+fn accumulation_open_pattern() {
+    // Combine's challenge, evalscale, then the opening's own.
+    type P = OpenPattern<Pallas, PoseidonSponge<Fq>>;
+    assert_eq!(<P as Pattern>::MESSAGES, 0);
+    assert_eq!(
+        <P as Pattern>::CHALLENGES,
+        2 + <OpeningSteps<Pallas, End> as Pattern>::CHALLENGES
+    );
+}
+
+#[test]
+fn accumulation_lift_pattern() {
+    // The accumulators are public, then the point is drawn.
+    assert_eq!(<LiftPattern<Pallas> as Pattern>::MESSAGES, 0);
+    assert_eq!(<LiftPattern<Pallas> as Pattern>::CHALLENGES, 1);
 }

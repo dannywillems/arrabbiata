@@ -61,8 +61,8 @@ use core::fmt;
 use arrabbiata_commit::{BatchOpening, HomomorphicCommitment, Univariate};
 use arrabbiata_field::{Field, PrimeField, TwoAdicField};
 use arrabbiata_generalized_plonk::{
-    self as generalized, Circuit as GeneralizedCircuit, Gate, Proof, ProverKey, Variable,
-    VerifierKey,
+    self as generalized, Circuit as GeneralizedCircuit, Gate, GeneralizedTranscript, Proof,
+    ProverKey, Variable, VerifierKey,
     plonkish::{columns_read, variable},
 };
 use arrabbiata_mvpoly::{MVPoly, Sparse, Var};
@@ -73,7 +73,10 @@ use arrabbiata_plonkish::{
 use arrabbiata_plonkish_folding::{Embed, Params, Relaxed, RelaxedInstance};
 use arrabbiata_poly::{Expr, Rotation};
 use arrabbiata_reduction::{Output, OutputOf, Reduction, Relation, Then, Top};
-use arrabbiata_transcript::{Transcript, typed::Label};
+use arrabbiata_transcript::{
+    Transcript,
+    typed::{Label, Tail, Tape},
+};
 
 /// A commitment scheme that commits to vectors homomorphically and to
 /// polynomials with batched evaluation proofs, with one commitment type:
@@ -432,6 +435,7 @@ where
     type Target = Top;
     type Proof = Proof<F, PC, N2, D2>;
     type Error = Error;
+    type Pattern = GeneralizedTranscript<F, PC, N2, D2>;
 
     fn source(&self) -> Self::Source {
         self.params.relaxed()
@@ -441,12 +445,12 @@ where
         Top
     }
 
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         instance: &<Self::Source as Relation>::Instance,
         witness: &RelaxedWitness<F, W>,
-    ) -> Result<OutputOf<F, Self, T>, Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Error>
     where
         T: Transcript<F>,
     {
@@ -458,10 +462,10 @@ where
                 return Err(Error::Commitment(k));
             }
         }
-        let (proof, transcript) = generalized::prove(
+        let (proof, tape) = generalized::prove_tape(
             &self.pk,
             self.params.ck(),
-            transcript,
+            tape,
             &Self::public(instance),
             &columns,
         )?;
@@ -469,23 +473,23 @@ where
             instance: (),
             witness: (),
             proof,
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         instance: &<Self::Source as Relation>::Instance,
         proof: Self::Proof,
-    ) -> Result<((), T), Error>
+    ) -> Result<((), Tape<F, T, R>), Error>
     where
         T: Transcript<F>,
     {
-        let (wires, transcript) = generalized::verify(
+        let (wires, tape) = generalized::verify_tape(
             &self.vk,
             self.params.ck(),
-            transcript,
+            tape,
             &Self::public(instance),
             proof,
         )?;
@@ -494,7 +498,7 @@ where
                 return Err(Error::Commitment(k));
             }
         }
-        Ok(((), transcript))
+        Ok(((), tape))
     }
 }
 

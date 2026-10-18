@@ -13,16 +13,17 @@ use alloc::{vec, vec::Vec};
 use arrabbiata_curve::{Curve, Projective};
 use arrabbiata_field::PrimeField;
 use arrabbiata_halo::{
-    Accumulated, Accumulation, Claims, ClaimsOf, Combine, Error, Evaluations, Succinct,
+    Accumulated, Accumulation, Claims, ClaimsOf, Combine, CombinePattern, Error, Evaluations,
+    PointClaimOf, Succinct,
 };
 use arrabbiata_reduction::{Batch, Output, OutputOf, Reduction, Then};
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_slice,
     hlist::HNil,
-    typed::{Challenge, End, Label, ProofOf, Protocol, Public, Tape, prover_tape, verifier_tape},
+    typed::{Challenge, End, Label, Public, Seq, Tail, Tape},
 };
 
-use crate::{Ipa, IpaProof, RecursionChallenge, Statement};
+use crate::{Ipa, IpaProof, OpeningSteps, RecursionChallenge, Statement};
 
 /// The scalar field of the IPA over `C`.
 type Scalar<C> = <C as Curve>::Scalar;
@@ -53,23 +54,17 @@ where
     }
 }
 
-/// The first step of the IPA's prover and verifier: the combined claim is
-/// public, then `evalscale`, which combines its points, is drawn.
-type Evalscale<F, C, P> = Public<arrabbiata_halo::PointClaim<F, C, P>, Challenge<End>>;
+/// The step after [`Combine`]: the combined claim is public, then
+/// `evalscale`, which combines its points, is drawn.
+pub type Evalscale<C, T> = Public<PointClaimOf<Scalar<C>, Ipa<C, T>>, Challenge<End>>;
 
-/// [`Evalscale`] on `transcript`: `evalscale`.
-fn evalscale<F, C, P, T>(transcript: &mut T, claim: &arrabbiata_halo::PointClaim<F, C, P>) -> F
-where
-    F: arrabbiata_field::Field,
-    C: Absorb<F>,
-    P: Absorb<F>,
-    T: Transcript<F>,
-{
-    let tape: Tape<F, &mut T, Evalscale<F, C, P>> = Tape::undescribed(transcript);
-    let (evalscale, tape) = tape.public(claim).challenge();
-    let _ = tape.finish();
-    evalscale
-}
+/// The IPA's opening of a batch: [`Combine`], [`Evalscale`], then the
+/// opening's steps at all the points.
+pub type OpenPattern<C, T> =
+    Seq<CombinePattern<Scalar<C>, Ipa<C, T>>, Seq<Evalscale<C, T>, OpeningSteps<C, End>>>;
+
+/// [`Lift`]'s steps: the accumulators are public, then the point is drawn.
+pub type LiftPattern<C> = Public<Accumulators<C>, Challenge<End>>;
 
 /// `sum_j evalscale^j v_j`.
 fn combined<F>(values: &[F], evalscale: F) -> F
@@ -94,82 +89,81 @@ where
     type Accumulator = RecursionChallenge<C>;
     type Opening = IpaProof<C>;
     type FoldProof = IpaProof<C>;
+    type OpenPattern = OpenPattern<C, S>;
+    type FoldPattern = Seq<LiftPattern<C>, OpenPattern<C, S>>;
 
-    fn open_claims<T>(
+    fn open_claims<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<Scalar<C>, T, Tail<Self::OpenPattern, R>>,
         claims: &ClaimsOf<Scalar<C>, Self>,
         polynomials: &[Vec<Scalar<C>>],
-    ) -> (IpaProof<C>, RecursionChallenge<C>, T)
+    ) -> (IpaProof<C>, RecursionChallenge<C>, Tape<Scalar<C>, T, R>)
     where
         T: Transcript<Scalar<C>>,
     {
         let combine = Combine::new(self);
-        let combined_claim = match combine.prove(transcript, claims, &polynomials.to_vec()) {
+        let combined_claim = match combine.prove(tape, claims, &polynomials.to_vec()) {
             Ok(out) => out,
             Err(_) => unreachable!("Succinct checks the shape before opening"),
         };
-        let mut transcript = combined_claim.transcript;
         let claim = combined_claim.instance;
-        let evalscale = evalscale(&mut transcript, &claim);
+        let (evalscale, tape) = combined_claim.transcript.public(&claim).challenge();
         let statement = Statement {
             commitment: &claim.commitment,
             points: &claim.points,
             evalscale,
             value: combined(&claim.values, evalscale),
         };
-        let (proof, accumulator) = self.prove(&mut transcript, &statement, &combined_claim.witness);
-        (proof, accumulator, transcript)
+        self.prove_tape(tape, &statement, &combined_claim.witness)
     }
 
-    fn check_claims<T>(
+    fn check_claims<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<Scalar<C>, T, Tail<Self::OpenPattern, R>>,
         claims: &ClaimsOf<Scalar<C>, Self>,
         opening: IpaProof<C>,
-    ) -> Option<(RecursionChallenge<C>, T)>
+    ) -> Option<(RecursionChallenge<C>, Tape<Scalar<C>, T, R>)>
     where
         T: Transcript<Scalar<C>>,
     {
-        let (claim, mut transcript) = Combine::new(self).verify(transcript, claims, HNil).ok()?;
-        let evalscale = evalscale(&mut transcript, &claim);
+        let (claim, tape) = Combine::new(self).verify(tape, claims, HNil).ok()?;
+        let (evalscale, tape) = tape.public(&claim).challenge();
         let statement = Statement {
             commitment: &claim.commitment,
             points: &claim.points,
             evalscale,
             value: combined(&claim.values, evalscale),
         };
-        let accumulator = self.succinct(&mut transcript, &statement, &opening)?;
-        Some((accumulator, transcript))
+        self.succinct_tape(tape, &statement, &opening)
     }
 
-    fn fold<T>(
+    fn fold<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<Scalar<C>, T, Tail<Self::FoldPattern, R>>,
         accumulators: &[RecursionChallenge<C>],
-    ) -> (IpaProof<C>, RecursionChallenge<C>, T)
+    ) -> (IpaProof<C>, RecursionChallenge<C>, Tape<Scalar<C>, T, R>)
     where
         T: Transcript<Scalar<C>>,
     {
         let fold = Then(Lift(self), Succinct::new(self));
         let witness = vec![(); accumulators.len()];
-        match fold.prove(transcript, &accumulators.to_vec(), &witness) {
+        match fold.prove(tape, &accumulators.to_vec(), &witness) {
             Ok(out) => (out.proof.1, out.instance, out.transcript),
             Err(_) => unreachable!("Lift produces well-shaped claims"),
         }
     }
 
-    fn check_fold<T>(
+    fn check_fold<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<Scalar<C>, T, Tail<Self::FoldPattern, R>>,
         accumulators: &[RecursionChallenge<C>],
         proof: IpaProof<C>,
-    ) -> Option<(RecursionChallenge<C>, T)>
+    ) -> Option<(RecursionChallenge<C>, Tape<Scalar<C>, T, R>)>
     where
         T: Transcript<Scalar<C>>,
     {
         let fold = Then(Lift(self), Succinct::new(self));
-        fold.verify(transcript, &accumulators.to_vec(), (HNil, proof))
+        fold.verify(tape, &accumulators.to_vec(), (HNil, proof))
             .ok()
     }
 
@@ -198,13 +192,6 @@ where
 
 impl<C, T> Copy for Lift<'_, C, T> where C: Curve {}
 
-impl<C, T> Protocol for Lift<'_, C, T>
-where
-    C: Curve,
-{
-    type Transcript = Public<Accumulators<C>, Challenge<End>>;
-}
-
 /// The claims of accumulators at `z`.
 fn lifted<C>(
     accumulators: &[RecursionChallenge<C>],
@@ -228,8 +215,9 @@ where
 {
     type Source = Batch<Accumulated<'a, Scalar<C>, Ipa<C, T>>>;
     type Target = Evaluations<'a, Scalar<C>, Ipa<C, T>>;
-    type Proof = ProofOf<Self>;
+    type Proof = HNil;
     type Error = Error;
+    type Pattern = LiftPattern<C>;
 
     fn source(&self) -> Self::Source {
         Batch(Accumulated::new(self.0))
@@ -239,43 +227,43 @@ where
         Evaluations::new(self.0)
     }
 
-    fn prove<Tr>(
+    fn prove<Tr, R>(
         &self,
-        transcript: Tr,
+        tape: Tape<Scalar<C>, Tr, Tail<Self::Pattern, R>>,
         accumulators: &Vec<RecursionChallenge<C>>,
         _witness: &Vec<()>,
-    ) -> Result<OutputOf<Scalar<C>, Self, Tr>, Error>
+    ) -> Result<OutputOf<Scalar<C>, Self, Tape<Scalar<C>, Tr, R>>, Error>
     where
         Tr: Transcript<Scalar<C>>,
     {
-        let tape = prover_tape::<Scalar<C>, Tr, Self>(transcript)
-            .public(&Accumulators(accumulators.clone()));
-        let (z, tape) = tape.challenge();
-        let (transcript, proof) = tape.finish();
+        let (z, tape) = tape.public(&Accumulators(accumulators.clone())).challenge();
         Ok(Output {
             instance: lifted(accumulators, z),
             witness: accumulators
                 .iter()
                 .map(RecursionChallenge::coefficients)
                 .collect(),
-            proof,
-            transcript,
+            proof: HNil,
+            transcript: tape,
         })
     }
 
-    fn verify<Tr>(
+    fn verify<Tr, R>(
         &self,
-        transcript: Tr,
+        tape: Tape<Scalar<C>, Tr, Tail<Self::Pattern, R>>,
         accumulators: &Vec<RecursionChallenge<C>>,
-        proof: Self::Proof,
-    ) -> Result<(Claims<Scalar<C>, Projective<C>, Scalar<C>>, Tr), Error>
+        HNil: HNil,
+    ) -> Result<
+        (
+            Claims<Scalar<C>, Projective<C>, Scalar<C>>,
+            Tape<Scalar<C>, Tr, R>,
+        ),
+        Error,
+    >
     where
         Tr: Transcript<Scalar<C>>,
     {
-        let tape = verifier_tape::<Scalar<C>, Tr, Self>(transcript, proof)
-            .public(&Accumulators(accumulators.clone()));
-        let (z, tape) = tape.challenge();
-        let transcript = tape.finish();
-        Ok((lifted(accumulators, z), transcript))
+        let (z, tape) = tape.public(&Accumulators(accumulators.clone())).challenge();
+        Ok((lifted(accumulators, z), tape))
     }
 }

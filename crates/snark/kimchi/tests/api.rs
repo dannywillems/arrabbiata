@@ -6,8 +6,9 @@ use arrabbiata_gadget::{Cell, Env, Of, Placed, Scalar as Value, TypedGadget, Uni
 use arrabbiata_ipa::generic::{BaseOracle, ChallengeMap, HashToCurve, IpaOracle, Opening, Schnorr};
 use arrabbiata_kimchi::{
     accumulation::{
-        self, AccumulateProofs, Assignment, Factored, GroupHalf, KimchiSuccinct, Satisfied,
-        Separate, Statement, Unfinalized, Verify, accumulate_proofs, factored, ipa_of, separate,
+        self, AccumulateProofs, Assignment, Factored, GroupHalf, KimchiSuccinct, Published,
+        Satisfied, Separate, Statement, Unfinalized, Verify, accumulate_proofs, factored, ipa_of,
+        separate,
     },
     compiled::{self, RowsError},
     constraints::{
@@ -58,7 +59,10 @@ use arrabbiata_kimchi_gadgets::{
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 use arrabbiata_reduction::{Reduction, Relation};
-use arrabbiata_transcript::{Transcript, typed::Label};
+use arrabbiata_transcript::{
+    Transcript,
+    typed::{Label, Pattern},
+};
 
 #[test]
 fn challenge_limbs() {
@@ -1151,7 +1155,7 @@ fn accumulation_reductions() {
     assert!(reduction.source().check(&statement, &assignment).is_ok());
     let transcript = || KimchiSponge::new(pallas_base());
     let out = reduction
-        .prove(transcript(), &statement, &assignment)
+        .prove_on(transcript(), &statement, &assignment)
         .unwrap();
     assert!(reduction.target().check(&out.instance, &()).is_ok());
     let carrying = Statement {
@@ -1159,16 +1163,20 @@ fn accumulation_reductions() {
         prev_challenges: vec![out.instance.clone()],
     };
     let error = reduction
-        .verify(transcript(), &carrying, out.proof.clone())
+        .verify_on(transcript(), &carrying, out.proof.clone())
         .unwrap_err();
     assert_eq!(error, accumulation::Error::PrevChallenges);
     let whole: Verify<'_, Vesta, _, _, _, _> = accumulation::verify(reduction);
-    assert!(whole.prove(transcript(), &statement, &assignment).is_ok());
+    assert!(
+        whole
+            .prove_on(transcript(), &statement, &assignment)
+            .is_ok()
+    );
     let relation = Satisfied::new(&index, &kimchi, (&base, &scalar), &ipa);
     let reduction = KimchiSuccinct::new(relation, Arkworks(SplitMix64(2)));
     let fold: AccumulateProofs<'_, Vesta, _, _, _, _> = accumulate_proofs(reduction);
     let out = fold
-        .prove(transcript(), &vec![statement], &vec![assignment])
+        .prove_on(transcript(), &vec![statement], &vec![assignment])
         .unwrap();
     assert!(ipa.decide(&out.instance));
 }
@@ -1509,22 +1517,28 @@ fn accumulation_factored() {
     let (statement, assignment) = statement_of_two_generic();
     let transcript = || KimchiSponge::new(pallas_base());
     let group = GroupHalf::new(relation, Arkworks(SplitMix64(6)));
-    let half = group.prove(transcript(), &statement, &assignment).unwrap();
+    let half = group
+        .prove_on(transcript(), &statement, &assignment)
+        .unwrap();
     let target: Unfinalized<'_, Vesta, _, _> = group.target();
     assert_eq!(target.check(&half.instance, &half.witness), Ok(()));
     let whole: Factored<'_, Vesta, _, _, _, _> =
         factored(GroupHalf::new(relation, Arkworks(SplitMix64(6))));
-    let out = whole.prove(transcript(), &statement, &assignment).unwrap();
+    let out = whole
+        .prove_on(transcript(), &statement, &assignment)
+        .unwrap();
     let succinct = KimchiSuccinct::new(relation, Arkworks(SplitMix64(6)));
     let expected = succinct
-        .prove(transcript(), &statement, &assignment)
+        .prove_on(transcript(), &statement, &assignment)
         .unwrap();
     assert_eq!(out.instance, expected.instance);
-    let (verified, after) = whole.verify(transcript(), &statement, out.proof).unwrap();
+    let (verified, after) = whole
+        .verify_on(transcript(), &statement, out.proof)
+        .unwrap();
     assert_eq!(verified, expected.instance);
     assert_eq!(
-        after.clone().squeeze(),
-        expected.transcript.clone().squeeze()
+        after.finish().squeeze(),
+        expected.transcript.finish().squeeze()
     );
 }
 
@@ -1541,16 +1555,18 @@ fn accumulation_separate() {
     let transcript = || KimchiSponge::new(pallas_base());
     let first = KimchiSuccinct::new(relation, Arkworks(SplitMix64(3)));
     let previous = first
-        .prove(transcript(), &statement, &assignment)
+        .prove_on(transcript(), &statement, &assignment)
         .unwrap()
         .instance;
     let folded: Separate<'_, Vesta, _, _, _, _> =
         separate(KimchiSuccinct::new(relation, Arkworks(SplitMix64(4))));
     let instance = (statement, vec![previous]);
     let witness = (assignment, vec![()]);
-    let out = folded.prove(transcript(), &instance, &witness).unwrap();
+    let out = folded.prove_on(transcript(), &instance, &witness).unwrap();
     assert!(ipa.decide(&out.instance));
-    let (accumulator, _) = folded.verify(transcript(), &instance, out.proof).unwrap();
+    let (accumulator, _) = folded
+        .verify_on(transcript(), &instance, out.proof)
+        .unwrap();
     assert_eq!(accumulator, out.instance);
 }
 
@@ -1955,4 +1971,19 @@ fn serialization_to_and_from_bytes() {
     );
     assert_eq!(serialization::from_bytes::<Vesta>(&bytes), Ok(proof));
     assert!(serialization::from_bytes::<Vesta>(&bytes[..10]).is_err());
+}
+
+#[test]
+fn accumulation_published() {
+    // The accumulator public: no message, no challenge; the step
+    // `KimchiSuccinct` takes on a composition tape.
+    assert_eq!(<Published<Vesta> as Pattern>::MESSAGES, 0);
+    assert_eq!(<Published<Vesta> as Pattern>::CHALLENGES, 0);
+    let (index, _, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let ipa = ipa_of(&index.srs, scalar.clone());
+    let relation = Satisfied::new(&index, &kimchi, (&base, &scalar), &ipa);
+    fn pattern_of<R: Reduction<Fp, Pattern = Published<Vesta>>>(_: &R) {}
+    pattern_of(&KimchiSuccinct::new(relation, Arkworks(SplitMix64(6))));
 }

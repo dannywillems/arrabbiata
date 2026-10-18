@@ -8,7 +8,9 @@ use arrabbiata_plonkish::{RelaxedWitness, Witness, gate::GateSet};
 use arrabbiata_reduction::{Output, OutputOf, Reduction, Relation};
 use arrabbiata_transcript::{
     Transcript,
-    typed::{Challenge, End, Message, ProofOf, Protocol, Public, prover_tape, verifier_tape},
+    typed::{
+        Challenge, End, Message, ProofOf, Protocol, Public, Tail, Tape, prove_within, verify_within,
+    },
 };
 
 use crate::{
@@ -101,6 +103,7 @@ where
     type Target = Relaxed<'a, F, PC, G, W, X, Q, N, D>;
     type Proof = ProofOf<Self>;
     type Error = Error;
+    type Pattern = <Self as Protocol>::Transcript;
 
     fn source(&self) -> Self::Source {
         self.0.satisfiability()
@@ -110,12 +113,12 @@ where
         self.0.relaxed()
     }
 
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         public: &Vec<F>,
         witness: &Witness<F, W>,
-    ) -> Result<OutputOf<F, Self, T>, Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Error>
     where
         T: Transcript<F>,
     {
@@ -131,26 +134,28 @@ where
             Ok(c) => c,
             Err(_) => unreachable!("one commitment per column"),
         };
-        let (combiner, tape) = prover_tape::<F, T, Self>(transcript)
-            .public(p.digest())
-            .public(&PublicInputs(public.clone()))
-            .send(Columns(columns.clone()))
-            .challenge();
-        let (transcript, proof) = tape.finish();
+        let (combiner, proof, tape) =
+            prove_within::<F, T, Self::Pattern, R, _, _, Error>(tape, |prover| {
+                Ok(prover
+                    .public(p.digest())
+                    .public(&PublicInputs(public.clone()))
+                    .send(Columns(columns.clone()))
+                    .challenge())
+            })?;
         Ok(Output {
             instance: self.instance(public, columns, combiner)?,
             witness: RelaxedWitness::embed(witness),
             proof,
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         public: &Vec<F>,
         proof: Self::Proof,
-    ) -> Result<(<Self::Target as Relation>::Instance, T), Error>
+    ) -> Result<(<Self::Target as Relation>::Instance, Tape<F, T, R>), Error>
     where
         T: Transcript<F>,
     {
@@ -158,12 +163,15 @@ where
         if public.len() != p.circuit().public_rows().len() {
             return Err(Error::Shape);
         }
-        let (columns, tape) = verifier_tape::<F, T, Self>(transcript, proof)
-            .public(p.digest())
-            .public(&PublicInputs(public.clone()))
-            .read();
-        let (combiner, tape) = tape.challenge();
-        let transcript = tape.finish();
-        Ok((self.instance(public, columns.0, combiner)?, transcript))
+        let ((columns, combiner), tape) =
+            verify_within::<F, T, Self::Pattern, R, _, Error>(tape, proof, |verifier| {
+                let (columns, verifier) = verifier
+                    .public(p.digest())
+                    .public(&PublicInputs(public.clone()))
+                    .read();
+                let (combiner, verifier) = verifier.challenge();
+                Ok(((columns, combiner), verifier))
+            })?;
+        Ok((self.instance(public, columns.0, combiner)?, tape))
     }
 }

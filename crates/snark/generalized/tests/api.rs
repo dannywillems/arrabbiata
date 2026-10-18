@@ -4,14 +4,14 @@
 use arrabbiata_field::Field;
 use arrabbiata_frontend::vanilla::build;
 use arrabbiata_generalized_plonk::{
-    Argument, Circuit, Commitments, Error, Failure, Gate, GeneralizedPlonk, Lookup, Opened,
-    PublicInputs, Tagged, Variable,
+    Argument, Circuit, Commitments, Error, Failure, Gate, GeneralizedPlonk, GeneralizedTranscript,
+    Lookup, Opened, PublicInputs, Tagged, Variable,
     accumulating::{
         Accumulating, AccumulatingPlonk, AccumulatingProof, Satisfiability, Values, rotations,
     },
     max_coefficients, opening_groups,
     plonkish::{columns_read, from_plonkish, polynomial, variable},
-    quotient_factor, rotated, setup,
+    prove_tape, quotient_factor, rotated, setup, verify_tape,
 };
 use arrabbiata_halo::Accumulation;
 use arrabbiata_ipa::Ipa;
@@ -23,7 +23,7 @@ use arrabbiata_poseidon::{PoseidonSponge, pallas_sponge, vesta_sponge};
 use arrabbiata_reduction::{Reduction, Relation};
 use arrabbiata_transcript::{
     Absorb, Transcript,
-    typed::{Pattern, Protocol},
+    typed::{Challenge, End, Pattern, Protocol, Tail, Tape},
 };
 
 #[test]
@@ -1335,9 +1335,13 @@ fn accumulating_reduction_and_proof() {
     let (pk, _) = setup(&c, &pcs).unwrap();
     let reduction = Accumulating::new(&pk, &pcs);
     let columns = vec![vec![F::ONE, F::ZERO]];
-    let out = reduction.prove(vesta_sponge(2), &vec![], &columns).unwrap();
+    let out = reduction
+        .prove_on(vesta_sponge(2), &vec![], &columns)
+        .unwrap();
     let proof: AccumulatingProof<F, _, 1, 1> = out.proof;
-    let (accumulator, _) = reduction.verify(vesta_sponge(2), &vec![], proof).unwrap();
+    let (accumulator, _) = reduction
+        .verify_on(vesta_sponge(2), &vec![], proof)
+        .unwrap();
     assert_eq!(accumulator, out.instance);
     assert!(Accumulation::decide(&pcs, &accumulator));
 }
@@ -1349,4 +1353,41 @@ fn accumulating_plonk_transcript() {
     type P = <AccumulatingPlonk<F, Ipa<Pallas, PoseidonSponge<F>>, 3, 2> as Protocol>::Transcript;
     assert_eq!(<P as Pattern>::MESSAGES, 6);
     assert_eq!(<P as Pattern>::CHALLENGES, 5);
+}
+
+/// The tape of a proof of [`copied_and_bound`] followed by one challenge.
+type Longer = Tape<
+    F,
+    PoseidonSponge<F>,
+    Tail<GeneralizedTranscript<F, Ipa<Pallas, PoseidonSponge<F>>, 1, 1>, Challenge<End>>,
+>;
+
+#[test]
+fn protocol_prove_tape() {
+    // A proof made as steps of a longer protocol verifies as steps of it,
+    // and both sides draw the same challenge after it.
+    let c = copied_and_bound();
+    let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    let (pk, vk) = setup(&c, &pcs).unwrap();
+    let columns = [vec![F::ONE, F::ONE]];
+    let tape: Longer = Tape::undescribed(vesta_sponge(2));
+    let (proof, rest) = prove_tape(&pk, &pcs, tape, &[F::ONE], &columns).unwrap();
+    let (ours, _) = rest.challenge();
+    let tape: Longer = Tape::undescribed(vesta_sponge(2));
+    let (_, rest) = verify_tape(&vk, &pcs, tape, &[F::ONE], proof).unwrap();
+    let (theirs, _) = rest.challenge();
+    assert_eq!(ours, theirs);
+}
+
+#[test]
+fn protocol_verify_tape() {
+    // Another public input is refused.
+    let c = copied_and_bound();
+    let pcs = Ipa::<Pallas, _>::setup(&mut pallas_sponge(0), 4, vesta_sponge(1));
+    let (pk, vk) = setup(&c, &pcs).unwrap();
+    let columns = [vec![F::ONE, F::ONE]];
+    let tape: Longer = Tape::undescribed(vesta_sponge(2));
+    let (proof, _) = prove_tape(&pk, &pcs, tape, &[F::ONE], &columns).unwrap();
+    let tape: Longer = Tape::undescribed(vesta_sponge(2));
+    assert!(verify_tape(&vk, &pcs, tape, &[F::ZERO], proof).is_err());
 }

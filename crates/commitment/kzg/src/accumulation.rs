@@ -21,12 +21,12 @@ use alloc::vec::Vec;
 use arrabbiata_commit::PolynomialCommitment;
 use arrabbiata_curve::{Curve, Pairing, Projective, absorb_point};
 use arrabbiata_field::{Field, PrimeField};
-use arrabbiata_halo::{Accumulation, ClaimsOf, Combine, PointClaimOf};
+use arrabbiata_halo::{Accumulation, ClaimsOf, Combine, CombinePattern, PointClaimOf};
 use arrabbiata_reduction::Reduction;
 use arrabbiata_transcript::{
     Absorb, Transcript, absorb_slice,
     hlist::HNil,
-    typed::{Challenge, End, Label, Message, Public, Tape},
+    typed::{Challenge, End, Label, Message, Public, Seq, Tail, Tape},
 };
 
 use crate::Kzg;
@@ -86,18 +86,19 @@ where
 }
 
 /// The openings' quotient commitments of a combined claim, as one message.
-struct Openings<'a, E>(&'a [Projective<E::G1>])
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Openings<E>(pub Vec<Projective<E::G1>>)
 where
     E: Pairing;
 
-impl<E> Label for Openings<'_, E>
+impl<E> Label for Openings<E>
 where
     E: Pairing,
 {
     const LABEL: u64 = 0x6f70_656e;
 }
 
-impl<E> Absorb<Scalar<E>> for Openings<'_, E>
+impl<E> Absorb<Scalar<E>> for Openings<E>
 where
     E: Pairing,
     <E::G1 as Curve>::Base: PrimeField,
@@ -106,23 +107,24 @@ where
     where
         T: Transcript<Scalar<E>>,
     {
-        absorb_slice(transcript, self.0);
+        absorb_slice(transcript, &self.0);
     }
 }
 
 /// Pairing accumulators, as one public value.
-struct Pairs<'a, E>(&'a [PairingAccumulator<E>])
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pairs<E>(pub Vec<PairingAccumulator<E>>)
 where
     E: Pairing;
 
-impl<E> Label for Pairs<'_, E>
+impl<E> Label for Pairs<E>
 where
     E: Pairing,
 {
     const LABEL: u64 = 0x0070_6169_7273;
 }
 
-impl<E> Absorb<Scalar<E>> for Pairs<'_, E>
+impl<E> Absorb<Scalar<E>> for Pairs<E>
 where
     E: Pairing,
     <E::G1 as Curve>::Base: PrimeField,
@@ -131,27 +133,28 @@ where
     where
         T: Transcript<Scalar<E>>,
     {
-        absorb_slice(transcript, self.0);
+        absorb_slice(transcript, &self.0);
     }
 }
 
-/// The pairs of the openings of a combined claim, then their combination
-/// by `r`, drawn after the proofs (the prover's message, then the
-/// challenge). Shared by prover and verifier.
-fn accumulate<E, T>(
-    transcript: &mut T,
+/// KZG's opening of a batch: [`Combine`], then the openings sent and `r`
+/// drawn.
+pub type OpenPattern<E> =
+    Seq<CombinePattern<Scalar<E>, Kzg<E>>, Message<Openings<E>, Challenge<End>>>;
+
+/// KZG's fold: the pairs public, then `r` drawn.
+pub type FoldPattern<E> = Public<Pairs<E>, Challenge<End>>;
+
+/// The pairs of the openings of a combined claim, combined by `r`.
+fn accumulate<E>(
     claim: &PointClaimOf<Scalar<E>, Kzg<E>>,
     proofs: &[Projective<E::G1>],
+    r: Scalar<E>,
 ) -> PairingAccumulator<E>
 where
     E: Pairing,
     <E::G1 as Curve>::Base: PrimeField,
-    T: Transcript<Scalar<E>>,
 {
-    let tape: Tape<Scalar<E>, &mut T, Message<Openings<'_, E>, Challenge<End>>> =
-        Tape::undescribed(transcript);
-    let (r, tape) = tape.receive(&Openings(proofs)).challenge();
-    let _ = tape.finish();
     let g = Projective::<E::G1>::generator();
     let pairs: Vec<_> = claim
         .points
@@ -174,92 +177,83 @@ where
     type Accumulator = PairingAccumulator<E>;
     type Opening = Vec<Projective<E::G1>>;
     type FoldProof = ();
+    type OpenPattern = OpenPattern<E>;
+    type FoldPattern = FoldPattern<E>;
 
-    fn open_claims<T>(
+    fn open_claims<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<Scalar<E>, T, Tail<Self::OpenPattern, R>>,
         claims: &ClaimsOf<Scalar<E>, Self>,
         polynomials: &[Vec<Scalar<E>>],
-    ) -> (Vec<Projective<E::G1>>, PairingAccumulator<E>, T)
+    ) -> (
+        Vec<Projective<E::G1>>,
+        PairingAccumulator<E>,
+        Tape<Scalar<E>, T, R>,
+    )
     where
         T: Transcript<Scalar<E>>,
     {
-        let combined = match Combine::new(self).prove(transcript, claims, &polynomials.to_vec()) {
+        let combined = match Combine::new(self).prove(tape, claims, &polynomials.to_vec()) {
             Ok(out) => out,
             Err(_) => unreachable!("Succinct checks the shape before opening"),
         };
-        let mut transcript = combined.transcript;
         let proofs: Vec<_> = combined
             .instance
             .points
             .iter()
             .map(|x| PolynomialCommitment::open(self, &combined.witness, x).1)
             .collect();
-        let accumulator = accumulate(&mut transcript, &combined.instance, &proofs);
-        (proofs, accumulator, transcript)
+        let (r, tape) = combined
+            .transcript
+            .send(&Openings(proofs.clone()))
+            .challenge();
+        let accumulator = accumulate(&combined.instance, &proofs, r);
+        (proofs, accumulator, tape)
     }
 
-    fn check_claims<T>(
+    fn check_claims<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<Scalar<E>, T, Tail<Self::OpenPattern, R>>,
         claims: &ClaimsOf<Scalar<E>, Self>,
         opening: Vec<Projective<E::G1>>,
-    ) -> Option<(PairingAccumulator<E>, T)>
+    ) -> Option<(PairingAccumulator<E>, Tape<Scalar<E>, T, R>)>
     where
         T: Transcript<Scalar<E>>,
     {
-        let (claim, mut transcript) = Combine::new(self).verify(transcript, claims, HNil).ok()?;
+        let (claim, tape) = Combine::new(self).verify(tape, claims, HNil).ok()?;
         if opening.len() != claim.points.len() {
             return None;
         }
-        let accumulator = accumulate(&mut transcript, &claim, &opening);
-        Some((accumulator, transcript))
+        let (r, tape) = tape.receive(&Openings(opening.clone())).challenge();
+        Some((accumulate(&claim, &opening, r), tape))
     }
 
-    fn fold<T>(
+    fn fold<T, R>(
         &self,
-        mut transcript: T,
+        tape: Tape<Scalar<E>, T, Tail<Self::FoldPattern, R>>,
         accumulators: &[PairingAccumulator<E>],
-    ) -> ((), PairingAccumulator<E>, T)
+    ) -> ((), PairingAccumulator<E>, Tape<Scalar<E>, T, R>)
     where
         T: Transcript<Scalar<E>>,
     {
-        let accumulator = fold_pairs(&mut transcript, accumulators);
-        ((), accumulator, transcript)
+        let (r, tape) = tape.public(&Pairs(accumulators.to_vec())).challenge();
+        ((), PairingAccumulator::combination(accumulators, r), tape)
     }
 
-    fn check_fold<T>(
+    fn check_fold<T, R>(
         &self,
-        mut transcript: T,
+        tape: Tape<Scalar<E>, T, Tail<Self::FoldPattern, R>>,
         accumulators: &[PairingAccumulator<E>],
         (): (),
-    ) -> Option<(PairingAccumulator<E>, T)>
+    ) -> Option<(PairingAccumulator<E>, Tape<Scalar<E>, T, R>)>
     where
         T: Transcript<Scalar<E>>,
     {
-        let accumulator = fold_pairs(&mut transcript, accumulators);
-        Some((accumulator, transcript))
+        let (r, tape) = tape.public(&Pairs(accumulators.to_vec())).challenge();
+        Some((PairingAccumulator::combination(accumulators, r), tape))
     }
 
     fn decide(&self, accumulator: &PairingAccumulator<E>) -> bool {
         self.decide_pair(&accumulator.p, &accumulator.w)
     }
-}
-
-/// The combination of `accumulators` by powers of `r`, drawn after them
-/// (public to both parties, then the challenge).
-fn fold_pairs<E, T>(
-    transcript: &mut T,
-    accumulators: &[PairingAccumulator<E>],
-) -> PairingAccumulator<E>
-where
-    E: Pairing,
-    <E::G1 as Curve>::Base: PrimeField,
-    T: Transcript<Scalar<E>>,
-{
-    let tape: Tape<Scalar<E>, &mut T, Public<Pairs<'_, E>, Challenge<End>>> =
-        Tape::undescribed(transcript);
-    let (r, tape) = tape.public(&Pairs(accumulators)).challenge();
-    let _ = tape.finish();
-    PairingAccumulator::combination(accumulators, r)
 }

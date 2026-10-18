@@ -17,6 +17,21 @@
 //! ([`Reduction`]), and *publicly reducible*: the verifier computes the
 //! output instance itself from the input instance and the proof.
 //!
+//! # The transcript is a type
+//!
+//! Each reduction declares its Fiat-Shamir steps as a pattern of the typed
+//! transcript ([`Reduction::Pattern`], an `arrabbiata_transcript::typed`
+//! sequence). It runs on a tape at its pattern followed by whatever comes
+//! next, and hands back the tape at what comes next, so its steps happen in
+//! the order its pattern says or it does not compile. The combinators build
+//! the composite's pattern from their parts': [`Then`] and [`Parallel`] the
+//! sequence of the two, [`Each`] the repetition, the structural maps
+//! ([`Identity`], [`Single`], [`Concat`]) the empty pattern. So the pattern is
+//! a strict monoidal functor from reductions under composition to patterns
+//! under concatenation, and the type of a composite's whole tape is computed
+//! by the type checker. [`tape`] starts that tape, absorbing the
+//! composite's description once.
+//!
 //! # The category
 //!
 //! Relations and reductions form a symmetric monoidal category (Kothapalli,
@@ -58,7 +73,10 @@ use alloc::{vec, vec::Vec};
 use core::{convert::Infallible, fmt};
 
 use arrabbiata_field::Field;
-use arrabbiata_transcript::Transcript;
+use arrabbiata_transcript::{
+    Transcript,
+    typed::{End, Pattern, Rounds, Seq, Sequence, Tail, Tape},
+};
 
 /// A relation: the pairs (instance, witness) that pass [`Relation::check`].
 ///
@@ -218,44 +236,108 @@ where
     /// Why proving or verifying failed.
     type Error;
 
+    /// Every Fiat-Shamir step the reduction takes, in order: the pattern of
+    /// its tape.
+    type Pattern: Sequence;
+
     /// The relation reduced from.
     fn source(&self) -> Self::Source;
 
     /// The relation reduced to.
     fn target(&self) -> Self::Target;
 
-    /// Run the prover on `(instance, witness)`.
+    /// Run the prover on `(instance, witness)`, on a tape at this
+    /// reduction's pattern followed by `R`: the output, with the tape at
+    /// `R`.
     ///
     /// # Errors
     ///
     /// When the prover cannot run on its input (a witness of the wrong
     /// shape); a scheme may also refuse a pair outside the source.
     #[allow(clippy::type_complexity)]
-    fn prove<T>(
+    fn prove<T, R>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
         instance: &<Self::Source as Relation>::Instance,
         witness: &<Self::Source as Relation>::Witness,
-    ) -> Result<OutputOf<F, Self, T>, Self::Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, Self::Error>
     where
         T: Transcript<F>;
 
-    /// Run the verifier on `instance` and `proof`: the output instance, and
-    /// the transcript after the protocol.
+    /// Run the verifier on `instance` and `proof`, on a tape at this
+    /// reduction's pattern followed by `R`: the output instance, and the
+    /// tape at `R`.
     ///
     /// # Errors
     ///
     /// When the proof is rejected outright (a reduction may also accept any
     /// proof and leave the check to the target relation).
     #[allow(clippy::type_complexity)]
-    fn verify<T>(
+    fn verify<T, R>(
+        &self,
+        tape: Tape<F, T, Tail<Self::Pattern, R>>,
+        instance: &<Self::Source as Relation>::Instance,
+        proof: Self::Proof,
+    ) -> Result<(<Self::Target as Relation>::Instance, Tape<F, T, R>), Self::Error>
+    where
+        T: Transcript<F>;
+
+    /// [`Reduction::prove`] as the whole protocol on `transcript`: on the
+    /// tape [`tape`] starts, run to its end.
+    ///
+    /// # Errors
+    ///
+    /// As [`Reduction::prove`].
+    #[allow(clippy::type_complexity)]
+    fn prove_on<T>(
+        &self,
+        transcript: T,
+        instance: &<Self::Source as Relation>::Instance,
+        witness: &<Self::Source as Relation>::Witness,
+    ) -> Result<OutputOf<F, Self, Tape<F, T, End>>, Self::Error>
+    where
+        Self: Sized,
+        T: Transcript<F>,
+        Tail<Self::Pattern, End>: Pattern,
+    {
+        self.prove(Tape::start(transcript), instance, witness)
+    }
+
+    /// [`Reduction::verify`] as the whole protocol on `transcript`: on the
+    /// tape [`tape`] starts, run to its end.
+    ///
+    /// # Errors
+    ///
+    /// As [`Reduction::verify`].
+    #[allow(clippy::type_complexity)]
+    fn verify_on<T>(
         &self,
         transcript: T,
         instance: &<Self::Source as Relation>::Instance,
         proof: Self::Proof,
-    ) -> Result<(<Self::Target as Relation>::Instance, T), Self::Error>
+    ) -> Result<(<Self::Target as Relation>::Instance, Tape<F, T, End>), Self::Error>
     where
-        T: Transcript<F>;
+        Self: Sized,
+        T: Transcript<F>,
+        Tail<Self::Pattern, End>: Pattern,
+    {
+        self.verify(Tape::start(transcript), instance, proof)
+    }
+}
+
+/// The tape of `R`'s whole protocol on `transcript`, its description
+/// absorbed first: the domain separation of the protocol by its own pattern.
+/// A composite's description is its parts' in sequence, so two different
+/// composites diverge from their first step.
+#[must_use]
+pub fn tape<F, R, T>(transcript: T) -> Tape<F, T, Tail<R::Pattern, End>>
+where
+    F: Field,
+    R: Reduction<F>,
+    T: Transcript<F>,
+    Tail<R::Pattern, End>: Pattern,
+{
+    Tape::start(transcript)
 }
 
 /// A reference to a reduction is the same reduction, so composites can
@@ -269,6 +351,7 @@ where
     type Target = R::Target;
     type Proof = R::Proof;
     type Error = R::Error;
+    type Pattern = R::Pattern;
 
     fn source(&self) -> Self::Source {
         (*self).source()
@@ -278,28 +361,28 @@ where
         (*self).target()
     }
 
-    fn prove<T>(
+    fn prove<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, Rest>>,
         instance: &<Self::Source as Relation>::Instance,
         witness: &<Self::Source as Relation>::Witness,
-    ) -> Result<OutputOf<F, Self, T>, Self::Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, Rest>>, Self::Error>
     where
         T: Transcript<F>,
     {
-        (*self).prove(transcript, instance, witness)
+        (*self).prove(tape, instance, witness)
     }
 
-    fn verify<T>(
+    fn verify<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, Rest>>,
         instance: &<Self::Source as Relation>::Instance,
         proof: Self::Proof,
-    ) -> Result<(<Self::Target as Relation>::Instance, T), Self::Error>
+    ) -> Result<(<Self::Target as Relation>::Instance, Tape<F, T, Rest>), Self::Error>
     where
         T: Transcript<F>,
     {
-        (*self).verify(transcript, instance, proof)
+        (*self).verify(tape, instance, proof)
     }
 }
 
@@ -334,6 +417,7 @@ where
     type Target = R;
     type Proof = ();
     type Error = Infallible;
+    type Pattern = End;
 
     fn source(&self) -> R {
         self.0.clone()
@@ -343,12 +427,12 @@ where
         self.0.clone()
     }
 
-    fn prove<T>(
+    fn prove<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Rest>,
         instance: &R::Instance,
         witness: &R::Witness,
-    ) -> Result<OutputOf<F, Self, T>, Infallible>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, Rest>>, Infallible>
     where
         T: Transcript<F>,
     {
@@ -356,20 +440,20 @@ where
             instance: instance.clone(),
             witness: witness.clone(),
             proof: (),
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Rest>,
         instance: &R::Instance,
         (): (),
-    ) -> Result<(R::Instance, T), Infallible>
+    ) -> Result<(R::Instance, Tape<F, T, Rest>), Infallible>
     where
         T: Transcript<F>,
     {
-        Ok((instance.clone(), transcript))
+        Ok((instance.clone(), tape))
     }
 }
 
@@ -404,6 +488,7 @@ where
     type Target = B::Target;
     type Proof = (A::Proof, B::Proof);
     type Error = Either<A::Error, B::Error>;
+    type Pattern = Seq<A::Pattern, B::Pattern>;
 
     fn source(&self) -> Self::Source {
         self.0.source()
@@ -413,18 +498,18 @@ where
         self.1.target()
     }
 
-    fn prove<T>(
+    fn prove<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, Rest>>,
         instance: &<Self::Source as Relation>::Instance,
         witness: &<Self::Source as Relation>::Witness,
-    ) -> Result<OutputOf<F, Self, T>, Self::Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, Rest>>, Self::Error>
     where
         T: Transcript<F>,
     {
         let first = self
             .0
-            .prove(transcript, instance, witness)
+            .prove(tape, instance, witness)
             .map_err(Either::Left)?;
         let second = self
             .1
@@ -438,22 +523,20 @@ where
         })
     }
 
-    fn verify<T>(
+    fn verify<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, Rest>>,
         instance: &<Self::Source as Relation>::Instance,
         proof: Self::Proof,
-    ) -> Result<(<Self::Target as Relation>::Instance, T), Self::Error>
+    ) -> Result<(<Self::Target as Relation>::Instance, Tape<F, T, Rest>), Self::Error>
     where
         T: Transcript<F>,
     {
-        let (middle, transcript) = self
+        let (middle, tape) = self
             .0
-            .verify(transcript, instance, proof.0)
+            .verify(tape, instance, proof.0)
             .map_err(Either::Left)?;
-        self.1
-            .verify(transcript, &middle, proof.1)
-            .map_err(Either::Right)
+        self.1.verify(tape, &middle, proof.1).map_err(Either::Right)
     }
 }
 
@@ -473,6 +556,7 @@ where
     type Target = Product<A::Target, B::Target>;
     type Proof = (A::Proof, B::Proof);
     type Error = Either<A::Error, B::Error>;
+    type Pattern = Seq<A::Pattern, B::Pattern>;
 
     fn source(&self) -> Self::Source {
         Product(self.0.source(), self.1.source())
@@ -482,18 +566,18 @@ where
         Product(self.0.target(), self.1.target())
     }
 
-    fn prove<T>(
+    fn prove<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, Rest>>,
         instance: &<Self::Source as Relation>::Instance,
         witness: &<Self::Source as Relation>::Witness,
-    ) -> Result<OutputOf<F, Self, T>, Self::Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, Rest>>, Self::Error>
     where
         T: Transcript<F>,
     {
         let left = self
             .0
-            .prove(transcript, &instance.0, &witness.0)
+            .prove(tape, &instance.0, &witness.0)
             .map_err(Either::Left)?;
         let right = self
             .1
@@ -507,24 +591,24 @@ where
         })
     }
 
-    fn verify<T>(
+    fn verify<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Tail<Self::Pattern, Rest>>,
         instance: &<Self::Source as Relation>::Instance,
         proof: Self::Proof,
-    ) -> Result<(<Self::Target as Relation>::Instance, T), Self::Error>
+    ) -> Result<(<Self::Target as Relation>::Instance, Tape<F, T, Rest>), Self::Error>
     where
         T: Transcript<F>,
     {
-        let (left, transcript) = self
+        let (left, tape) = self
             .0
-            .verify(transcript, &instance.0, proof.0)
+            .verify(tape, &instance.0, proof.0)
             .map_err(Either::Left)?;
-        let (right, transcript) = self
+        let (right, tape) = self
             .1
-            .verify(transcript, &instance.1, proof.1)
+            .verify(tape, &instance.1, proof.1)
             .map_err(Either::Right)?;
-        Ok(((left, right), transcript))
+        Ok(((left, right), tape))
     }
 }
 
@@ -591,7 +675,12 @@ where
 ///
 /// `Each` is a functor: `Each(Identity) = Identity` and `Each(Then(A, B))
 /// = Then(Each(A), Each(B))`, both up to the shape of the proofs, which the
-/// laws compare by the instances the verifiers output.
+/// laws compare by the instances the verifiers output. It is a functor on
+/// reductions, not on their tapes: its pattern is the repetition of `A`'s
+/// (`Rounds`), and `(A;B)*` and `A*;B*` are different patterns, so the two
+/// sides of the second law are different protocols under Fiat-Shamir. They
+/// agree on their instances when their absorptions coincide (when `A` takes
+/// no step, on undescribed tapes).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Each<A>(pub A);
 
@@ -604,6 +693,7 @@ where
     type Target = Batch<A::Target>;
     type Proof = Vec<A::Proof>;
     type Error = Indexed<A::Error>;
+    type Pattern = Rounds<A::Pattern, End>;
 
     fn source(&self) -> Self::Source {
         Batch(self.0.source())
@@ -613,12 +703,12 @@ where
         Batch(self.0.target())
     }
 
-    fn prove<T>(
+    fn prove<T, Rest>(
         &self,
-        mut transcript: T,
+        mut tape: Tape<F, T, Rounds<A::Pattern, Rest>>,
         instance: &Vec<<A::Source as Relation>::Instance>,
         witness: &Vec<<A::Source as Relation>::Witness>,
-    ) -> Result<OutputOf<F, Self, T>, Self::Error>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, Rest>>, Self::Error>
     where
         T: Transcript<F>,
     {
@@ -632,28 +722,28 @@ where
         while i < instance.len() {
             let out = self
                 .0
-                .prove(transcript, &instance[i], &witness[i])
+                .prove(tape.round(), &instance[i], &witness[i])
                 .map_err(|e| Indexed::At(i, e))?;
             instances.push(out.instance);
             witnesses.push(out.witness);
             proofs.push(out.proof);
-            transcript = out.transcript;
+            tape = out.transcript;
             i += 1;
         }
         Ok(Output {
             instance: instances,
             witness: witnesses,
             proof: proofs,
-            transcript,
+            transcript: tape.done(),
         })
     }
 
-    fn verify<T>(
+    fn verify<T, Rest>(
         &self,
-        mut transcript: T,
+        mut tape: Tape<F, T, Rounds<A::Pattern, Rest>>,
         instance: &Vec<<A::Source as Relation>::Instance>,
         proof: Vec<A::Proof>,
-    ) -> Result<(Vec<<A::Target as Relation>::Instance>, T), Self::Error>
+    ) -> Result<(Vec<<A::Target as Relation>::Instance>, Tape<F, T, Rest>), Self::Error>
     where
         T: Transcript<F>,
     {
@@ -664,12 +754,12 @@ where
         for (i, (u, p)) in instance.iter().zip(proof).enumerate() {
             let (v, t) = self
                 .0
-                .verify(transcript, u, p)
+                .verify(tape.round(), u, p)
                 .map_err(|e| Indexed::At(i, e))?;
             instances.push(v);
-            transcript = t;
+            tape = t;
         }
-        Ok((instances, transcript))
+        Ok((instances, tape.done()))
     }
 }
 
@@ -688,6 +778,7 @@ where
     type Target = Batch<R>;
     type Proof = ();
     type Error = Infallible;
+    type Pattern = End;
 
     fn source(&self) -> R {
         self.0.clone()
@@ -697,12 +788,12 @@ where
         Batch(self.0.clone())
     }
 
-    fn prove<T>(
+    fn prove<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Rest>,
         instance: &R::Instance,
         witness: &R::Witness,
-    ) -> Result<OutputOf<F, Self, T>, Infallible>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, Rest>>, Infallible>
     where
         T: Transcript<F>,
     {
@@ -710,20 +801,20 @@ where
             instance: vec![instance.clone()],
             witness: vec![witness.clone()],
             proof: (),
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Rest>,
         instance: &R::Instance,
         (): (),
-    ) -> Result<(Vec<R::Instance>, T), Infallible>
+    ) -> Result<(Vec<R::Instance>, Tape<F, T, Rest>), Infallible>
     where
         T: Transcript<F>,
     {
-        Ok((vec![instance.clone()], transcript))
+        Ok((vec![instance.clone()], tape))
     }
 }
 
@@ -744,6 +835,7 @@ where
     type Target = Batch<R>;
     type Proof = ();
     type Error = Infallible;
+    type Pattern = End;
 
     fn source(&self) -> Self::Source {
         Product(Batch(self.0.clone()), Batch(self.0.clone()))
@@ -753,12 +845,12 @@ where
         Batch(self.0.clone())
     }
 
-    fn prove<T>(
+    fn prove<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Rest>,
         instance: &(Vec<R::Instance>, Vec<R::Instance>),
         witness: &(Vec<R::Witness>, Vec<R::Witness>),
-    ) -> Result<OutputOf<F, Self, T>, Infallible>
+    ) -> Result<OutputOf<F, Self, Tape<F, T, Rest>>, Infallible>
     where
         T: Transcript<F>,
     {
@@ -770,29 +862,30 @@ where
             instance: instances,
             witness: witnesses,
             proof: (),
-            transcript,
+            transcript: tape,
         })
     }
 
-    fn verify<T>(
+    fn verify<T, Rest>(
         &self,
-        transcript: T,
+        tape: Tape<F, T, Rest>,
         instance: &(Vec<R::Instance>, Vec<R::Instance>),
         (): (),
-    ) -> Result<(Vec<R::Instance>, T), Infallible>
+    ) -> Result<(Vec<R::Instance>, Tape<F, T, Rest>), Infallible>
     where
         T: Transcript<F>,
     {
         let mut instances = instance.0.clone();
         instances.extend_from_slice(&instance.1);
-        Ok((instances, transcript))
+        Ok((instances, tape))
     }
 }
 
 /// Executable laws of a reduction, for tests.
 pub mod laws {
-    use super::{Either, Reduction, Relation, Transcript};
+    use super::{Either, Reduction, Relation, Transcript, tape};
     use arrabbiata_field::Field;
+    use arrabbiata_transcript::typed::{End, Pattern, Tail, Tape};
 
     /// How a run of [`complete`] failed.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -807,10 +900,11 @@ pub mod laws {
         Target(T),
     }
 
-    /// Run the reduction on a pair in the source relation, on two copies of
-    /// the same transcript, and check the laws: the pair is in the source,
-    /// the verifier's instance is the prover's, and the output pair is in
-    /// the target. Returns the prover's output on success.
+    /// Run the reduction on a pair in the source relation, on two tapes of
+    /// its whole protocol over fresh copies of the transcript ([`tape`]),
+    /// and check the laws: the pair is in the source, the verifier's
+    /// instance is the prover's, and the output pair is in the target.
+    /// Returns the prover's output on success, its tape at the end.
     ///
     /// # Errors
     ///
@@ -822,7 +916,7 @@ pub mod laws {
         instance: &<R::Source as Relation>::Instance,
         witness: &<R::Source as Relation>::Witness,
     ) -> Result<
-        super::OutputOf<F, R, T>,
+        super::OutputOf<F, R, Tape<F, T, End>>,
         Failure<R::Error, <R::Source as Relation>::Error, <R::Target as Relation>::Error>,
     >
     where
@@ -831,16 +925,17 @@ pub mod laws {
         R::Proof: Clone,
         <R::Target as Relation>::Instance: PartialEq,
         T: Transcript<F>,
+        Tail<R::Pattern, End>: Pattern,
     {
         reduction
             .source()
             .check(instance, witness)
             .map_err(Failure::Source)?;
         let out = reduction
-            .prove(transcript(), instance, witness)
+            .prove(tape::<F, R, T>(transcript()), instance, witness)
             .map_err(Failure::Reduction)?;
         let (verified, _) = reduction
-            .verify(transcript(), instance, out.proof.clone())
+            .verify(tape::<F, R, T>(transcript()), instance, out.proof.clone())
             .map_err(Failure::Reduction)?;
         if verified != out.instance {
             return Err(Failure::Disagree);
@@ -853,8 +948,9 @@ pub mod laws {
     }
 
     /// The two sides of a law that relates two reductions on the same
-    /// input, as the instances their verifiers output: equal when the law
-    /// holds. Used for the category laws (`Then(Identity, A) = A`, ...).
+    /// input, as the instances their verifiers output, each on a tape of its
+    /// own protocol: equal when the law holds. Used for the category laws
+    /// (`Then(Identity, A) = A`, ...).
     ///
     /// # Errors
     ///
@@ -878,12 +974,14 @@ pub mod laws {
             >,
         <A::Target as Relation>::Instance: PartialEq,
         T: Transcript<F>,
+        Tail<A::Pattern, End>: Pattern,
+        Tail<B::Pattern, End>: Pattern,
     {
         let (ua, _) = a
-            .verify(transcript(), instance, proof_a)
+            .verify(tape::<F, A, T>(transcript()), instance, proof_a)
             .map_err(Either::Left)?;
         let (ub, _) = b
-            .verify(transcript(), instance, proof_b)
+            .verify(tape::<F, B, T>(transcript()), instance, proof_b)
             .map_err(Either::Right)?;
         Ok(ua == ub)
     }

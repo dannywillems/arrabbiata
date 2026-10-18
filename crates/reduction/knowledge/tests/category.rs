@@ -19,7 +19,10 @@ use arrabbiata_reduction::{
     Batch, Concat, Each, Either, Identity, Indexed, Output, OutputOf, Parallel, Product, Reduction,
     Relation, Single, Then, laws,
 };
-use arrabbiata_transcript::Transcript;
+use arrabbiata_transcript::{
+    Absorb, Transcript,
+    typed::{Challenge, End, Label, Public, Tail, Tape},
+};
 use proptest::prelude::*;
 
 /// `A x = y` for a fixed matrix `A` with `rows` rows: instance `y`,
@@ -50,11 +53,31 @@ fn line(a: &[F], b: &[F], r: F) -> Vec<F> {
     a.iter().zip(b).map(|(x, y)| *x + r * *y).collect()
 }
 
-fn challenge<T: Transcript<F>>(t: &mut T, y: &(Vec<F>, Vec<F>)) -> F {
-    for v in y.0.iter().chain(&y.1) {
-        t.absorb(*v);
+/// The two instances, as the public value the fold's challenge binds.
+struct Instances(Vec<F>, Vec<F>);
+
+impl Label for Instances {
+    const LABEL: u64 = 0x6c69_6e65;
+}
+
+impl Absorb<F> for Instances {
+    fn absorb_into<T: Transcript<F>>(&self, t: &mut T) {
+        for v in self.0.iter().chain(&self.1) {
+            t.absorb(*v);
+        }
     }
-    t.squeeze()
+}
+
+/// The fold's tape: the instances, then the challenge.
+type FoldPattern = Public<Instances, Challenge<End>>;
+
+/// The challenge, after the instances, on `tape`.
+fn challenge<T: Transcript<F>, R>(
+    tape: Tape<F, T, Tail<FoldPattern, R>>,
+    y: &(Vec<F>, Vec<F>),
+) -> (F, Tape<F, T, R>) {
+    tape.public(&Instances(y.0.clone(), y.1.clone()))
+        .challenge()
 }
 
 impl Reduction<F> for Fold {
@@ -62,6 +85,7 @@ impl Reduction<F> for Fold {
     type Target = Linear;
     type Proof = ();
     type Error = ();
+    type Pattern = FoldPattern;
 
     fn source(&self) -> Self::Source {
         Product(self.0.clone(), self.0.clone())
@@ -71,29 +95,29 @@ impl Reduction<F> for Fold {
         self.0.clone()
     }
 
-    fn prove<T: Transcript<F>>(
+    fn prove<T: Transcript<F>, R>(
         &self,
-        mut t: T,
+        tape: Tape<F, T, Tail<FoldPattern, R>>,
         y: &(Vec<F>, Vec<F>),
         x: &(Vec<F>, Vec<F>),
-    ) -> Result<OutputOf<F, Self, T>, ()> {
-        let r = challenge(&mut t, y);
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, ()> {
+        let (r, tape) = challenge(tape, y);
         Ok(Output {
             instance: line(&y.0, &y.1, r),
             witness: line(&x.0, &x.1, r),
             proof: (),
-            transcript: t,
+            transcript: tape,
         })
     }
 
-    fn verify<T: Transcript<F>>(
+    fn verify<T: Transcript<F>, R>(
         &self,
-        mut t: T,
+        tape: Tape<F, T, Tail<FoldPattern, R>>,
         y: &(Vec<F>, Vec<F>),
         (): (),
-    ) -> Result<(Vec<F>, T), ()> {
-        let r = challenge(&mut t, y);
-        Ok((line(&y.0, &y.1, r), t))
+    ) -> Result<(Vec<F>, Tape<F, T, R>), ()> {
+        let (r, tape) = challenge(tape, y);
+        Ok((line(&y.0, &y.1, r), tape))
     }
 }
 
@@ -106,6 +130,7 @@ impl Reduction<F> for Duplicate {
     type Target = Product<Linear, Linear>;
     type Proof = ();
     type Error = ();
+    type Pattern = End;
 
     fn source(&self) -> Linear {
         self.0.clone()
@@ -115,27 +140,27 @@ impl Reduction<F> for Duplicate {
         Product(self.0.clone(), self.0.clone())
     }
 
-    fn prove<T: Transcript<F>>(
+    fn prove<T: Transcript<F>, R>(
         &self,
-        t: T,
+        tape: Tape<F, T, R>,
         y: &Vec<F>,
         x: &Vec<F>,
-    ) -> Result<OutputOf<F, Self, T>, ()> {
+    ) -> Result<OutputOf<F, Self, Tape<F, T, R>>, ()> {
         Ok(Output {
             instance: (y.clone(), y.clone()),
             witness: (x.clone(), x.clone()),
             proof: (),
-            transcript: t,
+            transcript: tape,
         })
     }
 
-    fn verify<T: Transcript<F>>(
+    fn verify<T: Transcript<F>, R>(
         &self,
-        t: T,
+        tape: Tape<F, T, R>,
         y: &Vec<F>,
         (): (),
-    ) -> Result<((Vec<F>, Vec<F>), T), ()> {
-        Ok(((y.clone(), y.clone()), t))
+    ) -> Result<((Vec<F>, Vec<F>), Tape<F, T, R>), ()> {
+        Ok(((y.clone(), y.clone()), tape))
     }
 }
 
@@ -233,12 +258,19 @@ proptest! {
     fn each_is_a_functor((a, xs) in arb_list()) {
         let ys: Vec<Vec<F>> = xs.iter().map(|x| apply(&a, x)).collect();
         let (d, f) = (Duplicate(a.clone()), Fold(a.clone()));
-        // Each(Then(D, F)) = Then(Each(D), Each(F)).
+        // Each(Then(D, F)) = Then(Each(D), Each(F)), on the instances. The
+        // two are not one protocol: their patterns are (D;F)* and D*;F*,
+        // different languages of traces, so their described tapes
+        // diverge. The law is the reductions', not the transcripts': here
+        // D takes no step, so on undescribed tapes both absorb the same
+        // sequence and the instances agree.
         let whole = Each(Then(d.clone(), f.clone()));
         let parts = Then(Each(d), Each(f));
         let whole_proof = vec![((), ()); ys.len()];
         let parts_proof = (vec![(); ys.len()], vec![(); ys.len()]);
-        prop_assert!(laws::same_instance::<F, _, _, _>(&whole, &parts, || vesta_sponge(4), &ys, whole_proof, parts_proof).unwrap());
+        let (left, _) = whole.verify::<_, End>(Tape::undescribed(vesta_sponge(4)), &ys, whole_proof).unwrap();
+        let (right, _) = parts.verify::<_, End>(Tape::undescribed(vesta_sponge(4)), &ys, parts_proof).unwrap();
+        prop_assert_eq!(left, right);
         // Each(Identity) = Identity.
         let each_identity = Each(Identity(a.clone()));
         let identity = Identity(Batch(a));
@@ -251,11 +283,11 @@ proptest! {
         let cut = if ys.is_empty() { 0 } else { cut % (ys.len() + 1) };
         let (left, right) = (ys[..cut].to_vec(), ys[cut..].to_vec());
         let concat = Concat(a.clone());
-        let (joined, _) = concat.verify(vesta_sponge(5), &(left.clone(), right.clone()), ()).unwrap();
+        let (joined, _) = concat.verify_on(vesta_sponge(5), &(left.clone(), right.clone()), ()).unwrap();
         prop_assert_eq!(&joined, &ys);
         // The empty list is a unit on both sides.
-        let (unit_left, _) = concat.verify(vesta_sponge(5), &(vec![], ys.clone()), ()).unwrap();
-        let (unit_right, _) = concat.verify(vesta_sponge(5), &(ys.clone(), vec![]), ()).unwrap();
+        let (unit_left, _) = concat.verify_on(vesta_sponge(5), &(vec![], ys.clone()), ()).unwrap();
+        let (unit_right, _) = concat.verify_on(vesta_sponge(5), &(ys.clone(), vec![]), ()).unwrap();
         prop_assert_eq!(&unit_left, &ys);
         prop_assert_eq!(&unit_right, &ys);
         // Associativity: (l ++ m) ++ r = l ++ (m ++ r), with m a singleton.
@@ -264,13 +296,13 @@ proptest! {
         let out = laws::complete::<F, _, _>(&concat, || vesta_sponge(5), &(left.clone(), right.clone()), &(witness_left, witness_right));
         prop_assert!(out.is_ok());
         if let Some(first) = ys.first() {
-            let (single, _) = Single(a.clone()).verify(vesta_sponge(5), first, ()).unwrap();
+            let (single, _) = Single(a.clone()).verify_on(vesta_sponge(5), first, ()).unwrap();
             prop_assert_eq!(&single, &vec![first.clone()]);
             let rest = ys[1..].to_vec();
-            let (lm, _) = concat.verify(vesta_sponge(5), &(single.clone(), rest[..0].to_vec()), ()).unwrap();
-            let (lm_r, _) = concat.verify(vesta_sponge(5), &(lm, rest.clone()), ()).unwrap();
-            let (m_r, _) = concat.verify(vesta_sponge(5), &(rest[..0].to_vec(), rest), ()).unwrap();
-            let (l_mr, _) = concat.verify(vesta_sponge(5), &(single, m_r), ()).unwrap();
+            let (lm, _) = concat.verify_on(vesta_sponge(5), &(single.clone(), rest[..0].to_vec()), ()).unwrap();
+            let (lm_r, _) = concat.verify_on(vesta_sponge(5), &(lm, rest.clone()), ()).unwrap();
+            let (m_r, _) = concat.verify_on(vesta_sponge(5), &(rest[..0].to_vec(), rest), ()).unwrap();
+            let (l_mr, _) = concat.verify_on(vesta_sponge(5), &(single, m_r), ()).unwrap();
             prop_assert_eq!(lm_r, l_mr);
         }
     }
