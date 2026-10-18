@@ -1,6 +1,6 @@
 //! Wrap: a proof over Pallas that a step proof over Vesta verifies, its
 //! statement the step proof's deferred values (Pickles' `wrap_main`, for a
-//! step proof without predecessors).
+//! step proof of a base-case rule).
 //!
 //! A step proof's verifier splits across the cycle
 //! ([`crate::group`], [`crate::scalar`]). Its group half is native in the
@@ -10,24 +10,40 @@
 //! values the group half takes on trust its public input, the
 //! [`Statement`]; whoever verifies the wrap proof runs the scalar half on
 //! that statement natively ([`finalize`]), and decides the accumulator the
-//! statement carries.
+//! statement's messages carry.
 //!
-//! - The statement's scalars of `Fp` are held in `Fq` as their shifted
-//!   values (`Shifted_value.Type1`: `s = 2 t + 2^255 + 1`), as Pickles does.
-//! - The circuit wires each draw of the group half (`alpha`, `beta`,
-//!   `gamma`, `zeta`, the digest, the prechallenges) and the new accumulator
-//!   `sg` to the statement, and the IPA's two sides to each other.
+//! The statement is Pickles' `Types.Wrap.Statement.In_circuit`, in the
+//! order of its `spec` and `to_data`, each value in its sort
+//! ([`crate::statement`]):
 //!
-//! Deviations from Mina: the statement is a flat list of its values, not
-//! Pickles' packed `Types.Wrap.Statement` and its message hashes; one branch;
-//! no predecessor, so no unfinalized proof to finalize in the circuit; no
-//! lookups. The values are Mina's; their encoding is not.
+//! - five Type1 fields: the combined inner product, `b`, `zeta^m`,
+//!   `zeta^n`, `perm`;
+//! - two challenges, `beta` and `gamma`; three scalar challenges, `alpha`,
+//!   `zeta`, `xi`;
+//! - three digests: the base sponge's before the evaluations, the messages
+//!   for the next wrap proof, the messages for the next step proof;
+//! - the IPA's prechallenges; the branch data.
+//!
+//! The accumulator never crosses as a point. Its commitment `sg` and the
+//! old bulletproof challenges are hashed in `Fq` into the messages for the
+//! next wrap proof (Pickles' `hash_messages_for_next_wrap_proof`: the
+//! challenges, then `sg`'s coordinates), and the circuit computes that hash.
+//! A base-case step statement is one digest, the messages for the next step
+//! proof, which is the step proof's whole public input.
+//!
+//! Deviations from Mina: one branch; no predecessor, so no unfinalized
+//! proof to finalize in the circuit, and the old challenges are only the
+//! padding, given as constants (Mina's are `Dummy.Ipa.Wrap.challenges_computed`,
+//! two vectors of 15); no lookups and no optional gates, so the feature
+//! flags are constants and add no word. Every word is canonical (below
+//! `2^254`, see [`crate::statement`]), where Mina's digests and Type1
+//! fields are 255-bit words.
 
 use alloc::{vec, vec::Vec};
 use core::cell::RefCell;
 
 use arrabbiata_curve::{Projective, glv::Glv, msm};
-use arrabbiata_field::{Field, Native, PrimeField};
+use arrabbiata_field::{Field, FieldModel, Native, PrimeField};
 use arrabbiata_gadget::{Array, Env, Of, Scalar, TypedGadget, Unit};
 use arrabbiata_ipa::{b_poly_coefficients, generic::shift_scalar};
 use arrabbiata_kimchi::{
@@ -35,7 +51,7 @@ use arrabbiata_kimchi::{
     constraints::{COLUMNS, ConstraintSystem},
     deferred::expand_deferred,
     gates::KimchiGates,
-    oracle::{BaseReading, ScalarChallenge, coordinates},
+    oracle::{BaseReading, FrSponge, ScalarChallenge, coordinates},
     prover::{ProverIndex, ProverProof, prove},
     rng::Sampler,
     srs::Srs,
@@ -51,7 +67,7 @@ use crate::{
     group::{Constants, DeferredIn, ProofIn, PublicWord, group_half_in},
     model::{Affine, Circuit, load},
     scalar::{self, Inputs, scalar_half},
-    statement::{WINDOW_BITS, Word},
+    statement::{BranchData, Challenge, Digest, ProofsVerified, Sort, Type1, WINDOW_BITS, Word},
 };
 
 /// The column variables and the degree of the compiled wrap circuit.
@@ -60,105 +76,162 @@ pub const VARIABLES: usize = 64;
 /// The degree of the compiled wrap circuit.
 pub const DEGREE: usize = 7;
 
-/// What the wrap proof proves about a step proof: its public input. The
-/// scalars of `Fp` are shifted values, the 128-bit challenges and the
-/// digest values of `Fq` as they are.
+/// What the wrap proof proves about a step proof, in Pickles' order. The
+/// fields are Type1 shifted values of scalars of `Fp`, the challenges and
+/// the branch data small integers, the digests elements of `Fq` below
+/// `2^254`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Statement<V> {
-    /// The step proof's public input, its words (each below `2^254`, a
-    /// value of both fields; the statement of Mina's shape replaces it).
-    pub step_public: Vec<V>,
-    /// The 128-bit challenge `alpha` comes from.
-    pub alpha: V,
+    /// The combined inner product, shifted.
+    pub combined_inner_product: V,
+    /// `b`, shifted.
+    pub b: V,
+    /// `zeta^m`, shifted.
+    pub zeta_to_srs_length: V,
+    /// `zeta^n`, shifted.
+    pub zeta_to_domain_size: V,
+    /// `perm`, shifted.
+    pub perm: V,
     /// `beta`.
     pub beta: V,
     /// `gamma`.
     pub gamma: V,
+    /// The 128-bit challenge `alpha` comes from.
+    pub alpha: V,
     /// The 128-bit challenge `zeta` comes from.
     pub zeta: V,
     /// The 128-bit challenge `xi` comes from.
     pub xi: V,
     /// The base sponge's digest before the evaluations.
-    pub digest: V,
-    /// `perm`, shifted.
-    pub perm: V,
-    /// `zeta^m`, shifted.
-    pub zeta_to_srs_length: V,
-    /// `zeta^n`, shifted.
-    pub zeta_to_domain_size: V,
-    /// The combined inner product, shifted.
-    pub combined_inner_product: V,
-    /// `b`, shifted.
-    pub b: V,
-    /// The new accumulator's commitment `sg`.
-    pub sg: [V; 2],
+    pub sponge_digest_before_evaluations: V,
+    /// The digest of the messages for the next wrap proof
+    /// ([`MessagesForNextWrapProof`]).
+    pub messages_for_next_wrap_proof: V,
+    /// The digest of the messages for the next step proof: the step
+    /// proof's statement.
+    pub messages_for_next_step_proof: V,
     /// The IPA's round challenges, unmapped.
-    pub prechallenges: Vec<V>,
+    pub bulletproof_challenges: Vec<V>,
+    /// The branch data ([`BranchData`]).
+    pub branch_data: V,
 }
 
-/// The values the statement holds besides the public input and the
-/// prechallenges.
+/// The values the statement holds besides the prechallenges.
 const FIXED: usize = 14;
 
 impl<V: Clone> Statement<V> {
     /// The statement as the wrap proof's public input, in order.
     #[must_use]
     pub fn to_vec(&self) -> Vec<V> {
-        let mut out = self.step_public.clone();
-        out.extend([
-            self.alpha.clone(),
-            self.beta.clone(),
-            self.gamma.clone(),
-            self.zeta.clone(),
-            self.xi.clone(),
-            self.digest.clone(),
-            self.perm.clone(),
-            self.zeta_to_srs_length.clone(),
-            self.zeta_to_domain_size.clone(),
+        let mut out = vec![
             self.combined_inner_product.clone(),
             self.b.clone(),
-            self.sg[0].clone(),
-            self.sg[1].clone(),
-        ]);
-        out.extend(self.prechallenges.iter().cloned());
+            self.zeta_to_srs_length.clone(),
+            self.zeta_to_domain_size.clone(),
+            self.perm.clone(),
+            self.beta.clone(),
+            self.gamma.clone(),
+            self.alpha.clone(),
+            self.zeta.clone(),
+            self.xi.clone(),
+            self.sponge_digest_before_evaluations.clone(),
+            self.messages_for_next_wrap_proof.clone(),
+            self.messages_for_next_step_proof.clone(),
+        ];
+        out.extend(self.bulletproof_challenges.iter().cloned());
+        out.push(self.branch_data.clone());
         out
     }
 
-    /// The statement of `values`, [`Statement::to_vec`]'s inverse for a
-    /// public input of `public` values and `rounds` rounds; `None` for
-    /// another length.
+    /// The statement of `values`, [`Statement::to_vec`]'s inverse for
+    /// `rounds` rounds; `None` for another length.
     #[must_use]
-    pub fn of(public: usize, rounds: usize, values: &[V]) -> Option<Self> {
-        if values.len() != public + FIXED - 1 + rounds {
+    pub fn of(rounds: usize, values: &[V]) -> Option<Self> {
+        if values.len() != FIXED + rounds {
             return None;
         }
-        let (step_public, rest) = values.split_at(public);
-        let (fixed, prechallenges) = rest.split_at(FIXED - 1);
-        let v = |i: usize| fixed[i].clone();
+        let v = |i: usize| values[i].clone();
         Some(Self {
-            step_public: step_public.to_vec(),
-            alpha: v(0),
-            beta: v(1),
-            gamma: v(2),
-            zeta: v(3),
-            xi: v(4),
-            digest: v(5),
-            perm: v(6),
-            zeta_to_srs_length: v(7),
-            zeta_to_domain_size: v(8),
-            combined_inner_product: v(9),
-            b: v(10),
-            sg: [v(11), v(12)],
-            prechallenges: prechallenges.to_vec(),
+            combined_inner_product: v(0),
+            b: v(1),
+            zeta_to_srs_length: v(2),
+            zeta_to_domain_size: v(3),
+            perm: v(4),
+            beta: v(5),
+            gamma: v(6),
+            alpha: v(7),
+            zeta: v(8),
+            xi: v(9),
+            sponge_digest_before_evaluations: v(10),
+            messages_for_next_wrap_proof: v(11),
+            messages_for_next_step_proof: v(12),
+            bulletproof_challenges: values[13..13 + rounds].to_vec(),
+            branch_data: v(13 + rounds),
         })
+    }
+}
+
+/// The bound of each word of a statement of `rounds` rounds, in order: the
+/// sorts' ([`Sort::BOUNDS`]), which a circuit reading the statement as a
+/// public input checks.
+#[must_use]
+pub fn bounds(rounds: usize) -> Vec<u32> {
+    let mut out = Vec::new();
+    for _ in 0..5 {
+        out.extend(Type1::<Vesta>::BOUNDS);
+    }
+    for _ in 0..5 {
+        out.extend(Challenge::BOUNDS);
+    }
+    for _ in 0..3 {
+        out.extend(Digest::BOUNDS);
+    }
+    for _ in 0..rounds {
+        out.extend(Challenge::BOUNDS);
+    }
+    out.extend(BranchData::BOUNDS);
+    out
+}
+
+/// What the next wrap proof needs of this one, hashed into the statement:
+/// the step proof's accumulator `sg` and the old bulletproof challenges
+/// (Pickles' `Messages_for_next_wrap_proof`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessagesForNextWrapProof {
+    /// The accumulator's commitment, as coordinates.
+    pub challenge_polynomial_commitment: [Fq; 2],
+    /// The old bulletproof challenges, padded (front first).
+    pub old_bulletproof_challenges: Vec<Vec<Fq>>,
+}
+
+impl MessagesForNextWrapProof {
+    /// The elements hashed: the challenges in order, then `sg`'s `x` and
+    /// `y` (Pickles' `to_field_elements`).
+    #[must_use]
+    pub fn field_elements(&self) -> Vec<Fq> {
+        let mut out: Vec<Fq> = self
+            .old_bulletproof_challenges
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        out.extend(self.challenge_polynomial_commitment);
+        out
+    }
+
+    /// The digest: Kimchi's sponge over `Fq`, absorbing the elements, then
+    /// one squeeze (Pickles' `Tock_field_sponge.digest`).
+    #[must_use]
+    pub fn digest(&self) -> Fq {
+        let mut sponge = FrSponge::new(KimchiSponge::new(vesta_base()));
+        sponge.absorb_multiple(&self.field_elements());
+        sponge.digest()
     }
 }
 
 /// The shape of the step proofs a wrap circuit wraps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
-    /// The step proof's public input's length.
-    pub public: usize,
     /// The chunks of a commitment.
     pub chunks: usize,
     /// The chunks of the quotient's commitment.
@@ -171,15 +244,16 @@ impl Shape {
     /// The size of the statement.
     #[must_use]
     pub const fn statement(&self) -> usize {
-        self.public + FIXED - 1 + self.rounds
+        FIXED + self.rounds
     }
 
     /// The size of the private input ([`witness`]): the commitments and the
-    /// opening's points as coordinates, then `z1` and `z2` shifted.
+    /// opening's points as coordinates, `sg` too, then `z1` and `z2`
+    /// shifted.
     #[must_use]
     pub const fn witness(&self) -> usize {
         let points =
-            COLUMNS * self.chunks + self.chunks + self.quotient_chunks + 2 * self.rounds + 1;
+            COLUMNS * self.chunks + self.chunks + self.quotient_chunks + 2 * self.rounds + 2;
         2 * points + 2
     }
 }
@@ -193,8 +267,11 @@ pub enum Error {
     Opening,
     /// The step index has lookups, which the wrap circuit does not cover.
     Lookups,
-    /// The wrap circuit's sizes are not the shape's.
+    /// The wrap circuit's sizes are not the shape's, or the step statement
+    /// is not one digest.
     Size,
+    /// A value of the statement is past its sort's bound.
+    Bound,
     /// The wrap circuit does not compile to Kimchi rows.
     Circuit,
     /// The wrap proof could not be made.
@@ -203,6 +280,8 @@ pub enum Error {
     Wrap(VerifyError),
     /// A deferred value of the statement is not its definition.
     Deferred(&'static str),
+    /// The messages are not those the statement's digest hashes.
+    Messages,
     /// The accumulator's commitment is not the challenge polynomial's.
     Accumulator,
 }
@@ -243,6 +322,14 @@ fn to_base(x: Fp) -> Fq {
     }
 }
 
+/// The branch data of a base-case step proof on `index`'s domain, as the
+/// element of `Fq` its word is.
+fn branch_data_of(index: &VerifierIndex<Vesta>) -> Fq {
+    let log2 = index.domain_size.trailing_zeros();
+    let log2 = u8::try_from(log2).unwrap_or(u8::MAX);
+    BranchData::encode(&(ProofsVerified::N0, log2))[0].reduce()
+}
+
 /// A step proof, with what verifying it needs.
 #[derive(Clone, Copy, Debug)]
 pub struct Step<'a> {
@@ -252,7 +339,8 @@ pub struct Step<'a> {
     pub srs: &'a Srs<Vesta>,
     /// The proof.
     pub proof: &'a ProverProof<Vesta>,
-    /// Its public input.
+    /// Its public input: the step statement, here the one digest of the
+    /// messages for the next step proof.
     pub public: &'a [Fp],
 }
 
@@ -287,6 +375,13 @@ fn group_inputs(
     ),
     Error,
 > {
+    let [digest] = step.public else {
+        return Err(Error::Size);
+    };
+    let digest = Word::of(*digest);
+    if !digest.below(WINDOW_BITS) {
+        return Err(Error::Bound);
+    }
     let base = KimchiSponge::new(vesta_base());
     let scalar = KimchiSponge::new(pallas_base());
     let values = expand_deferred(
@@ -312,14 +407,10 @@ fn group_inputs(
         sg: opening.sg,
     };
     let deferred = DeferredIn {
-        public: step
-            .public
-            .iter()
-            .map(|p| PublicWord {
-                value: Word::of(*p).reduce::<Fq>(),
-                bound: WINDOW_BITS,
-            })
-            .collect(),
+        public: vec![PublicWord {
+            value: digest.reduce(),
+            bound: WINDOW_BITS,
+        }],
         perm: values.plonk.perm,
         zeta_to_srs_length: values.plonk.zeta_to_srs_length,
         zeta_to_domain_size: values.plonk.zeta_to_domain_size,
@@ -330,16 +421,23 @@ fn group_inputs(
     Ok((constants, proof, deferred))
 }
 
-/// The wrap statement of `step` and the wrap circuit's private input: the
-/// step proof's group half run natively, its draws and accumulator the
-/// statement, its commitments and opening the witness.
+/// The wrap statement of `step`, the messages its digest hashes, the wrap
+/// circuit's private input, and the shape: the step proof's group half run
+/// natively, its draws the statement, its accumulator hashed with the
+/// `padding` challenges, its commitments and opening the witness.
 ///
 /// # Errors
 ///
-/// [`Error::Step`] for a step proof of the wrong shape, [`Error::Opening`]
-/// when its opening does not hold, [`Error::Lookups`] for an index with
-/// lookups.
-pub fn statement(step: &Step<'_>) -> Result<(Statement<Fq>, Vec<Fq>, Shape), Error> {
+/// [`Error::Step`] for a step proof of the wrong shape, [`Error::Size`] for
+/// a step statement that is not one digest or a step proof with
+/// predecessors, [`Error::Opening`] when its opening does not hold,
+/// [`Error::Lookups`] for an index with lookups, [`Error::Bound`] for a
+/// value past its sort's bound (about `2^-128` of them).
+#[allow(clippy::type_complexity)]
+pub fn statement(
+    step: &Step<'_>,
+    padding: &[Vec<Fq>],
+) -> Result<(Statement<Fq>, MessagesForNextWrapProof, Vec<Fq>, Shape), Error> {
     let (constants, proof, deferred) = group_inputs(step)?;
     if !proof.previous.is_empty() {
         return Err(Error::Size);
@@ -351,35 +449,47 @@ pub fn statement(step: &Step<'_>) -> Result<(Statement<Fq>, Vec<Fq>, Shape), Err
         return Err(Error::Opening);
     }
     let (sx, sy) = coordinates(&out.sg);
+    let messages = MessagesForNextWrapProof {
+        challenge_polynomial_commitment: [sx, sy],
+        old_bulletproof_challenges: padding.to_vec(),
+    };
     let statement = Statement {
-        step_public: deferred.public.iter().map(|w| w.value).collect(),
-        alpha: out.drawn.alpha,
-        beta: out.drawn.beta,
-        gamma: out.drawn.gamma,
-        zeta: out.drawn.zeta,
-        xi: deferred.xi,
-        digest: out.drawn.digest,
-        perm: shifted(deferred.perm),
-        zeta_to_srs_length: shifted(deferred.zeta_to_srs_length),
-        zeta_to_domain_size: shifted(deferred.zeta_to_domain_size),
         combined_inner_product: shifted(deferred.combined_inner_product),
         b: shifted(deferred.b),
-        sg: [sx, sy],
-        prechallenges: out.prechallenges,
+        zeta_to_srs_length: shifted(deferred.zeta_to_srs_length),
+        zeta_to_domain_size: shifted(deferred.zeta_to_domain_size),
+        perm: shifted(deferred.perm),
+        beta: out.drawn.beta,
+        gamma: out.drawn.gamma,
+        alpha: out.drawn.alpha,
+        zeta: out.drawn.zeta,
+        xi: deferred.xi,
+        sponge_digest_before_evaluations: out.drawn.digest,
+        messages_for_next_wrap_proof: messages.digest(),
+        messages_for_next_step_proof: deferred.public[0].value,
+        bulletproof_challenges: out.prechallenges,
+        branch_data: branch_data_of(step.index),
     };
     let shape = Shape {
-        public: step.public.len(),
         chunks: proof.z.len(),
         quotient_chunks: proof.t.len(),
         rounds: proof.rounds.len(),
     };
-    Ok((statement, witness(&proof), shape))
+    let in_bounds = statement
+        .to_vec()
+        .iter()
+        .zip(bounds(shape.rounds))
+        .all(|(v, n)| Word::of(*v).below(n));
+    if !in_bounds {
+        return Err(Error::Bound);
+    }
+    Ok((statement, messages, witness(&proof), shape))
 }
 
 /// The wrap circuit's private input of a step proof's commitments and
 /// opening: the witness columns', `z`'s and `t`'s chunks, the rounds' `L`
-/// and `R`, `delta` (points as `x`, `y`), then `z1` and `z2` shifted. The
-/// opening's `sg` is the statement's.
+/// and `R`, `delta`, `sg` (points as `x`, `y`), then `z1` and `z2`
+/// shifted. `sg` is private: the statement holds only its hash.
 #[must_use]
 pub fn witness(proof: &ProofIn<Projective<Vesta>, Fp>) -> Vec<Fq> {
     let mut points: Vec<&Projective<Vesta>> = Vec::new();
@@ -393,6 +503,7 @@ pub fn witness(proof: &ProofIn<Projective<Vesta>, Fp>) -> Vec<Fq> {
         points.push(r);
     }
     points.push(&proof.delta);
+    points.push(&proof.sg);
     let mut out: Vec<Fq> = points
         .into_iter()
         .flat_map(|p| {
@@ -413,11 +524,14 @@ pub struct Wrap<'a, const S: usize, const W: usize> {
     constants: Constants<Vesta>,
     poseidon: &'a KimchiPoseidon<Fq>,
     shape: Shape,
+    padding: Vec<Vec<Fq>>,
+    branch_data: Fq,
 }
 
 impl<'a, const S: usize, const W: usize> Wrap<'a, S, W> {
     /// The wrap circuit for the step index `index` on `srs`, with Kimchi's
-    /// `poseidon` over `Fq` for the base sponge.
+    /// `poseidon` over `Fq` for the sponges, and the `padding` challenges
+    /// the messages for the next wrap proof start with.
     ///
     /// # Errors
     ///
@@ -428,6 +542,7 @@ impl<'a, const S: usize, const W: usize> Wrap<'a, S, W> {
         srs: &Srs<Vesta>,
         poseidon: &'a KimchiPoseidon<Fq>,
         shape: Shape,
+        padding: Vec<Vec<Fq>>,
     ) -> Result<Self, Error> {
         if shape.statement() != S || shape.witness() != W {
             return Err(Error::Size);
@@ -438,6 +553,8 @@ impl<'a, const S: usize, const W: usize> Wrap<'a, S, W> {
             constants,
             poseidon,
             shape,
+            padding,
+            branch_data: branch_data_of(index),
         })
     }
 }
@@ -462,7 +579,7 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
             .map(|v| env.call(&PublicInput, v.clone()))
             .collect();
         let cells = load(env, &private);
-        let Some(st) = Statement::of(self.shape.public, self.shape.rounds, &public) else {
+        let Some(st) = Statement::of(self.shape.rounds, &public) else {
             unreachable!("the statement has the shape's size")
         };
         let shape = self.shape;
@@ -478,6 +595,7 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
         let t = (0..shape.quotient_chunks).map(|_| point()).collect();
         let rounds = (0..shape.rounds).map(|_| (point(), point())).collect();
         let delta = point();
+        let sg = point();
         let value = |v: &E::Var| Affine::of(v.clone());
         let type1 = |v: &E::Var| Shifted {
             high: value(v),
@@ -494,17 +612,13 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
             delta,
             z1,
             z2,
-            sg: st.sg.clone(),
+            sg: sg.clone(),
         };
         let deferred = DeferredIn {
-            public: st
-                .step_public
-                .iter()
-                .map(|v| PublicWord {
-                    value: value(v),
-                    bound: WINDOW_BITS,
-                })
-                .collect(),
+            public: vec![PublicWord {
+                value: value(&st.messages_for_next_step_proof),
+                bound: WINDOW_BITS,
+            }],
             perm: type1(&st.perm),
             zeta_to_srs_length: type1(&st.zeta_to_srs_length),
             zeta_to_domain_size: type1(&st.zeta_to_domain_size),
@@ -515,6 +629,17 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
         let model = RefCell::new(Circuit::new(env));
         let out =
             group_half_in::<Vesta, _>(&model, self.poseidon, &self.constants, &proof, &deferred);
+        // The messages for the next wrap proof: the padding, then sg.
+        let digest = {
+            let mut sponge = FrSponge::in_model(&model, self.poseidon);
+            for c in self.padding.iter().flatten() {
+                let c = model.borrow_mut().constant(*c);
+                sponge.absorb_value(&c);
+            }
+            sponge.absorb_value(&value(&sg[0]));
+            sponge.absorb_value(&value(&sg[1]));
+            sponge.squeeze_value()
+        };
         let mut m = model.into_inner();
         m.env().connect(&out.left[0], &out.right[0]);
         m.env().connect(&out.left[1], &out.right[1]);
@@ -524,13 +649,19 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for Wrap<'_, S, W> {
             (&d.beta, &st.beta),
             (&d.gamma, &st.gamma),
             (&d.zeta, &st.zeta),
-            (&d.digest, &st.digest),
+            (&d.digest, &st.sponge_digest_before_evaluations),
+            (&digest, &st.messages_for_next_wrap_proof),
         ] {
             m.assert_equal(drawn, &value(stated));
         }
-        for (drawn, stated) in out.prechallenges.iter().zip(&st.prechallenges) {
+        for (drawn, stated) in out.prechallenges.iter().zip(&st.bulletproof_challenges) {
             m.assert_equal(drawn, &value(stated));
         }
+        // The digests cross as words in the window, checked by their
+        // producer; the branch data is this circuit's constant.
+        m.assert_below(&value(&st.sponge_digest_before_evaluations), WINDOW_BITS);
+        m.assert_below(&value(&st.messages_for_next_wrap_proof), WINDOW_BITS);
+        m.assert_equal(&value(&st.branch_data), &Affine::constant(self.branch_data));
     }
 }
 
@@ -620,25 +751,27 @@ impl StepEvaluations {
 }
 
 /// The step proof's scalar half, natively, on the statement: each deferred
-/// value its definition, and the accumulator's commitment the challenge
-/// polynomial's on the step SRS (Pickles' `finalize_other_proof` and the
-/// accumulator check of `verify`).
+/// value its definition, the messages those the statement hashes, and the
+/// accumulator's commitment the challenge polynomial's on the step SRS
+/// (Pickles' `finalize_other_proof` and the accumulator check of `verify`).
 ///
 /// # Errors
 ///
 /// [`Error::Deferred`] naming the first value that is not its definition,
+/// [`Error::Messages`] for messages that are not the statement's,
 /// [`Error::Accumulator`] for a false accumulator, [`Error::Lookups`] for an
 /// index with lookups.
 pub fn finalize(
     step_index: &VerifierIndex<Vesta>,
     step_srs: &Srs<Vesta>,
     statement: &Statement<Fq>,
+    messages: &MessagesForNextWrapProof,
     evaluations: &StepEvaluations,
 ) -> Result<(), Error> {
     let constants = scalar::Constants::of(step_index).map_err(|_| Error::Lookups)?;
     let lambda = Vesta::lambda();
     let challenges: Vec<Fp> = statement
-        .prechallenges
+        .bulletproof_challenges
         .iter()
         .map(|c| ScalarChallenge(to_scalar(*c)).to_field(lambda))
         .collect();
@@ -647,7 +780,10 @@ pub fn finalize(
         beta: to_scalar(statement.beta),
         gamma: to_scalar(statement.gamma),
         zeta: to_scalar(statement.zeta),
-        digest: BaseReading::<Vesta>::read_digest(&Native, &statement.digest),
+        digest: BaseReading::<Vesta>::read_digest(
+            &Native,
+            &statement.sponge_digest_before_evaluations,
+        ),
         ft_eval1: evaluations.ft_eval1,
         prev_challenges: evaluations.prev_challenges.clone(),
         bulletproof_challenges: challenges.clone(),
@@ -657,7 +793,12 @@ pub fn finalize(
     let out = scalar_half(&mut Native, &constants, &poseidon, &inputs, &step_gates());
     let lin = &out.linearization;
     for (name, computed, stated) in [
-        ("perm", lin.perm, statement.perm),
+        (
+            "combined_inner_product",
+            out.combined_inner_product,
+            statement.combined_inner_product,
+        ),
+        ("b", out.b, statement.b),
         (
             "zeta_to_srs_length",
             lin.zeta_to_srs_length,
@@ -668,12 +809,7 @@ pub fn finalize(
             lin.zeta_to_domain_size,
             statement.zeta_to_domain_size,
         ),
-        (
-            "combined_inner_product",
-            out.combined_inner_product,
-            statement.combined_inner_product,
-        ),
-        ("b", out.b, statement.b),
+        ("perm", lin.perm, statement.perm),
     ] {
         if computed != unshifted(stated) {
             return Err(Error::Deferred(name));
@@ -682,16 +818,20 @@ pub fn finalize(
     if to_base(out.xi) != statement.xi {
         return Err(Error::Deferred("xi"));
     }
+    if messages.digest() != statement.messages_for_next_wrap_proof {
+        return Err(Error::Messages);
+    }
     let sg = msm(&step_srs.g, &b_poly_coefficients(&challenges));
-    if coordinates(&sg) != (statement.sg[0], statement.sg[1]) {
+    let [x, y] = messages.challenge_polynomial_commitment;
+    if coordinates(&sg) != (x, y) {
         return Err(Error::Accumulator);
     }
     Ok(())
 }
 
 /// Verify a wrap proof: the wrap proof against its statement (Kimchi, on
-/// Pallas), then the step proof's scalar half and accumulator on the
-/// statement ([`finalize`]).
+/// Pallas), then the step proof's scalar half, messages and accumulator on
+/// the statement ([`finalize`]).
 ///
 /// # Errors
 ///
@@ -702,6 +842,7 @@ pub fn verify_wrap<R>(
     wrap_srs: &Srs<Pallas>,
     wrap_proof: &ProverProof<Pallas>,
     statement: &Statement<Fq>,
+    messages: &MessagesForNextWrapProof,
     step: (&VerifierIndex<Vesta>, &Srs<Vesta>, &StepEvaluations),
     rng: &mut R,
 ) -> Result<(), Error>
@@ -721,5 +862,5 @@ where
     )
     .map_err(Error::Wrap)?;
     let (step_index, step_srs, evaluations) = step;
-    finalize(step_index, step_srs, statement, evaluations)
+    finalize(step_index, step_srs, statement, messages, evaluations)
 }

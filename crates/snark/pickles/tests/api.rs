@@ -620,42 +620,67 @@ fn wrap_shifted_and_unshifted() {
 }
 
 #[test]
-fn wrap_statement_round_trip() {
-    // A statement is its public input: of inverts to_vec, and a wrong
-    // length has no statement.
+fn wrap_statement_round_trip_and_bounds() {
+    // A statement is its public input, in Pickles' order: of inverts
+    // to_vec, a wrong length has no statement, and each word has its sort's
+    // bound.
     let v = |k: u64| Fq::from_u64(k);
     let st = wrap::Statement {
-        step_public: vec![v(1), v(2)],
-        alpha: v(3),
-        beta: v(4),
-        gamma: v(5),
-        zeta: v(6),
-        xi: v(7),
-        digest: v(8),
-        perm: v(9),
-        zeta_to_srs_length: v(10),
-        zeta_to_domain_size: v(11),
-        combined_inner_product: v(12),
-        b: v(13),
-        sg: [v(14), v(15)],
-        prechallenges: vec![v(16), v(17), v(18)],
+        combined_inner_product: v(1),
+        b: v(2),
+        zeta_to_srs_length: v(3),
+        zeta_to_domain_size: v(4),
+        perm: v(5),
+        beta: v(6),
+        gamma: v(7),
+        alpha: v(8),
+        zeta: v(9),
+        xi: v(10),
+        sponge_digest_before_evaluations: v(11),
+        messages_for_next_wrap_proof: v(12),
+        messages_for_next_step_proof: v(13),
+        bulletproof_challenges: vec![v(14), v(15), v(16)],
+        branch_data: v(17),
     };
     let flat = st.to_vec();
-    assert_eq!(flat.len(), 2 + 13 + 3);
-    assert_eq!(wrap::Statement::of(2, 3, &flat), Some(st));
-    assert_eq!(wrap::Statement::of(2, 4, &flat), None);
+    assert_eq!(flat, (1..=17).map(v).collect::<Vec<_>>());
+    assert_eq!(wrap::Statement::of(3, &flat), Some(st));
+    assert_eq!(wrap::Statement::of(4, &flat), None);
+    let mut expected = vec![254; 5];
+    expected.extend([128; 5]);
+    expected.extend([254; 3]);
+    expected.extend([128; 3]);
+    expected.push(10);
+    assert_eq!(wrap::bounds(3), expected);
+}
+
+#[test]
+fn wrap_messages_for_next_wrap_proof() {
+    // The challenges then sg's coordinates; the digest is the sponge's.
+    let messages = wrap::MessagesForNextWrapProof {
+        challenge_polynomial_commitment: [Fq::from_u64(7), Fq::from_u64(8)],
+        old_bulletproof_challenges: vec![vec![Fq::ONE], vec![Fq::from_u64(2)]],
+    };
+    assert_eq!(
+        messages.field_elements(),
+        [1, 2, 7, 8].map(Fq::from_u64).to_vec()
+    );
+    let mut sponge = arrabbiata_kimchi::oracle::FrSponge::new(
+        arrabbiata_poseidon::kimchi::KimchiSponge::new(arrabbiata_poseidon::kimchi::vesta_base()),
+    );
+    sponge.absorb_multiple(&messages.field_elements());
+    assert_eq!(messages.digest(), sponge.digest());
 }
 
 #[test]
 fn wrap_shape() {
-    // One public input, one chunk, a quotient of seven, three rounds.
+    // One chunk, a quotient of seven, three rounds.
     let shape = wrap::Shape {
-        public: 1,
         chunks: 1,
         quotient_chunks: 7,
         rounds: 3,
     };
-    assert_eq!((shape.statement(), shape.witness()), (17, 62));
+    assert_eq!((shape.statement(), shape.witness()), (17, 64));
 }
 
 #[test]
@@ -671,13 +696,13 @@ fn wrap_new_refuses_a_wrong_size() {
     let index = index();
     let poseidon = arrabbiata_poseidon::kimchi::vesta_base();
     let shape = wrap::Shape {
-        public: 0,
         chunks: 1,
         quotient_chunks: 7,
         rounds: 3,
     };
+    let padding = vec![];
     let refused =
-        wrap::Wrap::<1, 1>::new(&index.verifier_index, &index.srs, &poseidon, shape).err();
+        wrap::Wrap::<1, 1>::new(&index.verifier_index, &index.srs, &poseidon, shape, padding).err();
     assert_eq!(refused, Some(wrap::Error::Size));
 }
 
