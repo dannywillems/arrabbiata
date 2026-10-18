@@ -20,6 +20,7 @@ use arrabbiata_pickles::{
         evaluations, flatten,
     },
     transcript::{Permute, Split128},
+    wrap,
 };
 use arrabbiata_poseidon::kimchi::pallas_base;
 use arrabbiata_transcript::Permutation;
@@ -595,4 +596,81 @@ fn model_hint_witness_assert_equal() {
         arrabbiata_gadget::witness::<Fq, _, 64, 7>(&Squared { wrong: true }, LAYOUT, &[x]).is_err()
     );
     assert_eq!(<Hint<fn([Fq; 1]) -> Fq, 1> as TypedGadget<Fq>>::ROWS, 1);
+}
+
+#[test]
+fn wrap_shifted_and_unshifted() {
+    // The Type1 shift and its inverse: s = 2 t + 2^255 + 1, for scalars
+    // across the field, including the edges.
+    for s in [
+        Fp::ZERO,
+        Fp::ONE,
+        -Fp::ONE,
+        Fp::from_u64(5),
+        Fp::from_u64(1 << 40) + Fp::ONE,
+    ] {
+        assert_eq!(wrap::unshifted(wrap::shifted(s)), s);
+    }
+}
+
+#[test]
+fn wrap_statement_round_trip() {
+    // A statement is its public input: of inverts to_vec, and a wrong
+    // length has no statement.
+    let v = |k: u64| Fq::from_u64(k);
+    let st = wrap::Statement {
+        step_public: vec![v(1), v(2)],
+        alpha: v(3),
+        beta: v(4),
+        gamma: v(5),
+        zeta: v(6),
+        xi: v(7),
+        digest: v(8),
+        perm: v(9),
+        zeta_to_srs_length: v(10),
+        zeta_to_domain_size: v(11),
+        combined_inner_product: v(12),
+        b: v(13),
+        sg: [v(14), v(15)],
+        prechallenges: vec![v(16), v(17), v(18)],
+    };
+    let flat = st.to_vec();
+    assert_eq!(flat.len(), 2 + 13 + 3);
+    assert_eq!(wrap::Statement::of(2, 3, &flat), Some(st));
+    assert_eq!(wrap::Statement::of(2, 4, &flat), None);
+}
+
+#[test]
+fn wrap_shape() {
+    // One public input, one chunk, a quotient of seven, three rounds.
+    let shape = wrap::Shape {
+        public: 1,
+        chunks: 1,
+        quotient_chunks: 7,
+        rounds: 3,
+    };
+    assert_eq!((shape.statement(), shape.witness()), (17, 62));
+}
+
+#[test]
+fn wrap_gates_of_both_fields() {
+    // Kimchi's gates over each field of the cycle, with its curve's beta.
+    let _ = wrap::step_gates();
+    let _ = wrap::wrap_gates();
+    assert_eq!((wrap::VARIABLES, wrap::DEGREE), (64, 7));
+}
+
+#[test]
+fn wrap_new_refuses_a_wrong_size() {
+    let index = index();
+    let poseidon = arrabbiata_poseidon::kimchi::vesta_base();
+    let shape = wrap::Shape {
+        public: 0,
+        chunks: 1,
+        quotient_chunks: 7,
+        rounds: 3,
+    };
+    let refused =
+        wrap::Wrap::<1, 1>::new(&index.verifier_index, &index.srs, &poseidon, shape).err();
+    assert_eq!(refused, Some(wrap::Error::Size));
 }

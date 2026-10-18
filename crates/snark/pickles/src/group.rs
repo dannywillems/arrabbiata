@@ -342,7 +342,10 @@ where
 }
 
 /// The commitments in the opening's order, combined by `xi` (Horner, by
-/// the endomorphism).
+/// the endomorphism). A constant commitment that is the identity (a column
+/// of the index the circuit leaves zero) is the unit of the sum: its step
+/// scales without adding, so no gate sees the identity, which has no
+/// coordinates.
 fn combined<C, M>(
     m: &mut M,
     constants: &Constants<C>,
@@ -355,28 +358,41 @@ where
     C: Glv,
     M: GroupModel<C>,
 {
-    let mut comms: Vec<M::Point> = proof.previous.clone();
-    comms.extend(public);
-    comms.push(ft);
-    comms.extend(proof.z.iter().cloned());
+    let mut comms: Vec<Option<M::Point>> = proof.previous.iter().cloned().map(Some).collect();
+    comms.extend(public.into_iter().map(Some));
+    comms.push(Some(ft));
+    comms.extend(proof.z.iter().cloned().map(Some));
+    let fixed = |m: &mut M, c: &PolyComm<C>, comms: &mut Vec<Option<M::Point>>| {
+        for p in &c.chunks {
+            comms.push((!p.is_identity()).then(|| m.constant_point(p)));
+        }
+    };
     for c in &constants.before_witness {
-        comms.extend(constant::<C, M>(m, c));
+        fixed(m, c, &mut comms);
     }
     for w in &proof.witness {
-        comms.extend(w.iter().cloned());
+        comms.extend(w.iter().cloned().map(Some));
     }
     for c in &constants.after_witness {
-        comms.extend(constant::<C, M>(m, c));
+        fixed(m, c, &mut comms);
     }
-    let Some((last, rest)) = comms.split_last() else {
-        unreachable!("the opening has commitments")
-    };
-    let mut acc = last.clone();
-    for c in rest.iter().rev() {
-        let scaled = m.endo_scale(&acc, xi);
-        acc = m.add_points(&scaled, c);
+    let mut acc: Option<M::Point> = None;
+    for c in comms.iter().rev() {
+        acc = match (acc, c) {
+            (None, c) => c.clone(),
+            (Some(a), c) => {
+                let scaled = m.endo_scale(&a, xi);
+                Some(match c {
+                    Some(c) => m.add_points(&scaled, c),
+                    None => scaled,
+                })
+            }
+        };
     }
-    acc
+    match acc {
+        Some(a) => a,
+        None => unreachable!("ft's commitment is never the identity"),
+    }
 }
 
 /// `[perm] sigma_last - [zeta^n - 1] t`, chunks combined by `zeta^m`.

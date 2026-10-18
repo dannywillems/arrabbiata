@@ -24,3 +24,4 @@ pub mod group;
 pub mod model;
 pub mod scalar;
 pub mod transcript;
+pub mod wrap;

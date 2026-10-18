@@ -53,7 +53,7 @@ pub const CHALLENGE_BITS: usize = 128;
 pub const SCALAR_BITS: usize = 255;
 
 /// [`EndoMulOf`] over a 128-bit challenge, with the row after its rows,
-/// where its result lands: input `(T, P, x)`, output `(P', n)`.
+/// where its result lands: input `(T, P, x, n0)`, output `(P', n)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EndoScale<F> {
     /// The curve's GLV `beta`.
@@ -64,7 +64,7 @@ impl<F> TypedGadget<F> for EndoScale<F>
 where
     F: PrimeField,
 {
-    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar);
+    type Input = (Array<Scalar, 2>, Array<Scalar, 2>, Scalar, Scalar);
     type Output = (Array<Scalar, 2>, Scalar);
     const NAME: &'static str = "pickles-endo-scale";
     const ROWS: usize = CHALLENGE_BITS / BITS_PER_ROW + 1;
@@ -186,9 +186,11 @@ where
         );
         let double = GroupModel::<C>::add_points(self, p, p);
         let t = self.cell(s);
-        let (acc, n) = self
-            .env()
-            .call(&VarBaseMulOf::<SCALAR_BITS>, (p.clone(), double, t.clone()));
+        let n0 = self.cell(&Affine::constant(C::Base::ZERO));
+        let (acc, n) = self.env().call(
+            &VarBaseMulOf::<SCALAR_BITS>,
+            (p.clone(), double, t.clone(), n0),
+        );
         self.env().connect(&n, &t);
         acc
     }
@@ -201,9 +203,10 @@ where
         let sum = GroupModel::<C>::add_points(self, p, &phi);
         let start = GroupModel::<C>::add_points(self, &sum, &sum);
         let c = self.cell(chal);
+        let n0 = self.cell(&Affine::constant(C::Base::ZERO));
         let (acc, n) = self
             .env()
-            .call(&EndoScale { endo: beta }, (p.clone(), start, c.clone()));
+            .call(&EndoScale { endo: beta }, (p.clone(), start, c.clone(), n0));
         self.env().connect(&n, &c);
         acc
     }

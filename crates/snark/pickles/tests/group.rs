@@ -316,6 +316,7 @@ fn the_group_half_with_a_public_input() {
     )
     .unwrap();
     natively(&index, &proof, &public);
+    as_a_circuit::<71, 10>(&index, &proof, &public);
 }
 
 /// The column variables and the degree of the group half's circuits.
