@@ -6,14 +6,18 @@ use arrabbiata_gadget::{Cell, Env, Of, Placed, Scalar as Value, TypedGadget, Uni
 use arrabbiata_ipa::generic::{BaseOracle, ChallengeMap, HashToCurve, IpaOracle, Opening, Schnorr};
 use arrabbiata_kimchi::{
     accumulation::{
-        self, AccumulateProofs, Assignment, KimchiSuccinct, Satisfied, Separate, Statement, Verify,
-        accumulate_proofs, ipa_of, separate,
+        self, AccumulateProofs, Assignment, Factored, GroupHalf, KimchiSuccinct, Satisfied,
+        Separate, Statement, Unfinalized, Verify, accumulate_proofs, factored, ipa_of, separate,
     },
     compiled::{self, RowsError},
     constraints::{
         self, Builder, COLUMNS, CircuitGate, CircuitGateError, Connect, ConstraintSystem,
         EvaluationDomains, GateError, GateTable, GateType, LookupTable, RANGE_CHECK_TABLE_SIZE,
         RuntimeTableCfg, Wire, XOR_TABLE_SIZE, zk_rows_strict_lower_bound,
+    },
+    deferred::{
+        Deferred, DeferredError, DeferredValues, Evaluations, Obligation, Plonk, expand_deferred,
+        group_half, scalar_half,
     },
     gates::{Gates, KimchiGates},
     ipa::{KimchiIpa, kimchi_ipa, kimchi_ipa_with},
@@ -37,7 +41,11 @@ use arrabbiata_kimchi::{
         self, AfterGamma, Base, Beta, Challenge, Digest, DigestOf, FqTape, Message, Piop, Scalar,
         VerifierIndexDigest,
     },
-    verifier::{Claim, Oracles, VerifyError, oracles, succinct, verify},
+    verifier::{
+        BaseTranscript, Challenges, Claim, Linearization, Oracles, VerifyError, base_transcript,
+        combined_commitment, combined_inner_product, commitments, evaluation_shape, evaluations,
+        ft_comm, linearization, oracles, scalar_transcript, succinct, verify,
+    },
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
 use arrabbiata_kimchi_gadgets::{
@@ -49,7 +57,7 @@ use arrabbiata_kimchi_gadgets::{
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiSponge, pallas_base, vesta_base};
 use arrabbiata_reduction::{Reduction, Relation};
-use arrabbiata_transcript::typed::Label;
+use arrabbiata_transcript::{Transcript, typed::Label};
 
 #[test]
 fn challenge_limbs() {
@@ -1162,6 +1170,244 @@ fn accumulation_reductions() {
         .prove(transcript(), &vec![statement], &vec![assignment])
         .unwrap();
     assert!(ipa.decide(&out.instance));
+}
+
+#[test]
+fn verifier_base_transcript() {
+    // The commitments' half of the oracles: the same challenges and digest,
+    // and the endomorphism images of its 128-bit challenges.
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let t: BaseTranscript<Vesta, _> = base_transcript(vi, &index.srs, &proof, &[], &base).unwrap();
+    assert_eq!((t.beta, t.gamma, t.digest), (o.beta, o.gamma, o.digest));
+    assert_eq!(t.zeta_chal, o.zeta_chal);
+    assert_eq!(t.joint_combiner_chal, None);
+    let c: Challenges<Fp> = t.challenges();
+    assert_eq!((c.alpha, c.zeta), (o.alpha, o.zeta));
+    let error = base_transcript(vi, &index.srs, &proof, &[Fp::ONE], &base).unwrap_err();
+    assert_eq!(error, VerifyError::IncorrectPublicInputLength);
+}
+
+#[test]
+fn verifier_scalar_transcript() {
+    // The evaluations' half: v and u from the base digest.
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let (v, u) = scalar_transcript(&scalar, o.digest, &[], proof.ft_eval1, &proof.evals);
+    assert_eq!((v, u), (o.v_chal, o.u_chal));
+    let (w, _) = scalar_transcript(
+        &scalar,
+        o.digest + Fp::ONE,
+        &[],
+        proof.ft_eval1,
+        &proof.evals,
+    );
+    assert_ne!(w, v);
+}
+
+#[test]
+fn verifier_linearization() {
+    // ft(zeta) is the oracles'; perm, zeta^n and zeta^m are their
+    // definitions.
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let t = base_transcript(vi, &index.srs, &proof, &[], &base).unwrap();
+    let lin: Linearization<Fp> = linearization(vi, &proof.evals, None, &t.challenges(), &kimchi);
+    assert_eq!(lin.ft_eval0, o.ft_eval0);
+    assert_eq!(lin.zeta_to_domain_size, o.zeta.pow(vi.domain_size as u64));
+    assert_eq!(lin.zeta_to_srs_length, o.zeta.pow(vi.max_poly_size as u64));
+    assert_ne!(lin.perm, Fp::ZERO);
+}
+
+#[test]
+fn verifier_ft_comm() {
+    // The oracles' ft commitment, and linear in perm.
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let t = base_transcript(vi, &index.srs, &proof, &[], &base).unwrap();
+    let lin = linearization(vi, &proof.evals, None, &t.challenges(), &kimchi);
+    let ft = |perm: Fp| {
+        ft_comm(
+            vi,
+            &proof.t_comm,
+            perm,
+            lin.zeta_to_srs_length,
+            lin.zeta_to_domain_size,
+        )
+    };
+    assert_eq!(o.evaluations[1].0.chunks, vec![ft(lin.perm)]);
+    let sigma = vi.sigma_comm[PERMUTS - 1].chunks[0];
+    assert_eq!(ft(lin.perm + Fp::ONE), ft(lin.perm) + sigma);
+}
+
+#[test]
+fn verifier_commitments_and_evaluations() {
+    // The two lists of the opening, in the oracles' order, and their
+    // combinations the oracles' combined inner product.
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let ft = o.evaluations[1].0.chunks[0];
+    let comms = commitments(vi, &proof, &o.public_comm, ft, None);
+    let evals = evaluations(
+        &proof.evals,
+        &[],
+        [o.ft_eval0, proof.ft_eval1],
+        [o.zeta, o.zeta_omega],
+    );
+    let (expected_comms, expected_evals): (Vec<_>, Vec<_>) = o.evaluations.iter().cloned().unzip();
+    assert_eq!(comms, expected_comms);
+    assert_eq!(evals, expected_evals);
+    assert_eq!(
+        combined_inner_product(&evals, o.v, o.u),
+        o.combined_inner_product
+    );
+    let single = [PolyComm {
+        chunks: vec![index.srs.h, index.srs.g[0]],
+    }];
+    assert_eq!(
+        combined_commitment(&single, Fp::from_u64(3)),
+        index.srs.h + index.srs.g[0] * Fp::from_u64(3)
+    );
+}
+
+#[test]
+fn verifier_evaluation_shape() {
+    // The evaluations the index commits to, and no other.
+    let (index, proof, _) = proved();
+    let vi = &index.verifier_index;
+    assert_eq!(evaluation_shape(vi, &proof.evals), Ok(None));
+    let mut stray = proof.evals.clone();
+    let zero = PointEvaluations {
+        zeta: vec![Fp::ZERO],
+        zeta_omega: vec![Fp::ZERO],
+    };
+    stray.optional_selectors.push((GateType::Rot64, zero));
+    assert_eq!(
+        evaluation_shape(vi, &stray),
+        Err(VerifyError::IncorrectLength)
+    );
+}
+
+/// The deferred values of an honest run on [`proved`], and what the
+/// halves need.
+fn deferred_of_proved() -> (
+    ProverIndex<Vesta>,
+    ProverProof<Vesta>,
+    KimchiGates<Fp>,
+    DeferredValues<Fp>,
+) {
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let values = expand_deferred(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    (index, proof, kimchi, values)
+}
+
+#[test]
+fn deferred_expand() {
+    // The oracles' challenges and values, and b from the accumulator's
+    // challenges.
+    let (index, proof, kimchi, values) = deferred_of_proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let accumulator = succinct(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let plonk: Plonk<Fp> = values.plonk;
+    assert_eq!((plonk.alpha, plonk.zeta), (o.alpha_chal, o.zeta_chal));
+    assert_eq!((plonk.beta, plonk.gamma), (o.beta, o.gamma));
+    assert_eq!(values.xi, o.v_chal);
+    assert_eq!(values.combined_inner_product, o.combined_inner_product);
+    assert_eq!(values.bulletproof_challenges, accumulator.chals);
+    assert_eq!(
+        values.b,
+        accumulator.evaluate(o.zeta) + o.u * accumulator.evaluate(o.zeta_omega)
+    );
+}
+
+#[test]
+fn deferred_halves() {
+    // group_half then scalar_half is the succinct verifier.
+    let (index, proof, kimchi, values) = deferred_of_proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let deferred: Deferred<Vesta> =
+        group_half(vi, &index.srs, &proof, &[], &values, &base).unwrap();
+    assert_eq!(deferred.sg, proof.proof.sg);
+    let opened: Evaluations<Fp> = Evaluations::from(&proof);
+    let accumulator = scalar_half(vi, &deferred, &opened, &kimchi, &scalar).unwrap();
+    assert_eq!(
+        accumulator,
+        succinct(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap()
+    );
+}
+
+#[test]
+fn deferred_value_and_error() {
+    // Each half names the value that is not its definition.
+    let (index, proof, kimchi, values) = deferred_of_proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let mut wrong = values.clone();
+    wrong.plonk.beta = wrong.plonk.beta + Fp::ONE;
+    let error = group_half(vi, &index.srs, &proof, &[], &wrong, &base).unwrap_err();
+    assert_eq!(error, DeferredError::Mismatch(Obligation::Beta));
+    assert_eq!(error.to_string(), "the deferred Beta is not its definition");
+    let mut deferred = group_half(vi, &index.srs, &proof, &[], &values, &base).unwrap();
+    deferred.values.b = deferred.values.b + Fp::ONE;
+    let error = scalar_half(vi, &deferred, &Evaluations::from(&proof), &kimchi, &scalar);
+    assert_eq!(error, Err(DeferredError::Mismatch(Obligation::B)));
+    let error = DeferredError::from(VerifyError::OpeningProof);
+    assert_eq!(error.to_string(), "the opening does not verify");
+}
+
+#[test]
+fn accumulation_factored() {
+    // GroupHalf ; ScalarHalf outputs KimchiSuccinct's accumulator, on the
+    // same transcript; the intermediate pair is in Unfinalized.
+    let (index, _, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let ipa = ipa_of(&index.srs, scalar.clone());
+    let relation = Satisfied::new(&index, &kimchi, (&base, &scalar), &ipa);
+    let (statement, assignment) = statement_of_two_generic();
+    let transcript = || KimchiSponge::new(pallas_base());
+    let group = GroupHalf::new(relation, Arkworks(SplitMix64(6)));
+    let half = group.prove(transcript(), &statement, &assignment).unwrap();
+    let target: Unfinalized<'_, Vesta, _, _> = group.target();
+    assert_eq!(target.check(&half.instance, &half.witness), Ok(()));
+    let whole: Factored<'_, Vesta, _, _, _, _> =
+        factored(GroupHalf::new(relation, Arkworks(SplitMix64(6))));
+    let out = whole.prove(transcript(), &statement, &assignment).unwrap();
+    let succinct = KimchiSuccinct::new(relation, Arkworks(SplitMix64(6)));
+    let expected = succinct
+        .prove(transcript(), &statement, &assignment)
+        .unwrap();
+    assert_eq!(out.instance, expected.instance);
+    let (verified, after) = whole.verify(transcript(), &statement, out.proof).unwrap();
+    assert_eq!(verified, expected.instance);
+    assert_eq!(
+        after.clone().squeeze(),
+        expected.transcript.clone().squeeze()
+    );
 }
 
 #[test]

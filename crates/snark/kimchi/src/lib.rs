@@ -11,6 +11,9 @@
 //!   challenge to a scalar through the curve's endomorphism;
 //! - [`accumulation`]: the verifier as a reduction to Halo's accumulation,
 //!   composed with Halo's decider and fold;
+//! - [`deferred`]: the succinct verifier factored in a group half and a
+//!   scalar half through Pickles' deferred values, the halves Pickles runs
+//!   in circuits over the two fields of a cycle;
 //! - [`constraints`]: the constraint system, built as Kimchi builds it
 //!   (lookup domain, zero-knowledge rows, domains, padding), with its
 //!   permutation, selector and coefficient columns;
@@ -39,6 +42,7 @@ extern crate alloc;
 pub mod accumulation;
 pub mod compiled;
 pub mod constraints;
+pub mod deferred;
 pub mod gates;
 pub mod ipa;
 pub mod lookup;

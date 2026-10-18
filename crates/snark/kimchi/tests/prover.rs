@@ -15,9 +15,14 @@ use arrabbiata_halo::Accumulated;
 use arrabbiata_ipa::RecursionChallenge;
 use arrabbiata_kimchi::{
     accumulation::{
-        self, Assignment, KimchiSuccinct, Satisfied, Statement, accumulate_proofs, ipa_of, separate,
+        self, Assignment, GroupHalf, KimchiSuccinct, Satisfied, Statement, accumulate_proofs,
+        factored, ipa_of, separate,
     },
     constraints::{CircuitGate, ConstraintSystem, GateType, LookupTable, RuntimeTableCfg, Wire},
+    deferred::{
+        Deferred, DeferredError, DeferredValues, Evaluations, Obligation, expand_deferred,
+        group_half, scalar_half,
+    },
     gates::KimchiGates,
     lookup::{LookupPattern, RuntimeTable},
     prover::{
@@ -1202,6 +1207,63 @@ fn tampered_lookup_proofs_are_refused() {
     );
 }
 
+#[test]
+fn evaluations_the_index_does_not_commit_to_are_refused() {
+    // A selector's evaluation the index commits to nothing is opened
+    // against nothing; the verifier refuses it rather than reading it.
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let check = |name: &str, proof: &ProverProof<Vesta>| {
+        let (_, max_poly_size, public) = named(name);
+        let (index, _) = index(name, max_poly_size, public);
+        let mut rng = Arkworks(SplitMix64(1));
+        verify(
+            &index.verifier_index,
+            &index.srs,
+            proof,
+            &public_inputs(name, public),
+            &gates,
+            (&base, &scalar),
+            &mut rng,
+        )
+    };
+    let zero = PointEvaluations {
+        zeta: vec![Fp::ZERO],
+        zeta_omega: vec![Fp::ZERO],
+    };
+    let good = kimchis_proof("generic");
+    assert_eq!(check("generic", &good), Ok(()));
+    let mut stray = good.clone();
+    stray
+        .evals
+        .optional_selectors
+        .push((GateType::Xor16, zero.clone()));
+    assert_eq!(
+        check("generic", &stray),
+        Err(VerifyError::IncorrectLength),
+        "a selector the index lacks"
+    );
+    let good = kimchis_proof("xor");
+    assert_eq!(check("xor", &good), Ok(()));
+    let mut missing = good.clone();
+    missing.evals.optional_selectors.clear();
+    assert_eq!(
+        check("xor", &missing),
+        Err(VerifyError::IncorrectLength),
+        "a selector the index has"
+    );
+    let mut relabelled = good.clone();
+    let selectors = &mut relabelled.evals.lookup.as_mut().unwrap().selectors;
+    assert_eq!(selectors[0].0, LookupPattern::Xor);
+    selectors[0].0 = LookupPattern::Lookup;
+    assert_eq!(
+        check("xor", &relabelled),
+        Err(VerifyError::LookupMismatch),
+        "a lookup selector under another pattern"
+    );
+}
+
 /// The statement and the assignment of the tool's circuit `name`.
 fn statement(name: &str, public: usize) -> (Statement<Vesta>, Assignment<Fp>) {
     let (_, columns) = circuit(name);
@@ -1398,4 +1460,162 @@ fn merged_and_separate_folding_decide_the_same_statements() {
     let out = folded.prove(transcript(), &instance, &assignment).unwrap();
     let verified = folded.verify(transcript(), &instance, out.proof);
     assert!(verified.is_err());
+}
+
+#[test]
+fn the_halves_compose_to_the_succinct_verifier() {
+    the_halves_compose_to_the_succinct_verifier_on::<Vesta>();
+    the_halves_compose_to_the_succinct_verifier_on::<Pallas>();
+}
+
+fn the_halves_compose_to_the_succinct_verifier_on<C: Kimchi>() {
+    // On Kimchi's proof of every circuit: the group half on the deferred
+    // values of an honest run, then the scalar half, give the succinct
+    // verifier's accumulator. The group half reads no evaluation: the same
+    // output with the evaluations zeroed.
+    let gates = C::gates();
+    for &(name, max_poly_size, public) in C::CIRCUITS {
+        let (index, _) = index::<C>(name, max_poly_size, public);
+        let base = C::base();
+        let scalar = C::scalar();
+        let vi = &index.verifier_index;
+        let proof = kimchis_proof::<C>(name);
+        let inputs = public_inputs::<C::Scalar>(name, public);
+        let sponges = (&base, &scalar);
+        let values = expand_deferred(vi, &index.srs, &proof, &inputs, &gates, sponges).unwrap();
+        let deferred = group_half(vi, &index.srs, &proof, &inputs, &values, &base).unwrap();
+        let mut blind = proof.clone();
+        blind.ft_eval1 = C::Scalar::ZERO;
+        blind.evals.w[0].zeta[0] = C::Scalar::ZERO;
+        let unread = group_half(vi, &index.srs, &blind, &inputs, &values, &base);
+        assert_eq!(unread.as_ref(), Ok(&deferred), "{name}");
+        let opened = Evaluations::from(&proof);
+        let accumulator = scalar_half(vi, &deferred, &opened, &gates, &scalar).unwrap();
+        let expected = succinct(vi, &index.srs, &proof, &inputs, &gates, sponges).unwrap();
+        assert_eq!(accumulator, expected, "{name}");
+        // The evaluations the group half did not read are the scalar
+        // half's to check.
+        let refused = scalar_half(vi, &deferred, &Evaluations::from(&blind), &gates, &scalar);
+        assert!(refused.is_err(), "{name}");
+    }
+}
+
+/// A change to deferred values.
+type Tamper = fn(&mut DeferredValues<Fp>);
+
+#[test]
+fn each_deferred_value_is_checked() {
+    // Each deferred value, off by one, is refused: the challenges by the
+    // group half, which redraws them, and every other value by the scalar
+    // half, which recomputes it; the values the group half uses are also
+    // refused by its opening.
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for name in ["generic", "recursion", "lookup"] {
+        let (_, max_poly_size, public) = named(name);
+        let (index, _) = index::<Vesta>(name, max_poly_size, public);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let vi = &index.verifier_index;
+        let proof = kimchis_proof::<Vesta>(name);
+        let inputs = public_inputs::<Fp>(name, public);
+        let values =
+            expand_deferred(vi, &index.srs, &proof, &inputs, &gates, (&base, &scalar)).unwrap();
+        let group = |values: &DeferredValues<Fp>| {
+            group_half(vi, &index.srs, &proof, &inputs, values, &base).map(|_| ())
+        };
+        let mismatch = |o| Err(DeferredError::Mismatch(o));
+        let opening = Err(DeferredError::Verify(VerifyError::OpeningProof));
+        let one = Fp::ONE;
+        let mut v = values.clone();
+        v.plonk.alpha.0 = v.plonk.alpha.0 + one;
+        assert_eq!(group(&v), mismatch(Obligation::Alpha), "{name}");
+        let mut v = values.clone();
+        v.plonk.beta = v.plonk.beta + one;
+        assert_eq!(group(&v), mismatch(Obligation::Beta), "{name}");
+        let mut v = values.clone();
+        v.plonk.gamma = v.plonk.gamma + one;
+        assert_eq!(group(&v), mismatch(Obligation::Gamma), "{name}");
+        let mut v = values.clone();
+        v.plonk.zeta.0 = v.plonk.zeta.0 + one;
+        assert_eq!(group(&v), mismatch(Obligation::Zeta), "{name}");
+        if name == "lookup" {
+            let mut v = values.clone();
+            let jc = v.plonk.joint_combiner.as_mut().unwrap();
+            jc.0 = jc.0 + one;
+            assert_eq!(group(&v), mismatch(Obligation::JointCombiner), "{name}");
+        }
+        let mut v = values.clone();
+        v.bulletproof_challenges[0] = v.bulletproof_challenges[0] + one;
+        assert_eq!(
+            group(&v),
+            mismatch(Obligation::BulletproofChallenges),
+            "{name}"
+        );
+        let deferred = group_half(vi, &index.srs, &proof, &inputs, &values, &base).unwrap();
+        let opened = Evaluations::from(&proof);
+        let scalar_half_on =
+            |d: &Deferred<Vesta>| scalar_half(vi, d, &opened, &gates, &scalar).map(|_| ());
+        assert_eq!(scalar_half_on(&deferred), Ok(()), "{name}");
+        let tampers: [(Obligation, Tamper); 6] = [
+            (Obligation::Xi, |v| v.xi.0 = v.xi.0 + Fp::ONE),
+            (Obligation::Perm, |v| v.plonk.perm = v.plonk.perm + Fp::ONE),
+            (Obligation::ZetaToDomainSize, |v| {
+                v.plonk.zeta_to_domain_size = v.plonk.zeta_to_domain_size + Fp::ONE;
+            }),
+            (Obligation::ZetaToSrsLength, |v| {
+                v.plonk.zeta_to_srs_length = v.plonk.zeta_to_srs_length + Fp::ONE;
+            }),
+            (Obligation::CombinedInnerProduct, |v| {
+                v.combined_inner_product = v.combined_inner_product + Fp::ONE;
+            }),
+            (Obligation::B, |v| v.b = v.b + Fp::ONE),
+        ];
+        for (obligation, tamper) in tampers {
+            let mut d = deferred.clone();
+            tamper(&mut d.values);
+            assert_eq!(
+                scalar_half_on(&d),
+                mismatch(obligation),
+                "{name} {obligation:?}"
+            );
+            let mut v = values.clone();
+            tamper(&mut v);
+            assert_eq!(group(&v), opening, "{name} {obligation:?}");
+        }
+    }
+}
+
+#[test]
+fn the_factored_reduction_is_kimchi_succinct() {
+    // GroupHalf ; ScalarHalf is complete, and outputs KimchiSuccinct's
+    // accumulator; an evaluation off by one is refused by its scalar half.
+    let gates = KimchiGates::new(&pallas_base(), Pallas::beta()).unwrap();
+    for (name, max_poly_size, public) in [
+        named("generic"),
+        named("recursion"),
+        named("lookup"),
+        named("runtime"),
+    ] {
+        let (index, _) = index(name, max_poly_size, public);
+        let base = KimchiSponge::new(vesta_base());
+        let scalar = KimchiSponge::new(pallas_base());
+        let ipa = ipa_of(&index.srs, scalar.clone());
+        let relation = Satisfied::new(&index, &gates, (&base, &scalar), &ipa);
+        let (statement, assignment) = statement(name, public);
+        let transcript = || KimchiSponge::new(pallas_base());
+        let whole = factored(GroupHalf::new(relation, Arkworks(SplitMix64(5))));
+        let out = laws::complete(&whole, transcript, &statement, &assignment).unwrap();
+        let reduction = KimchiSuccinct::new(relation, Arkworks(SplitMix64(5)));
+        let expected = reduction
+            .prove(transcript(), &statement, &assignment)
+            .unwrap();
+        assert_eq!(out.instance, expected.instance, "{name}");
+        let (group_proof, mut opened) = out.proof.clone();
+        opened.evals.z.zeta[0] = opened.evals.z.zeta[0] + Fp::ONE;
+        let refused = whole.verify(transcript(), &statement, (group_proof, opened));
+        assert!(
+            matches!(refused, Err(arrabbiata_reduction::Either::Right(_))),
+            "{name}"
+        );
+    }
 }

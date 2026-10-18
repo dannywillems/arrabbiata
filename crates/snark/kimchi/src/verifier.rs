@@ -44,12 +44,12 @@ use crate::{
     constraints::GateType,
     gates::Gates,
     ipa::kimchi_ipa,
-    lookup::{LookupPoint, constraint_count, constraints as lookup_constraints},
+    lookup::{LookupPattern, LookupPoint, constraint_count, constraints as lookup_constraints},
     oracle::{FqSponge, ScalarChallenge},
     permutation::PERMUTS,
     prover::{
-        CONSTRAINED, LOOKUP_ALPHA, PERMUTATION_ALPHA, PointEvaluations, ProverProof, combine,
-        unnormalized_lagrange,
+        CONSTRAINED, LOOKUP_ALPHA, LookupEvaluations, PERMUTATION_ALPHA, PointEvaluations,
+        ProofEvaluations, ProverProof, combine, unnormalized_lagrange,
     },
     rng::Sampler,
     srs::{PolyComm, Srs, num_chunks},
@@ -143,6 +143,22 @@ const fn chunks<C: Curve>(index: &VerifierIndex<C>) -> usize {
     num_chunks(index.domain_size, index.max_poly_size)
 }
 
+/// The index's domain.
+///
+/// # Panics
+///
+/// If it is not one of the field's.
+fn domain<C>(index: &VerifierIndex<C>) -> Domain<C::Scalar>
+where
+    C: Curve,
+    C::Scalar: TwoAdicField,
+{
+    match Domain::<C::Scalar>::containing(index.domain_size) {
+        Some(d) => d,
+        None => panic!("the index's domain is not one of the field's"),
+    }
+}
+
 /// `sum_i y^i c_i`, for commitments: [`arrabbiata_poly::combine`] in the group, the image of
 /// the chunks' linearization under the commitment.
 fn chunk_commitment<C: Curve>(c: &PolyComm<C>, y: C::Scalar) -> Projective<C> {
@@ -154,65 +170,112 @@ fn pair<F: Clone>(e: &PointEvaluations<F>) -> [Vec<F>; 2] {
     [e.zeta.clone(), e.zeta_omega.clone()]
 }
 
-/// The transcript of `proof` against `index` and `public`, the gates'
-/// constraints given by `gates` (see the module documentation).
-///
-/// # Errors
-///
-/// A [`VerifyError`] for a proof of the wrong shape.
-///
-/// # Panics
-///
-/// If the index's domain is not one of the field's.
-pub fn oracles<C, S, T, G>(
+/// The optional selectors of `index`, with their commitments, in the order
+/// of the evaluations and of the opening.
+fn optional_selectors<C: Curve>(index: &VerifierIndex<C>) -> [(GateType, &Option<PolyComm<C>>); 6] {
+    [
+        (GateType::RangeCheck0, &index.range_check0_comm),
+        (GateType::RangeCheck1, &index.range_check1_comm),
+        (GateType::ForeignFieldAdd, &index.foreign_field_add_comm),
+        (GateType::ForeignFieldMul, &index.foreign_field_mul_comm),
+        (GateType::Xor16, &index.xor_comm),
+        (GateType::Rot64, &index.rot_comm),
+    ]
+}
+
+/// The lookup selectors of `index`, in the order of the evaluations and of
+/// the opening.
+const LOOKUP_SELECTORS: [LookupPattern; 4] = [
+    LookupPattern::Xor,
+    LookupPattern::Lookup,
+    LookupPattern::RangeCheck,
+    LookupPattern::ForeignFieldMul,
+];
+
+/// The commitments' part of the shape: as many previous accumulators and
+/// public inputs as the index says, a quotient of at most seven chunks per
+/// chunk, and the lookup commitments exactly when the index has lookups,
+/// the runtime table's exactly when it has runtime tables.
+fn commitment_shape<C>(
     index: &VerifierIndex<C>,
-    srs: &Srs<C>,
     proof: &ProverProof<C>,
     public: &[C::Scalar],
-    gates: &G,
-    sponges: (&S, &T),
-) -> Result<Oracles<C, S>, VerifyError>
+) -> Result<(), VerifyError>
 where
-    C: Glv,
-    C::Base: PrimeField,
-    C::Scalar: TwoAdicField,
-    S: Transcript<C::Base> + Clone,
-    T: Transcript<C::Scalar> + Clone,
-    G: Gates<C::Scalar>,
+    C: Curve,
 {
-    let (base_sponge, scalar_sponge) = sponges;
-    let lookup = match (&index.lookup_index, &proof.lookup, &proof.evals.lookup) {
-        (None, None, None) => None,
-        (Some(li), Some(comms), Some(evals)) => {
-            let runtime = comms.runtime.is_some()
-                && evals.runtime_table.is_some()
-                && evals.runtime_selector.is_some();
-            let runtime_ok = li.runtime_tables_selector.is_some() == runtime;
-            let sorted_ok = comms.sorted.len() == li.lookup_info.max_per_row + 1
-                && evals.sorted.len() == comms.sorted.len();
-            let selectors_ok =
-                li.lookup_selectors.iter().flatten().count() == evals.selectors.len();
-            if !(runtime_ok && sorted_ok && selectors_ok) {
+    match (&index.lookup_index, &proof.lookup) {
+        (None, None) => {}
+        (Some(li), Some(comms)) => {
+            let runtime_ok = comms.runtime.is_some() == li.runtime_tables_selector.is_some();
+            let sorted_ok = comms.sorted.len() == li.lookup_info.max_per_row + 1;
+            if !(runtime_ok && sorted_ok) {
                 return Err(VerifyError::LookupMismatch);
             }
-            Some((li, comms, evals))
         }
         _ => return Err(VerifyError::LookupMismatch),
-    };
+    }
     if proof.prev_challenges.len() != index.prev_challenges {
         return Err(VerifyError::IncorrectPrevChallengesLength);
     }
     if public.len() != index.public {
         return Err(VerifyError::IncorrectPublicInputLength);
     }
-    let num_chunks = chunks(index);
-    let d1 = match Domain::<C::Scalar>::containing(index.domain_size) {
-        Some(d) => d,
-        None => panic!("the index's domain is not one of the field's"),
+    if proof.t_comm.chunks.len() > 7 * chunks(index) {
+        return Err(VerifyError::IncorrectLength);
+    }
+    Ok(())
+}
+
+/// The evaluations' part of the shape, and the lookup evaluations if any:
+/// one evaluation per chunk at each point; exactly the optional selectors
+/// the index commits to, in its order; and with lookups, the sorted
+/// columns, the runtime table and selector exactly when the index has
+/// runtime tables, and exactly the index's lookup selectors, in its order.
+///
+/// The evaluations of a selector the index does not commit to are opened
+/// against nothing, so a verifier that read them would let the prover add
+/// to `ft(zeta)` a term it chooses after `zeta`; they are refused.
+///
+/// # Errors
+///
+/// [`VerifyError::LookupMismatch`] or [`VerifyError::IncorrectLength`].
+pub fn evaluation_shape<'a, C>(
+    index: &VerifierIndex<C>,
+    evals: &'a ProofEvaluations<C::Scalar>,
+) -> Result<Option<&'a LookupEvaluations<C::Scalar>>, VerifyError>
+where
+    C: Curve,
+{
+    let lookup = match (&index.lookup_index, &evals.lookup) {
+        (None, None) => None,
+        (Some(li), Some(l)) => {
+            let runtime = li.runtime_tables_selector.is_some();
+            let runtime_ok =
+                l.runtime_table.is_some() == runtime && l.runtime_selector.is_some() == runtime;
+            let sorted_ok = l.sorted.len() == li.lookup_info.max_per_row + 1;
+            let expected = LOOKUP_SELECTORS
+                .iter()
+                .zip(&li.lookup_selectors)
+                .filter(|(_, c)| c.is_some())
+                .map(|(p, _)| *p);
+            let selectors_ok = expected.eq(l.selectors.iter().map(|(p, _)| *p));
+            if !(runtime_ok && sorted_ok && selectors_ok) {
+                return Err(VerifyError::LookupMismatch);
+            }
+            Some(l)
+        }
+        _ => return Err(VerifyError::LookupMismatch),
     };
-    let n = d1.size();
-    let m = index.max_poly_size;
-    let e = &proof.evals;
+    let expected = optional_selectors(index)
+        .into_iter()
+        .filter(|(_, c)| c.is_some())
+        .map(|(t, _)| t);
+    if !expected.eq(evals.optional_selectors.iter().map(|(t, _)| *t)) {
+        return Err(VerifyError::IncorrectLength);
+    }
+    let num_chunks = chunks(index);
+    let e = evals;
     let all_evaluations = core::iter::once(&e.public)
         .chain(e.w.iter())
         .chain(core::iter::once(&e.z))
@@ -243,9 +306,99 @@ where
             return Err(VerifyError::IncorrectLength);
         }
     }
-    if proof.t_comm.chunks.len() > 7 * num_chunks {
-        return Err(VerifyError::IncorrectLength);
+    Ok(lookup)
+}
+
+/// The base-field half of the transcript: what Kimchi's verifier draws
+/// from the commitments alone, before the evaluations. A verifier native in
+/// the base field (Pickles' group side) computes exactly this.
+#[derive(Clone, Debug)]
+pub struct BaseTranscript<C, S>
+where
+    C: Curve,
+{
+    /// The first permutation challenge.
+    pub beta: C::Scalar,
+    /// The second permutation challenge.
+    pub gamma: C::Scalar,
+    /// With lookups, the 128-bit challenge the joint combiner comes from
+    /// (zero when the index uses no joint lookup).
+    pub joint_combiner_chal: Option<ScalarChallenge<C::Scalar>>,
+    /// The 128-bit challenge `alpha` comes from.
+    pub alpha_chal: ScalarChallenge<C::Scalar>,
+    /// The 128-bit challenge `zeta` comes from.
+    pub zeta_chal: ScalarChallenge<C::Scalar>,
+    /// The base-field digest the scalar sponge starts from.
+    pub digest: C::Scalar,
+    /// The public commitment.
+    pub public_comm: PolyComm<C>,
+    /// The base sponge after `zeta`, where the opening continues.
+    pub fq_sponge: FqSponge<C, S>,
+}
+
+/// The challenges of the linearization, as scalars.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Challenges<F> {
+    /// The constraint combiner.
+    pub alpha: F,
+    /// The first permutation challenge.
+    pub beta: F,
+    /// The second permutation challenge.
+    pub gamma: F,
+    /// The evaluation point.
+    pub zeta: F,
+    /// With lookups, the joint combiner.
+    pub joint_combiner: Option<F>,
+}
+
+impl<C, S> BaseTranscript<C, S>
+where
+    C: Glv,
+{
+    /// The challenges, the 128-bit ones mapped by the endomorphism.
+    #[must_use]
+    pub fn challenges(&self) -> Challenges<C::Scalar> {
+        let lambda = C::lambda();
+        Challenges {
+            alpha: self.alpha_chal.to_field(lambda),
+            beta: self.beta,
+            gamma: self.gamma,
+            zeta: self.zeta_chal.to_field(lambda),
+            joint_combiner: self.joint_combiner_chal.map(|c| c.to_field(lambda)),
+        }
     }
+}
+
+/// The base-field half of the transcript of `proof` against `index` and
+/// `public`: the commitments' shape checked, the public commitment, then
+/// the base sponge over the index digest, the previous accumulators, the
+/// public commitment, the witness commitments, the lookup commitments, `z`
+/// and `t`, as the type `transcript::Piop` says. It reads no evaluation.
+///
+/// # Errors
+///
+/// A [`VerifyError`] for commitments of the wrong shape.
+///
+/// # Panics
+///
+/// If the index's domain is not one of the field's.
+pub fn base_transcript<C, S>(
+    index: &VerifierIndex<C>,
+    srs: &Srs<C>,
+    proof: &ProverProof<C>,
+    public: &[C::Scalar],
+    base_sponge: &S,
+) -> Result<BaseTranscript<C, S>, VerifyError>
+where
+    C: Glv,
+    C::Base: PrimeField,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+{
+    commitment_shape(index, proof, public)?;
+    let num_chunks = chunks(index);
+    let d1 = domain(index);
+    let n = d1.size();
 
     // The public commitment: the Lagrange bases of the public rows, or h.
     let public_comm = if public.is_empty() {
@@ -264,21 +417,20 @@ where
         srs.mask_fixed(srs.commit_non_hiding(coefficients.coefficients(), num_chunks))
     };
 
-    // The base-field sponge's part of the PIOP, step by step as the type
-    // `transcript::Piop` says.
     let previous: Vec<Projective<C>> = proof.prev_challenges.iter().map(|p| p.comm).collect();
     let tape = transcript::piop::<C, S>(base_sponge.clone())
         .statement(&Message::new(Base(index.digest(base_sponge.clone()))))
         .statement(&Message::new(previous))
         .statement(&Message::new(public_comm.clone()))
         .receive(&Message::new(proof.w_comm.clone()));
-    let (joint_combiner, beta, gamma, tape) = match lookup {
+    let lookup = index.lookup_index.as_ref().zip(proof.lookup.as_ref());
+    let (joint_combiner_chal, beta, gamma, tape) = match lookup {
         None => {
             let (beta, tape) = tape.left().squeeze();
             let (gamma, tape) = tape.squeeze();
             (None, beta, gamma, tape)
         }
-        Some((li, comms, _)) => {
+        Some((li, comms)) => {
             let tape = tape.right();
             let tape = match &comms.runtime {
                 Some(r) => tape.left().receive(&Message::new(r.clone())),
@@ -289,43 +441,105 @@ where
             } else {
                 (C::Scalar::ZERO, tape.right())
             };
-            let jc = ScalarChallenge(raw).to_field(C::lambda());
             let tape = tape.receive(&Message::new(comms.sorted.clone()));
             let (beta, tape) = tape.squeeze();
             let (gamma, tape) = tape.squeeze();
             let tape = tape.receive(&Message::new(comms.aggreg.clone()));
-            (Some(jc), beta, gamma, tape)
+            (Some(ScalarChallenge(raw)), beta, gamma, tape)
         }
     };
     let tape = tape.receive(&Message::new(proof.z_comm.clone()));
     let (alpha_raw, tape) = tape.squeeze();
-    let alpha_chal = ScalarChallenge(alpha_raw);
-    let alpha = alpha_chal.to_field(C::lambda());
     let tape = tape.receive(&Message::new(proof.t_comm.clone()));
     let (zeta_raw, tape) = tape.squeeze();
-    let zeta_chal = ScalarChallenge(zeta_raw);
-    let zeta = zeta_chal.to_field(C::lambda());
     let (digest, tape) = tape.peek();
-    let fq_sponge = tape.into_inner();
+    Ok(BaseTranscript {
+        beta,
+        gamma,
+        joint_combiner_chal,
+        alpha_chal: ScalarChallenge(alpha_raw),
+        zeta_chal: ScalarChallenge(zeta_raw),
+        digest,
+        public_comm,
+        fq_sponge: tape.into_inner(),
+    })
+}
 
-    // The scalar-field sponge's part, as `transcript::Evaluation` says.
-    let chals: Vec<Vec<C::Scalar>> = proof
-        .prev_challenges
-        .iter()
-        .map(|p| p.chals.clone())
-        .collect();
-    let prev_digest = transcript::previous_challenges_digest(scalar_sponge.clone(), chals);
-    let tape = transcript::evaluation::<C::Scalar, T>(scalar_sponge.clone())
+/// The scalar-field half of the transcript, as `transcript::Evaluation`
+/// says: the scalar sponge over the base digest, the previous accumulators'
+/// challenges, `ft(zeta w)` and the evaluations; the 128-bit challenges `v`
+/// (the polynomial combiner, Pickles' `xi`) and `u` (the point combiner,
+/// Pickles' `r`).
+#[must_use]
+pub fn scalar_transcript<F, T>(
+    scalar_sponge: &T,
+    digest: F,
+    prev_challenges: &[Vec<F>],
+    ft_eval1: F,
+    evals: &ProofEvaluations<F>,
+) -> (ScalarChallenge<F>, ScalarChallenge<F>)
+where
+    F: PrimeField,
+    T: Transcript<F> + Clone,
+{
+    let prev_digest =
+        transcript::previous_challenges_digest(scalar_sponge.clone(), prev_challenges.to_vec());
+    let tape = transcript::evaluation::<F, T>(scalar_sponge.clone())
         .statement(&Message::new(Scalar(digest)))
         .statement(&Message::new(Scalar(prev_digest)))
-        .receive(&Message::new(Scalar(proof.ft_eval1)))
-        .receive(&Message::new(e.clone()));
+        .receive(&Message::new(Scalar(ft_eval1)))
+        .receive(&Message::new(evals.clone()));
     let (v_chal, tape) = tape.squeeze();
-    let v = v_chal.to_field(C::lambda());
     let (u_chal, tape) = tape.squeeze();
-    let u = u_chal.to_field(C::lambda());
     let _ = tape.into_inner();
+    (v_chal, u_chal)
+}
 
+/// The scalars of the linearization (Pickles' `derive_plonk` and
+/// `ft_eval0`): what the verifier computes from the evaluations and the
+/// challenges alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Linearization<F> {
+    /// `ft(zeta)`, as the verifier computes it.
+    pub ft_eval0: F,
+    /// The scalar of the last sigma's commitment in `ft`'s: `-z(zeta w)
+    /// beta alpha^21 zk(zeta) prod_i (gamma + beta s_i(zeta) + w_i(zeta))`.
+    pub perm: F,
+    /// `zeta^n`, the domain's size `n`.
+    pub zeta_to_domain_size: F,
+    /// `zeta^m`, the chunk size `m` (the SRS's length, for Pickles).
+    pub zeta_to_srs_length: F,
+}
+
+/// The linearization of `evals` at `challenges` against `index`, the gates'
+/// constraints given by `gates` (see the module documentation).
+///
+/// # Panics
+///
+/// If the index's domain is not one of the field's.
+pub fn linearization<C, G>(
+    index: &VerifierIndex<C>,
+    evals: &ProofEvaluations<C::Scalar>,
+    lookup: Option<&LookupEvaluations<C::Scalar>>,
+    challenges: &Challenges<C::Scalar>,
+    gates: &G,
+) -> Linearization<C::Scalar>
+where
+    C: Curve,
+    C::Scalar: TwoAdicField,
+    G: Gates<C::Scalar>,
+{
+    let Challenges {
+        alpha,
+        beta,
+        gamma,
+        zeta,
+        joint_combiner,
+    } = *challenges;
+    let d1 = domain(index);
+    let n = d1.size();
+    let m = index.max_poly_size;
+    let e = evals;
     let zeta1 = zeta.pow(n as u64);
     let zetaw = zeta * d1.generator();
     let zeta_m = zeta.pow(m as u64);
@@ -335,7 +549,8 @@ where
     let at = |p: &PointEvaluations<C::Scalar>| {
         (combine(&p.zeta, zeta_m), combine(&p.zeta_omega, zetaw_m))
     };
-    let lookup_count = lookup.map_or(0, |(li, _, _)| constraint_count(&li.lookup_info));
+    let lookup = index.lookup_index.as_ref().zip(lookup);
+    let lookup_count = lookup.map_or(0, |(li, _)| constraint_count(&li.lookup_info));
     let mut alphas = vec![C::Scalar::ONE; LOOKUP_ALPHA + lookup_count];
     for k in 1..alphas.len() {
         alphas[k] = alphas[k - 1] * alpha;
@@ -397,7 +612,7 @@ where
         ft_eval0 = ft_eval0 - at(s).0 * combined;
     }
     // The lookup constraints at the evaluations.
-    if let (Some((li, _, l)), Some(jc)) = (lookup, joint_combiner) {
+    if let (Some((li, l)), Some(jc)) = (lookup, joint_combiner) {
         let point = LookupPoint {
             witness: e.w.iter().map(|p| at(p).0).collect(),
             sorted: l.sorted.iter().map(at).collect(),
@@ -419,85 +634,90 @@ where
         }
     }
 
-    // ft's commitment: lin(scalar sigma_6) - (zeta^n - 1) lin(t).
-    let mut scalar = z.1 * beta * alpha0 * vanishing;
+    // The scalar of the last sigma in ft's commitment.
+    let mut perm = z.1 * beta * alpha0 * vanishing;
     for i in 0..PERMUTS - 1 {
-        scalar = scalar * (gamma + beta * at(&e.s[i]).0 + at(&e.w[i]).0);
+        perm = perm * (gamma + beta * at(&e.s[i]).0 + at(&e.w[i]).0);
     }
-    let scalar = -scalar;
-    let f_comm = chunk_commitment(&index.sigma_comm[PERMUTS - 1], zeta_m) * scalar;
-    let ft_comm = f_comm - chunk_commitment(&proof.t_comm, zeta_m) * zeta1m1;
+    Linearization {
+        ft_eval0,
+        perm: -perm,
+        zeta_to_domain_size: zeta1,
+        zeta_to_srs_length: zeta_m,
+    }
+}
 
-    let mut evaluations: Vec<Claim<C>> = proof
-        .prev_challenges
-        .iter()
-        .map(|previous| {
-            let comm = PolyComm {
-                chunks: vec![previous.comm],
-            };
-            (
-                comm,
-                [
-                    vec![b_poly(&previous.chals, zeta)],
-                    vec![b_poly(&previous.chals, zetaw)],
-                ],
-            )
-        })
-        .collect();
-    evaluations.push((public_comm.clone(), pair(&e.public)));
-    evaluations.push((
-        PolyComm {
-            chunks: vec![ft_comm],
-        },
-        [vec![ft_eval0], vec![proof.ft_eval1]],
-    ));
-    evaluations.push((proof.z_comm.clone(), pair(&e.z)));
-    for (c, p) in [
-        (&index.generic_comm, &e.generic_selector),
-        (&index.psm_comm, &e.poseidon_selector),
-        (&index.complete_add_comm, &e.complete_add_selector),
-        (&index.mul_comm, &e.mul_selector),
-        (&index.emul_comm, &e.emul_selector),
-        (&index.endomul_scalar_comm, &e.endomul_scalar_selector),
+/// `ft`'s commitment from the scalars of the linearization: `perm
+/// sigma_6(zeta^m) - (zeta^n - 1) t(zeta^m)`, each chunked commitment
+/// combined by powers of `zeta^m` (Pickles' `ft_comm`).
+#[must_use]
+pub fn ft_comm<C>(
+    index: &VerifierIndex<C>,
+    t_comm: &PolyComm<C>,
+    perm: C::Scalar,
+    zeta_to_srs_length: C::Scalar,
+    zeta_to_domain_size: C::Scalar,
+) -> Projective<C>
+where
+    C: Curve,
+{
+    let sigma = chunk_commitment(&index.sigma_comm[PERMUTS - 1], zeta_to_srs_length);
+    let t = chunk_commitment(t_comm, zeta_to_srs_length);
+    sigma * perm - t * (zeta_to_domain_size - C::Scalar::ONE)
+}
+
+/// The commitments of the opening, in its order: the previous
+/// accumulators' `sg`, the public commitment, `ft`'s, `z`, the six
+/// selectors, the witness, the coefficients, the sigmas but the last, the
+/// optional selectors, then with lookups the sorted columns, the
+/// aggregation, the joint table (Kimchi's `combine_table`), the runtime
+/// table and its selector, and the lookup selectors.
+#[must_use]
+pub fn commitments<C>(
+    index: &VerifierIndex<C>,
+    proof: &ProverProof<C>,
+    public_comm: &PolyComm<C>,
+    ft_comm: Projective<C>,
+    joint_combiner: Option<C::Scalar>,
+) -> Vec<PolyComm<C>>
+where
+    C: Curve,
+{
+    let one = |p: Projective<C>| PolyComm { chunks: vec![p] };
+    let mut comms: Vec<PolyComm<C>> = proof.prev_challenges.iter().map(|p| one(p.comm)).collect();
+    comms.push(public_comm.clone());
+    comms.push(one(ft_comm));
+    comms.push(proof.z_comm.clone());
+    for c in [
+        &index.generic_comm,
+        &index.psm_comm,
+        &index.complete_add_comm,
+        &index.mul_comm,
+        &index.emul_comm,
+        &index.endomul_scalar_comm,
     ] {
-        evaluations.push((c.clone(), pair(p)));
+        comms.push(c.clone());
     }
-    for (c, p) in proof.w_comm.iter().zip(&e.w) {
-        evaluations.push((c.clone(), pair(p)));
-    }
-    for (c, p) in index.coefficients_comm.iter().zip(&e.coefficients) {
-        evaluations.push((c.clone(), pair(p)));
-    }
-    for (c, p) in index.sigma_comm.iter().zip(&e.s) {
-        evaluations.push((c.clone(), pair(p)));
-    }
-    for (typ, comm) in [
-        (GateType::RangeCheck0, &index.range_check0_comm),
-        (GateType::RangeCheck1, &index.range_check1_comm),
-        (GateType::ForeignFieldAdd, &index.foreign_field_add_comm),
-        (GateType::ForeignFieldMul, &index.foreign_field_mul_comm),
-        (GateType::Xor16, &index.xor_comm),
-        (GateType::Rot64, &index.rot_comm),
-    ] {
-        if let Some(c) = comm {
-            let p = selector(typ).ok_or(VerifyError::IncorrectLength)?;
-            evaluations.push((c.clone(), pair(p)));
+    comms.extend(proof.w_comm.iter().cloned());
+    comms.extend(index.coefficients_comm.iter().cloned());
+    comms.extend(index.sigma_comm[..PERMUTS - 1].iter().cloned());
+    for (_, c) in optional_selectors(index) {
+        if let Some(c) = c {
+            comms.push(c.clone());
         }
     }
-    if let (Some((li, comms, l)), Some(jc)) = (lookup, joint_combiner) {
-        for (c, p) in comms.sorted.iter().zip(&l.sorted) {
-            evaluations.push((c.clone(), pair(p)));
-        }
-        evaluations.push((comms.aggreg.clone(), pair(&l.aggregation)));
+    if let (Some(li), Some(lc), Some(jc)) = (&index.lookup_index, &proof.lookup, joint_combiner) {
+        comms.extend(lc.sorted.iter().cloned());
+        comms.push(lc.aggreg.clone());
         // Kimchi's combine_table: columns by powers of jc, the ids by
         // jc^max_joint_size, the runtime table as the second column.
         let tid = jc.pow(li.lookup_info.max_joint_size as u64);
-        let chunks = li
+        let n = li
             .lookup_table
             .first()
-            .map_or(num_chunks, |c| c.chunks.len());
+            .map_or(chunks(index), |c| c.chunks.len());
         let table = PolyComm {
-            chunks: (0..chunks)
+            chunks: (0..n)
                 .map(|k| {
                     let mut acc = Projective::<C>::identity();
                     let mut power = C::Scalar::ONE;
@@ -508,54 +728,205 @@ where
                     if let Some(ids) = &li.table_ids {
                         acc = acc + ids.chunks[k] * tid;
                     }
-                    if let Some(r) = &comms.runtime {
+                    if let Some(r) = &lc.runtime {
                         acc = acc + r.chunks[k] * jc;
                     }
                     acc
                 })
                 .collect(),
         };
-        evaluations.push((table, pair(&l.table)));
-        if let (Some(c), Some(p)) = (&comms.runtime, &l.runtime_table) {
-            evaluations.push((c.clone(), pair(p)));
+        comms.push(table);
+        if let Some(c) = &lc.runtime {
+            comms.push(c.clone());
         }
-        if let (Some(c), Some(p)) = (&li.runtime_tables_selector, &l.runtime_selector) {
-            evaluations.push((c.clone(), pair(p)));
+        if let Some(c) = &li.runtime_tables_selector {
+            comms.push(c.clone());
         }
-        let mut selectors = l.selectors.iter();
-        for c in li.lookup_selectors.iter().flatten() {
-            let (_, p) = selectors.next().ok_or(VerifyError::LookupMismatch)?;
-            evaluations.push((c.clone(), pair(p)));
-        }
+        comms.extend(li.lookup_selectors.iter().flatten().cloned());
     }
-    // Kimchi's combined_inner_product: chunk i of each polynomial at the
-    // next power of v, its two points combined by u.
-    let mut combined_inner_product = C::Scalar::ZERO;
-    let mut scale = C::Scalar::ONE;
-    for (_, [at_zeta, at_zetaw]) in &evaluations {
+    comms
+}
+
+/// The evaluations of the opening, in the order of [`commitments`]: each
+/// polynomial's at `zeta` and at `zeta w`, one per chunk; the previous
+/// accumulators' are their challenge polynomials' at the two points, and
+/// `ft`'s are `ft_evals`.
+#[must_use]
+pub fn evaluations<F>(
+    evals: &ProofEvaluations<F>,
+    prev_challenges: &[Vec<F>],
+    ft_evals: [F; 2],
+    points: [F; 2],
+) -> Vec<[Vec<F>; 2]>
+where
+    F: Field,
+{
+    let e = evals;
+    let mut out: Vec<[Vec<F>; 2]> = prev_challenges
+        .iter()
+        .map(|chals| {
+            [
+                vec![b_poly(chals, points[0])],
+                vec![b_poly(chals, points[1])],
+            ]
+        })
+        .collect();
+    out.push(pair(&e.public));
+    out.push([vec![ft_evals[0]], vec![ft_evals[1]]]);
+    out.push(pair(&e.z));
+    for p in [
+        &e.generic_selector,
+        &e.poseidon_selector,
+        &e.complete_add_selector,
+        &e.mul_selector,
+        &e.emul_selector,
+        &e.endomul_scalar_selector,
+    ] {
+        out.push(pair(p));
+    }
+    out.extend(e.w.iter().map(pair));
+    out.extend(e.coefficients.iter().map(pair));
+    out.extend(e.s.iter().map(pair));
+    out.extend(e.optional_selectors.iter().map(|(_, p)| pair(p)));
+    if let Some(l) = &e.lookup {
+        out.extend(l.sorted.iter().map(pair));
+        out.push(pair(&l.aggregation));
+        out.push(pair(&l.table));
+        for p in [&l.runtime_table, &l.runtime_selector]
+            .into_iter()
+            .flatten()
+        {
+            out.push(pair(p));
+        }
+        out.extend(l.selectors.iter().map(|(_, p)| pair(p)));
+    }
+    out
+}
+
+/// Kimchi's `combined_inner_product`: chunk `i` of each polynomial at the
+/// next power of `xi`, its two points combined by `r`.
+#[must_use]
+pub fn combined_inner_product<F>(evaluations: &[[Vec<F>; 2]], xi: F, r: F) -> F
+where
+    F: Field,
+{
+    let mut combined = F::ZERO;
+    let mut scale = F::ONE;
+    for [at_zeta, at_zetaw] in evaluations {
         for (a, b) in at_zeta.iter().zip(at_zetaw) {
-            combined_inner_product = combined_inner_product + scale * (*a + u * *b);
-            scale = scale * v;
+            combined = combined + scale * (*a + r * *b);
+            scale = scale * xi;
         }
     }
+    combined
+}
+
+/// `sum_i xi^i c_i` over every chunk of `commitments`: the commitment of
+/// the polynomial the opening proves, in the order of its chunks.
+#[must_use]
+pub fn combined_commitment<C>(commitments: &[PolyComm<C>], xi: C::Scalar) -> Projective<C>
+where
+    C: Curve,
+{
+    let mut combined = Projective::<C>::identity();
+    let mut scale = C::Scalar::ONE;
+    for comm in commitments {
+        for chunk in &comm.chunks {
+            combined = combined + *chunk * scale;
+            scale = scale * xi;
+        }
+    }
+    combined
+}
+
+/// The transcript of `proof` against `index` and `public`, the gates'
+/// constraints given by `gates` (see the module documentation): the
+/// base-field half ([`base_transcript`]), then the scalar-field half
+/// ([`scalar_transcript`]) and the linearization.
+///
+/// # Errors
+///
+/// A [`VerifyError`] for a proof of the wrong shape.
+///
+/// # Panics
+///
+/// If the index's domain is not one of the field's.
+pub fn oracles<C, S, T, G>(
+    index: &VerifierIndex<C>,
+    srs: &Srs<C>,
+    proof: &ProverProof<C>,
+    public: &[C::Scalar],
+    gates: &G,
+    sponges: (&S, &T),
+) -> Result<Oracles<C, S>, VerifyError>
+where
+    C: Glv,
+    C::Base: PrimeField,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    T: Transcript<C::Scalar> + Clone,
+    G: Gates<C::Scalar>,
+{
+    let (base_sponge, scalar_sponge) = sponges;
+    let base = base_transcript(index, srs, proof, public, base_sponge)?;
+    let lookup = evaluation_shape(index, &proof.evals)?;
+    let prev: Vec<Vec<C::Scalar>> = proof
+        .prev_challenges
+        .iter()
+        .map(|p| p.chals.clone())
+        .collect();
+    let (v_chal, u_chal) = scalar_transcript(
+        scalar_sponge,
+        base.digest,
+        &prev,
+        proof.ft_eval1,
+        &proof.evals,
+    );
+    let lambda = C::lambda();
+    let (v, u) = (v_chal.to_field(lambda), u_chal.to_field(lambda));
+    let challenges = base.challenges();
+    let lin = linearization(index, &proof.evals, lookup, &challenges, gates);
+    let ft = ft_comm(
+        index,
+        &proof.t_comm,
+        lin.perm,
+        lin.zeta_to_srs_length,
+        lin.zeta_to_domain_size,
+    );
+    let zeta = challenges.zeta;
+    let zetaw = zeta * domain(index).generator();
+    let comms = commitments(
+        index,
+        proof,
+        &base.public_comm,
+        ft,
+        challenges.joint_combiner,
+    );
+    let evals = evaluations(
+        &proof.evals,
+        &prev,
+        [lin.ft_eval0, proof.ft_eval1],
+        [zeta, zetaw],
+    );
+    let combined = combined_inner_product(&evals, v, u);
     Ok(Oracles {
-        beta,
-        gamma,
-        alpha_chal,
-        alpha,
-        zeta_chal,
+        beta: base.beta,
+        gamma: base.gamma,
+        alpha_chal: base.alpha_chal,
+        alpha: challenges.alpha,
+        zeta_chal: base.zeta_chal,
         zeta,
         zeta_omega: zetaw,
         v_chal,
         v,
         u_chal,
         u,
-        ft_eval0,
-        combined_inner_product,
-        digest,
-        public_comm,
-        fq_sponge,
-        evaluations,
+        ft_eval0: lin.ft_eval0,
+        combined_inner_product: combined,
+        digest: base.digest,
+        public_comm: base.public_comm,
+        fq_sponge: base.fq_sponge,
+        evaluations: comms.into_iter().zip(evals).collect(),
     })
 }
 
@@ -577,14 +948,8 @@ where
         return Err(VerifyError::IncorrectRounds);
     }
     // C: every chunk at the next power of v.
-    let mut combined = Projective::<C>::identity();
-    let mut scale = C::Scalar::ONE;
-    for (comm, _) in &oracles.evaluations {
-        for chunk in &comm.chunks {
-            combined = combined + *chunk * scale;
-            scale = scale * oracles.v;
-        }
-    }
+    let comms: Vec<PolyComm<C>> = oracles.evaluations.iter().map(|(c, _)| c.clone()).collect();
+    let combined = combined_commitment(&comms, oracles.v);
     let points = [oracles.zeta, oracles.zeta_omega];
     let statement = Statement {
         commitment: &combined,

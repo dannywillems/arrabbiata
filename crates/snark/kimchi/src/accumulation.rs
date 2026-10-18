@@ -40,6 +40,13 @@
 //! Both decide the same statements: the circuit satisfied and every
 //! previous accumulator valid.
 //!
+//! [`KimchiSuccinct`] itself factors through Pickles' deferred values
+//! ([`crate::deferred`]): [`Factored`] `= GroupHalf ; ScalarHalf :
+//! Satisfied -> Unfinalized -> Accumulated`, where [`Unfinalized`] is the
+//! relation of a proof whose group half is checked and whose deferred
+//! values are not yet. The composite outputs the accumulator
+//! [`KimchiSuccinct`] outputs, on the same transcript.
+//!
 //! The reduction's transcript (over the scalar field) is the composition's:
 //! Kimchi's Fiat-Shamir runs on its own two sponges, and the reduction
 //! absorbs its output accumulator into the composition's transcript, so
@@ -58,12 +65,17 @@ use arrabbiata_transcript::{Absorb, Transcript};
 
 use crate::{
     constraints::COLUMNS,
+    deferred::{
+        Deferred, DeferredError, DeferredValues, Evaluations, expand_deferred, group_half,
+        scalar_half,
+    },
     gates::Gates,
     lookup::RuntimeTable,
     prover::{self, ProverIndex, ProverProof, prove},
     rng::{Arkworks, Sampler, SplitMix64},
     srs::Srs,
     verifier::{VerifyError, succinct},
+    verifier_index::VerifierIndex,
 };
 
 /// The IPA on Kimchi's SRS: its generators for the coefficients and its
@@ -116,6 +128,8 @@ pub enum Error {
     Verify(VerifyError),
     /// The proof carries other previous accumulators than the statement.
     PrevChallenges,
+    /// A half of the factored verifier refuses.
+    Deferred(DeferredError),
 }
 
 impl fmt::Display for Error {
@@ -126,6 +140,7 @@ impl fmt::Display for Error {
             Self::Prove(e) => write!(f, "prover: {e}"),
             Self::Verify(e) => write!(f, "verifier: {e}"),
             Self::PrevChallenges => write!(f, "the proof carries other previous accumulators"),
+            Self::Deferred(e) => write!(f, "deferred: {e}"),
         }
     }
 }
@@ -405,4 +420,299 @@ where
         ),
         Then(Concat(accumulated), Fold::new(ipa)),
     )
+}
+
+/// The relation of a proof whose group half is checked: an instance is the
+/// deferred values with the base digest, the previous accumulators and
+/// `sg` ([`Deferred`]), a witness the proof's evaluations; the pair is in
+/// it when the scalar half accepts them and the accumulator it leaves, and
+/// every previous one, is decided true.
+#[derive(Debug)]
+pub struct Unfinalized<'a, C, G, T>
+where
+    C: Glv,
+{
+    index: &'a VerifierIndex<C>,
+    gates: &'a G,
+    scalar: &'a T,
+    ipa: &'a Ipa<C, T>,
+}
+
+impl<C, G, T> Clone for Unfinalized<'_, C, G, T>
+where
+    C: Glv,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C, G, T> Copy for Unfinalized<'_, C, G, T> where C: Glv {}
+
+impl<C, G, T> Relation for Unfinalized<'_, C, G, T>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    C::Scalar: TwoAdicField,
+    T: Transcript<C::Scalar> + Clone,
+    G: Gates<C::Scalar>,
+{
+    type Instance = Deferred<C>;
+    type Witness = Evaluations<C::Scalar>;
+    type Error = Error;
+
+    fn check(&self, deferred: &Deferred<C>, opened: &Evaluations<C::Scalar>) -> Result<(), Error> {
+        for (i, previous) in deferred.prev_challenges.iter().enumerate() {
+            if !self.ipa.decide(previous) {
+                return Err(Error::PreviousAccumulator(i));
+            }
+        }
+        let accumulator = scalar_half(self.index, deferred, opened, self.gates, self.scalar)
+            .map_err(Error::Deferred)?;
+        if self.ipa.decide(&accumulator) {
+            Ok(())
+        } else {
+            Err(Error::Verify(VerifyError::OpeningProof))
+        }
+    }
+}
+
+/// `Satisfied -> Unfinalized`: Kimchi's prover, and the group half of its
+/// succinct verifier on the deferred values the prover sends with the
+/// proof. The prover's randomness is the sampler it holds.
+#[derive(Debug)]
+pub struct GroupHalf<'a, C, G, S, T, R>
+where
+    C: Glv,
+{
+    relation: Satisfied<'a, C, G, S, T>,
+    rng: RefCell<R>,
+}
+
+impl<'a, C, G, S, T, R> GroupHalf<'a, C, G, S, T, R>
+where
+    C: Glv,
+{
+    /// The reduction for `relation`, the prover drawing from `rng`.
+    #[must_use]
+    pub const fn new(relation: Satisfied<'a, C, G, S, T>, rng: R) -> Self {
+        Self {
+            relation,
+            rng: RefCell::new(rng),
+        }
+    }
+}
+
+impl<'a, C, G, S, T, R> GroupHalf<'a, C, G, S, T, R>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    T: Transcript<C::Scalar> + Clone,
+    G: Gates<C::Scalar>,
+{
+    /// The group half on `proof` and `values`, for `statement`.
+    fn check(
+        &self,
+        statement: &Statement<C>,
+        proof: &ProverProof<C>,
+        values: &DeferredValues<C::Scalar>,
+    ) -> Result<Deferred<C>, Error> {
+        if proof.prev_challenges != statement.prev_challenges {
+            return Err(Error::PrevChallenges);
+        }
+        let r = &self.relation;
+        group_half(
+            &r.index.verifier_index,
+            &r.index.srs,
+            proof,
+            &statement.public,
+            values,
+            r.base,
+        )
+        .map_err(Error::Deferred)
+    }
+}
+
+impl<'a, C, G, S, T, R> Reduction<C::Scalar> for GroupHalf<'a, C, G, S, T, R>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    C::Scalar: TwoAdicField,
+    S: Transcript<C::Base> + Clone,
+    T: Transcript<C::Scalar> + Clone,
+    G: Gates<C::Scalar>,
+    R: Sampler<C::Scalar>,
+{
+    type Source = Satisfied<'a, C, G, S, T>;
+    type Target = Unfinalized<'a, C, G, T>;
+    type Proof = (ProverProof<C>, DeferredValues<C::Scalar>);
+    type Error = Error;
+
+    fn source(&self) -> Self::Source {
+        self.relation
+    }
+
+    fn target(&self) -> Self::Target {
+        let r = &self.relation;
+        Unfinalized {
+            index: &r.index.verifier_index,
+            gates: r.gates,
+            scalar: r.scalar,
+            ipa: r.ipa,
+        }
+    }
+
+    fn prove<X>(
+        &self,
+        transcript: X,
+        statement: &Statement<C>,
+        assignment: &Assignment<C::Scalar>,
+    ) -> Result<OutputOf<C::Scalar, Self, X>, Error>
+    where
+        X: Transcript<C::Scalar>,
+    {
+        let r = &self.relation;
+        let proof = prove(
+            r.index,
+            assignment.columns.clone(),
+            &assignment.runtime_tables,
+            &statement.prev_challenges,
+            r.gates,
+            (r.base, r.scalar),
+            &mut *self.rng.borrow_mut(),
+        )
+        .map_err(Error::Prove)?;
+        let values = expand_deferred(
+            &r.index.verifier_index,
+            &r.index.srs,
+            &proof,
+            &statement.public,
+            r.gates,
+            (r.base, r.scalar),
+        )
+        .map_err(Error::Verify)?;
+        let instance = self.check(statement, &proof, &values)?;
+        Ok(Output {
+            instance,
+            witness: Evaluations::from(&proof),
+            proof: (proof, values),
+            transcript,
+        })
+    }
+
+    fn verify<X>(
+        &self,
+        transcript: X,
+        statement: &Statement<C>,
+        (proof, values): (ProverProof<C>, DeferredValues<C::Scalar>),
+    ) -> Result<(Deferred<C>, X), Error>
+    where
+        X: Transcript<C::Scalar>,
+    {
+        let instance = self.check(statement, &proof, &values)?;
+        Ok((instance, transcript))
+    }
+}
+
+/// `Unfinalized -> Accumulated`: the scalar half, checking every deferred
+/// value on the evaluations the prover sends, then the accumulator it
+/// leaves, absorbed into the transcript as [`KimchiSuccinct`] absorbs its
+/// own.
+#[derive(Debug)]
+pub struct ScalarHalf<'a, C, G, T>
+where
+    C: Glv,
+{
+    relation: Unfinalized<'a, C, G, T>,
+}
+
+impl<C, G, T> Clone for ScalarHalf<'_, C, G, T>
+where
+    C: Glv,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C, G, T> Copy for ScalarHalf<'_, C, G, T> where C: Glv {}
+
+impl<'a, C, G, T> Reduction<C::Scalar> for ScalarHalf<'a, C, G, T>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    C::Scalar: TwoAdicField,
+    T: Transcript<C::Scalar> + Clone,
+    G: Gates<C::Scalar>,
+{
+    type Source = Unfinalized<'a, C, G, T>;
+    type Target = Accumulated<'a, C::Scalar, Ipa<C, T>>;
+    type Proof = Evaluations<C::Scalar>;
+    type Error = Error;
+
+    fn source(&self) -> Self::Source {
+        self.relation
+    }
+
+    fn target(&self) -> Self::Target {
+        Accumulated::new(self.relation.ipa)
+    }
+
+    fn prove<X>(
+        &self,
+        transcript: X,
+        deferred: &Deferred<C>,
+        opened: &Evaluations<C::Scalar>,
+    ) -> Result<OutputOf<C::Scalar, Self, X>, Error>
+    where
+        X: Transcript<C::Scalar>,
+    {
+        let (instance, transcript) = self.verify(transcript, deferred, opened.clone())?;
+        Ok(Output {
+            instance,
+            witness: (),
+            proof: opened.clone(),
+            transcript,
+        })
+    }
+
+    fn verify<X>(
+        &self,
+        mut transcript: X,
+        deferred: &Deferred<C>,
+        opened: Evaluations<C::Scalar>,
+    ) -> Result<(RecursionChallenge<C>, X), Error>
+    where
+        X: Transcript<C::Scalar>,
+    {
+        let r = &self.relation;
+        let accumulator =
+            scalar_half(r.index, deferred, &opened, r.gates, r.scalar).map_err(Error::Deferred)?;
+        accumulator.absorb_into(&mut transcript);
+        Ok((accumulator, transcript))
+    }
+}
+
+/// Kimchi's succinct verifier factored through the deferred values:
+/// `GroupHalf ; ScalarHalf`.
+pub type Factored<'a, C, G, S, T, R> = Then<GroupHalf<'a, C, G, S, T, R>, ScalarHalf<'a, C, G, T>>;
+
+/// The composite [`Factored`] over `group`'s relation.
+#[must_use]
+pub fn factored<'a, C, G, S, T, R>(
+    group: GroupHalf<'a, C, G, S, T, R>,
+) -> Factored<'a, C, G, S, T, R>
+where
+    C: Glv,
+{
+    let r = &group.relation;
+    let relation = Unfinalized {
+        index: &r.index.verifier_index,
+        gates: r.gates,
+        scalar: r.scalar,
+        ipa: r.ipa,
+    };
+    Then(group, ScalarHalf { relation })
 }
