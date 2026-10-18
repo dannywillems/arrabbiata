@@ -1,0 +1,25 @@
+[package]
+name = "arrabbiata-pickles"
+description = "Pickles, Mina's recursion over Kimchi, from its structure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+arrabbiata-curve = { workspace = true }
+arrabbiata-field = { workspace = true }
+arrabbiata-gadget = { workspace = true }
+arrabbiata-kimchi = { workspace = true }
+arrabbiata-kimchi-gadgets = { workspace = true }
+arrabbiata-poly = { workspace = true }
+
+[dev-dependencies]
+arrabbiata-ipa = { workspace = true }
+arrabbiata-pasta = { workspace = true }
+arrabbiata-poseidon = { workspace = true }
+
+[lints]
+workspace = true

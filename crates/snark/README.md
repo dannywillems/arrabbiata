@@ -11,3 +11,10 @@ polynomial commitment scheme on the typed transcript.
   lookups (plookup and LogUp) of polynomial queries into fixed tables. The
   circuits of `plonk` embed into it, and so does the relaxation the decider
   of `accumulation/plonkish` proves.
+- `kimchi` is Kimchi (o1-labs/proof-systems), checked equal to Kimchi's
+  proofs and bytes, with its verifier as a reduction to Halo's accumulation
+  and factored into the group half and the scalar half Pickles defers
+  between.
+- `pickles` is Pickles, Mina's recursion over Kimchi, built from that
+  factorization: so far the scalar half written once over the field
+  signature, natively and as a Kimchi circuit.

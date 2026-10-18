@@ -240,6 +240,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-pickles"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-curve",
+ "arrabbiata-field",
+ "arrabbiata-gadget",
+ "arrabbiata-ipa",
+ "arrabbiata-kimchi",
+ "arrabbiata-kimchi-gadgets",
+ "arrabbiata-pasta",
+ "arrabbiata-poly",
+ "arrabbiata-poseidon",
+]
+
+[[package]]
 name = "arrabbiata-plonk"
 version = "0.0.0"
 dependencies = [
