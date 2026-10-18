@@ -39,8 +39,8 @@ use core::{cell::RefCell, marker::PhantomData};
 use alloc::vec::Vec;
 
 use arrabbiata_curve::{Projective, glv::Glv};
-use arrabbiata_field::{Field, FieldModel, PrimeField};
-use arrabbiata_poseidon::kimchi::{KimchiDuplex, WIDTH};
+use arrabbiata_field::{Field, FieldModel, Native, PrimeField};
+use arrabbiata_poseidon::kimchi::WIDTH;
 use arrabbiata_transcript::{
     PermutationIn, Transcript,
     typed::{Branch, Draw, End, Label, Peek, Send, Squeeze, Statement, Tape, Write},
@@ -48,7 +48,7 @@ use arrabbiata_transcript::{
 
 use crate::{
     constraints::COLUMNS,
-    oracle::{ChallengeModel, FqSponge, FrSponge, ScalarChallenge},
+    oracle::{ChallengeModel, Duplexed, FqSponge, FrSponge, ScalarChallenge, SpongeIn, Value},
     prover::ProofEvaluations,
     srs::PolyComm,
 };
@@ -286,66 +286,71 @@ where
     }
 }
 
-impl<F, S, Name> Write<FrSponge<F, S>> for Message<Scalar<F>, Name>
+impl<F, S, H, Name> Write<FrSponge<F, S, H>> for Message<Scalar<Value<F, H>>, Name>
 where
-    F: PrimeField,
-    S: Transcript<F>,
+    F: Field,
+    H: SpongeIn<F, S>,
 {
-    fn write(&self, sponge: &mut FrSponge<F, S>) {
-        sponge.absorb(self.0.0);
+    fn write(&self, sponge: &mut FrSponge<F, S, H>) {
+        sponge.absorb_value(&self.0.0);
     }
 }
 
-impl<F, S, Name> Write<FrSponge<F, S>> for Message<Vec<Vec<F>>, Name>
+impl<F, S, H, Name> Write<FrSponge<F, S, H>> for Message<Vec<Vec<Value<F, H>>>, Name>
 where
-    F: PrimeField,
-    S: Transcript<F>,
+    F: Field,
+    H: SpongeIn<F, S>,
 {
-    fn write(&self, sponge: &mut FrSponge<F, S>) {
+    fn write(&self, sponge: &mut FrSponge<F, S, H>) {
         for chals in &self.0 {
-            sponge.absorb_multiple(chals);
+            for c in chals {
+                sponge.absorb_value(c);
+            }
         }
     }
 }
 
-impl<F, S, Name> Write<FrSponge<F, S>> for Message<ProofEvaluations<F>, Name>
+impl<F, S, H, Name> Write<FrSponge<F, S, H>> for Message<ProofEvaluations<Value<F, H>>, Name>
 where
-    F: PrimeField,
-    S: Transcript<F>,
+    F: Field,
+    H: SpongeIn<F, S>,
 {
-    fn write(&self, sponge: &mut FrSponge<F, S>) {
-        sponge.absorb_multiple(&self.0.public.zeta);
-        sponge.absorb_multiple(&self.0.public.zeta_omega);
-        for e in self.0.absorbed() {
-            sponge.absorb_multiple(&e.zeta);
-            sponge.absorb_multiple(&e.zeta_omega);
+    fn write(&self, sponge: &mut FrSponge<F, S, H>) {
+        let e = &self.0;
+        for p in core::iter::once(&e.public).chain(e.absorbed()) {
+            for v in p.zeta.iter().chain(&p.zeta_omega) {
+                sponge.absorb_value(v);
+            }
         }
     }
 }
 
-/// A 128-bit challenge of the scalar-field sponge.
-impl<F, S, Name> Draw<FrSponge<F, S>> for Challenge<Name>
+/// A 128-bit challenge of the scalar-field sponge: the lowest 128 bits of
+/// a squeeze, in whichever model the sponge computes.
+impl<F, S, H, Name> Draw<FrSponge<F, S, H>> for Challenge<Name>
 where
-    F: PrimeField,
-    S: Transcript<F>,
+    F: Field,
+    H: SpongeIn<F, S>,
+    H::Model: ChallengeModel<F>,
 {
-    type Value = ScalarChallenge<F>;
+    type Value = ScalarChallenge<Value<F, H>>;
 
-    fn draw(sponge: &mut FrSponge<F, S>) -> ScalarChallenge<F> {
-        sponge.challenge()
+    fn draw(sponge: &mut FrSponge<F, S, H>) -> Self::Value {
+        sponge.challenge_value()
     }
 }
 
-/// The scalar-field sponge's digest.
-impl<F, S, Name> Draw<FrSponge<F, S>> for DigestOf<Name>
+/// The scalar-field sponge's digest: a squeeze of a copy.
+impl<F, S, H, Name> Draw<FrSponge<F, S, H>> for DigestOf<Name>
 where
-    F: PrimeField,
-    S: Transcript<F> + Clone,
+    F: Field,
+    H: SpongeIn<F, S>,
+    S: Clone,
 {
-    type Value = F;
+    type Value = Value<F, H>;
 
-    fn draw(sponge: &mut FrSponge<F, S>) -> F {
-        sponge.clone().digest()
+    fn draw(sponge: &mut FrSponge<F, S, H>) -> Self::Value {
+        sponge.clone().squeeze_value()
     }
 }
 
@@ -428,8 +433,12 @@ pub type Evaluation<F> = Statement<
 /// A tape of the base-field sponge at the step `P`.
 pub type FqTape<C, S, P> = Tape<<C as arrabbiata_curve::Curve>::Base, FqSponge<C, S>, P>;
 
-/// A tape of the scalar-field sponge at the step `P`.
-pub type FrTape<F, S, P> = Tape<F, FrSponge<F, S>, P>;
+/// A tape of the scalar-field sponge at the step `P`, in the field itself.
+pub type FrTape<F, S, P> = FrTapeOn<F, S, Native, P>;
+
+/// A tape of the scalar-field sponge in the model `H` handles, at the step
+/// `P`.
+pub type FrTapeOn<F, S, H, P> = Tape<F, FrSponge<F, S, H>, P>;
 
 /// The base-field sponge's tape at the start of [`Piop`].
 #[must_use]
@@ -449,7 +458,7 @@ where
     F: PrimeField,
     S: Transcript<F>,
 {
-    Tape::undescribed(FrSponge::new(sponge))
+    evaluation_on(FrSponge::new(sponge))
 }
 
 /// The digest of the previous accumulators' challenges, on a fresh
@@ -460,149 +469,52 @@ where
     F: PrimeField,
     S: Transcript<F> + Clone,
 {
-    let tape: FrTape<F, S, PreviousChallengesDigest<F>> = Tape::undescribed(FrSponge::new(sponge));
+    previous_challenges_digest_on(FrSponge::new(sponge), challenges)
+}
+
+/// The tape of `sponge` at the start of [`Evaluation`], at the carrier of
+/// its model: the one definition [`evaluation`] and [`evaluation_in`] read.
+#[must_use]
+pub fn evaluation_on<F, S, H>(
+    sponge: FrSponge<F, S, H>,
+) -> FrTapeOn<F, S, H, Evaluation<Value<F, H>>>
+where
+    F: Field,
+    H: SpongeIn<F, S>,
+{
+    Tape::undescribed(sponge)
+}
+
+/// The digest of the previous accumulators' challenges on `sponge`, fresh:
+/// the one definition [`previous_challenges_digest`] and
+/// [`previous_challenges_digest_in`] read.
+pub fn previous_challenges_digest_on<F, S, H>(
+    sponge: FrSponge<F, S, H>,
+    challenges: Vec<Vec<Value<F, H>>>,
+) -> Value<F, H>
+where
+    F: Field,
+    H: SpongeIn<F, S>,
+    S: Clone,
+{
+    let tape: FrTapeOn<F, S, H, PreviousChallengesDigest<Value<F, H>>> = Tape::undescribed(sponge);
     let tape = tape.statement(&Message::new(challenges));
     let (digest, _) = tape.peek();
     digest
 }
 
-/// Kimchi's scalar-field sponge in a model of the field signature: the
-/// duplex of [`arrabbiata_poseidon::kimchi::KimchiDuplex`] over a
-/// permutation in the model, its challenges the lowest 128 bits of a squeeze
-/// ([`ChallengeModel`]). It writes and draws the same steps as
-/// [`FrSponge`], so the patterns of this module ([`Evaluation`],
-/// [`PreviousChallengesDigest`]) type it too: a verifier in a circuit runs
-/// the transcript the native verifier runs, at the same type.
+/// Kimchi's scalar-field sponge in a model of the field signature:
+/// [`FrSponge`] over Kimchi's duplex ([`Duplexed`]) over a permutation in
+/// the model, its challenges the lowest 128 bits of a squeeze
+/// ([`ChallengeModel`]). It is the native sponge at another model, so the
+/// patterns of this module ([`Evaluation`], [`PreviousChallengesDigest`])
+/// and their messages' writers are the same: a verifier in a circuit runs
+/// the transcript the native verifier runs, by the same definitions.
 ///
 /// The model is shared ([`RefCell`]), so the sponge is a value a tape can
 /// hold and copy (a [`Peek`] draws from a copy).
-#[derive(Debug)]
-pub struct FrSpongeIn<'m, F, M, P>
-where
-    F: Field,
-    M: FieldModel<F>,
-{
-    model: &'m RefCell<M>,
-    permutation: &'m P,
-    duplex: KimchiDuplex<M::Value>,
-    field: PhantomData<fn() -> F>,
-}
-
-impl<F, M, P> Clone for FrSpongeIn<'_, F, M, P>
-where
-    F: Field,
-    M: FieldModel<F>,
-{
-    fn clone(&self) -> Self {
-        Self {
-            model: self.model,
-            permutation: self.permutation,
-            duplex: self.duplex.clone(),
-            field: PhantomData,
-        }
-    }
-}
-
-impl<'m, F, M, P> FrSpongeIn<'m, F, M, P>
-where
-    F: Field,
-    M: FieldModel<F>,
-    P: PermutationIn<M, F, WIDTH>,
-{
-    /// A fresh sponge in `model`, over `permutation`.
-    pub fn new(model: &'m RefCell<M>, permutation: &'m P) -> Self {
-        let zero = model.borrow_mut().constant(F::ZERO);
-        Self {
-            model,
-            permutation,
-            duplex: KimchiDuplex::new(zero),
-            field: PhantomData,
-        }
-    }
-
-    /// Absorb `value`.
-    fn absorb(&mut self, value: &M::Value) {
-        let mut model = self.model.borrow_mut();
-        self.duplex.absorb(&mut *model, self.permutation, value);
-    }
-
-    /// Squeeze an element.
-    fn squeeze(&mut self) -> M::Value {
-        let mut model = self.model.borrow_mut();
-        self.duplex.squeeze(&mut *model, self.permutation)
-    }
-}
-
-impl<F, M, P, Name> Write<FrSpongeIn<'_, F, M, P>> for Message<Scalar<M::Value>, Name>
-where
-    F: Field,
-    M: FieldModel<F>,
-    P: PermutationIn<M, F, WIDTH>,
-{
-    fn write(&self, sponge: &mut FrSpongeIn<'_, F, M, P>) {
-        sponge.absorb(&self.0.0);
-    }
-}
-
-impl<F, M, P, Name> Write<FrSpongeIn<'_, F, M, P>> for Message<Vec<Vec<M::Value>>, Name>
-where
-    F: Field,
-    M: FieldModel<F>,
-    P: PermutationIn<M, F, WIDTH>,
-{
-    fn write(&self, sponge: &mut FrSpongeIn<'_, F, M, P>) {
-        for chals in &self.0 {
-            for c in chals {
-                sponge.absorb(c);
-            }
-        }
-    }
-}
-
-impl<F, M, P, Name> Write<FrSpongeIn<'_, F, M, P>> for Message<ProofEvaluations<M::Value>, Name>
-where
-    F: Field,
-    M: FieldModel<F>,
-    P: PermutationIn<M, F, WIDTH>,
-{
-    fn write(&self, sponge: &mut FrSpongeIn<'_, F, M, P>) {
-        let e = &self.0;
-        for p in core::iter::once(&e.public).chain(e.absorbed()) {
-            for v in p.zeta.iter().chain(&p.zeta_omega) {
-                sponge.absorb(v);
-            }
-        }
-    }
-}
-
-/// A 128-bit challenge of the scalar-field sponge in a model.
-impl<F, M, P, Name> Draw<FrSpongeIn<'_, F, M, P>> for Challenge<Name>
-where
-    F: Field,
-    M: ChallengeModel<F>,
-    P: PermutationIn<M, F, WIDTH>,
-{
-    type Value = M::Value;
-
-    fn draw(sponge: &mut FrSpongeIn<'_, F, M, P>) -> M::Value {
-        let x = sponge.squeeze();
-        sponge.model.borrow_mut().lowest_128_bits(&x)
-    }
-}
-
-/// The scalar-field sponge's digest in a model: a squeeze of a copy.
-impl<F, M, P, Name> Draw<FrSpongeIn<'_, F, M, P>> for DigestOf<Name>
-where
-    F: Field,
-    M: FieldModel<F>,
-    P: PermutationIn<M, F, WIDTH>,
-{
-    type Value = M::Value;
-
-    fn draw(sponge: &mut FrSpongeIn<'_, F, M, P>) -> M::Value {
-        sponge.clone().squeeze()
-    }
-}
+pub type FrSpongeIn<'m, F, M, P> =
+    FrSponge<F, Duplexed<'m, <M as FieldModel<F>>::Value, P>, &'m RefCell<M>>;
 
 /// A tape of the scalar-field sponge in a model, at the step `P`.
 pub type FrTapeIn<'m, F, M, P, Pattern> = Tape<F, FrSpongeIn<'m, F, M, P>, Pattern>;
@@ -619,7 +531,7 @@ where
     M: FieldModel<F>,
     P: PermutationIn<M, F, WIDTH>,
 {
-    Tape::undescribed(FrSpongeIn::new(model, permutation))
+    evaluation_on(FrSponge::in_model(model, permutation))
 }
 
 /// The digest of the previous accumulators' challenges in `model`, on a
@@ -634,9 +546,5 @@ where
     M: FieldModel<F>,
     P: PermutationIn<M, F, WIDTH>,
 {
-    let tape: FrTapeIn<'_, F, M, P, PreviousChallengesDigest<M::Value>> =
-        Tape::undescribed(FrSpongeIn::new(model, permutation));
-    let tape = tape.statement(&Message::new(challenges));
-    let (digest, _) = tape.peek();
-    digest
+    previous_challenges_digest_on(FrSponge::in_model(model, permutation), challenges)
 }

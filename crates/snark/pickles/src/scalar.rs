@@ -497,8 +497,8 @@ where
         zeta: m.endo(&inputs.zeta, k.lambda),
         joint_combiner: None,
     };
-    let xi = m.endo(&xi_chal, k.lambda);
-    let r = m.endo(&r_chal, k.lambda);
+    let xi = m.endo(&xi_chal.0, k.lambda);
+    let r = m.endo(&r_chal.0, k.lambda);
     let lin = linearization(m, k, &inputs.evals, &challenges, gates);
     let zeta = &challenges.zeta;
     let points = [zeta.clone(), m.scale(zeta, k.omega)];
@@ -518,7 +518,7 @@ where
         linearization: lin,
         combined_inner_product: cip,
         b,
-        xi: xi_chal,
+        xi: xi_chal.0,
     }
 }
 

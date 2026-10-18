@@ -46,7 +46,7 @@ use crate::{
     gates::Gates,
     ipa::kimchi_ipa,
     lookup::{LookupPattern, LookupPoint, constraint_count, constraints as lookup_constraints},
-    oracle::{ChallengeModel, FqSponge, ScalarChallenge},
+    oracle::{ChallengeModel, FqSponge, FrSponge, ScalarChallenge, SpongeIn, Value},
     permutation::PERMUTS,
     prover::{
         CONSTRAINED, LOOKUP_ALPHA, LookupEvaluations, PERMUTATION_ALPHA, PointEvaluations,
@@ -483,25 +483,15 @@ where
     F: PrimeField,
     T: Transcript<F> + Clone,
 {
-    let prev_digest =
-        transcript::previous_challenges_digest(scalar_sponge.clone(), prev_challenges.to_vec());
-    let tape = transcript::evaluation::<F, T>(scalar_sponge.clone())
-        .statement(&Message::new(Scalar(digest)))
-        .statement(&Message::new(Scalar(prev_digest)))
-        .receive(&Message::new(Scalar(ft_eval1)))
-        .receive(&Message::new(evals.clone()));
-    let (v_chal, tape) = tape.squeeze();
-    let (u_chal, tape) = tape.squeeze();
-    let _ = tape.into_inner();
-    (v_chal, u_chal)
+    let sponge = FrSponge::new(scalar_sponge.clone());
+    scalar_transcript_on(&sponge, &digest, prev_challenges, &ft_eval1, evals)
 }
 
 /// [`scalar_transcript`] in a model of the field signature, on Kimchi's
 /// sponge over `permutation` in that model ([`transcript::FrSpongeIn`]):
-/// the same pattern ([`transcript::Evaluation`] at the model's carrier),
-/// step for step, so a verifier in a circuit draws its `xi` and `r` by the
-/// protocol the native verifier follows. The 128-bit challenges come
-/// unmapped.
+/// the same definition ([`scalar_transcript_on`]) at the model's carrier, so
+/// a verifier in a circuit draws its `xi` and `r` by the protocol the native
+/// verifier follows. The 128-bit challenges come unmapped.
 pub fn scalar_transcript_in<F, M, P>(
     model: &mut M,
     permutation: &P,
@@ -509,24 +499,46 @@ pub fn scalar_transcript_in<F, M, P>(
     prev_challenges: &[Vec<M::Value>],
     ft_eval1: &M::Value,
     evals: &ProofEvaluations<M::Value>,
-) -> (M::Value, M::Value)
+) -> (ScalarChallenge<M::Value>, ScalarChallenge<M::Value>)
 where
     F: Field,
     M: ChallengeModel<F>,
     P: PermutationIn<M, F, WIDTH>,
 {
     let shared = RefCell::new(model);
+    let sponge = FrSponge::in_model(&shared, permutation);
+    scalar_transcript_on(&sponge, digest, prev_challenges, ft_eval1, evals)
+}
+
+/// The scalar-field half of the transcript on a fresh `sponge`, in
+/// whichever model it computes: one definition for [`scalar_transcript`]
+/// and [`scalar_transcript_in`]. `sponge` is copied twice, for the digest
+/// of the previous challenges and for the evaluations.
+#[allow(clippy::type_complexity)]
+pub fn scalar_transcript_on<F, S, H>(
+    sponge: &FrSponge<F, S, H>,
+    digest: &Value<F, H>,
+    prev_challenges: &[Vec<Value<F, H>>],
+    ft_eval1: &Value<F, H>,
+    evals: &ProofEvaluations<Value<F, H>>,
+) -> (ScalarChallenge<Value<F, H>>, ScalarChallenge<Value<F, H>>)
+where
+    F: Field,
+    H: SpongeIn<F, S>,
+    H::Model: ChallengeModel<F>,
+    S: Clone,
+{
     let prev_digest =
-        transcript::previous_challenges_digest_in(&shared, permutation, prev_challenges.to_vec());
-    let tape = transcript::evaluation_in(&shared, permutation)
+        transcript::previous_challenges_digest_on(sponge.clone(), prev_challenges.to_vec());
+    let tape = transcript::evaluation_on(sponge.clone())
         .statement(&Message::new(Scalar(digest.clone())))
         .statement(&Message::new(Scalar(prev_digest)))
         .receive(&Message::new(Scalar(ft_eval1.clone())))
         .receive(&Message::new(evals.clone()));
-    let (xi, tape) = tape.squeeze();
-    let (r, tape) = tape.squeeze();
+    let (v_chal, tape) = tape.squeeze();
+    let (u_chal, tape) = tape.squeeze();
     let _ = tape.into_inner();
-    (xi, r)
+    (v_chal, u_chal)
 }
 
 /// The scalars of the linearization (Pickles' `derive_plonk` and

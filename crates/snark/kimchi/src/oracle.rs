@@ -28,11 +28,12 @@
 //! operation against Kimchi's output.
 
 use alloc::{vec, vec::Vec};
-use core::cmp::Ordering;
+use core::{cell::RefCell, cmp::Ordering};
 
 use arrabbiata_curve::{Curve, Projective};
 use arrabbiata_field::{Field, FieldModel, Native, PrimeField};
-use arrabbiata_transcript::Transcript;
+use arrabbiata_poseidon::kimchi::{KimchiDuplex, WIDTH};
+use arrabbiata_transcript::{PermutationIn, Transcript};
 
 /// The limbs of a challenge (Kimchi's `CHALLENGE_LENGTH_IN_LIMBS`).
 pub const CHALLENGE_LIMBS: usize = 2;
@@ -273,12 +274,178 @@ where
     }
 }
 
-/// Kimchi's `DefaultFrSponge` over the sponge `S` on `F`.
+/// Where a sponge does its arithmetic: the field itself ([`Native`]), or a
+/// model shared with the rest of a circuit (`&RefCell<M>`, so that a copy of
+/// the sponge, which a peek draws from, writes into the same circuit).
+pub trait ModelHandle<F>: Clone
+where
+    F: Field,
+{
+    /// The model.
+    type Model: FieldModel<F>;
+
+    /// Run `f` in the model.
+    fn with<R>(&self, f: impl FnOnce(&mut Self::Model) -> R) -> R;
+}
+
+impl<F> ModelHandle<F> for Native
+where
+    F: Field,
+{
+    type Model = Self;
+
+    fn with<R>(&self, f: impl FnOnce(&mut Self) -> R) -> R {
+        f(&mut Self)
+    }
+}
+
+impl<F, M> ModelHandle<F> for &RefCell<M>
+where
+    F: Field,
+    M: FieldModel<F>,
+{
+    type Model = M;
+
+    fn with<R>(&self, f: impl FnOnce(&mut M) -> R) -> R {
+        f(&mut self.borrow_mut())
+    }
+}
+
+/// An element of the model `H` handles.
+pub type Value<F, H> = <<H as ModelHandle<F>>::Model as FieldModel<F>>::Value;
+
+/// How the model a handle points to runs the sponge `S`: in the field
+/// itself, any [`Transcript`]; in a shared model, Kimchi's duplex over a
+/// permutation in that model ([`Duplexed`]). Implemented on the handle, so
+/// the two cases are two types and never overlap.
+pub trait SpongeIn<F, S>: ModelHandle<F>
+where
+    F: Field,
+{
+    /// Absorb `value` into `sponge`.
+    fn absorb_into(&self, sponge: &mut S, value: &Value<F, Self>);
+
+    /// Squeeze an element of `sponge`.
+    fn squeeze_from(&self, sponge: &mut S) -> Value<F, Self>;
+}
+
+impl<F, S> SpongeIn<F, S> for Native
+where
+    F: Field,
+    S: Transcript<F>,
+{
+    fn absorb_into(&self, sponge: &mut S, value: &F) {
+        sponge.absorb(*value);
+    }
+
+    fn squeeze_from(&self, sponge: &mut S) -> F {
+        sponge.squeeze()
+    }
+}
+
+/// Kimchi's duplex ([`KimchiDuplex`]) over a permutation in a model.
+#[derive(Debug)]
+pub struct Duplexed<'p, V, P> {
+    duplex: KimchiDuplex<V>,
+    permutation: &'p P,
+}
+
+impl<V, P> Clone for Duplexed<'_, V, P>
+where
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            duplex: self.duplex.clone(),
+            permutation: self.permutation,
+        }
+    }
+}
+
+impl<'p, V, P> Duplexed<'p, V, P>
+where
+    V: Clone,
+{
+    /// A fresh duplex over `permutation`, its state the model's zero.
+    pub fn new<F, M>(model: &mut M, permutation: &'p P) -> Self
+    where
+        F: Field,
+        M: FieldModel<F, Value = V>,
+    {
+        Self {
+            duplex: KimchiDuplex::new(model.constant(F::ZERO)),
+            permutation,
+        }
+    }
+}
+
+impl<F, M, P> SpongeIn<F, Duplexed<'_, M::Value, P>> for &RefCell<M>
+where
+    F: Field,
+    M: FieldModel<F>,
+    P: PermutationIn<M, F, WIDTH>,
+{
+    fn absorb_into(&self, sponge: &mut Duplexed<'_, M::Value, P>, value: &M::Value) {
+        let mut model = self.borrow_mut();
+        sponge.duplex.absorb(&mut *model, sponge.permutation, value);
+    }
+
+    fn squeeze_from(&self, sponge: &mut Duplexed<'_, M::Value, P>) -> M::Value {
+        let mut model = self.borrow_mut();
+        sponge.duplex.squeeze(&mut *model, sponge.permutation)
+    }
+}
+
+/// Kimchi's `DefaultFrSponge`: the sponge `S` with its arithmetic where
+/// `H` says, the field itself by default. A challenge is the lowest 128
+/// bits of one squeeze ([`ChallengeModel::lowest_128_bits`]): Kimchi buffers
+/// two limbs per squeeze and a challenge takes two, so nothing is left in
+/// the buffer between challenges. One sponge, so the messages of
+/// `transcript::Evaluation` are written once, natively and in a circuit.
 #[derive(Clone, Debug)]
-pub struct FrSponge<F, S> {
+pub struct FrSponge<F, S, H = Native> {
+    model: H,
     sponge: S,
-    buffer: Vec<u64>,
     field: core::marker::PhantomData<fn() -> F>,
+}
+
+impl<F, S, H> FrSponge<F, S, H>
+where
+    F: Field,
+    H: SpongeIn<F, S>,
+{
+    /// A sponge over `sponge`, in the model `model` handles.
+    pub const fn with_model(model: H, sponge: S) -> Self {
+        Self {
+            model,
+            sponge,
+            field: core::marker::PhantomData,
+        }
+    }
+
+    /// Absorb `value`.
+    pub fn absorb_value(&mut self, value: &Value<F, H>) {
+        self.model.absorb_into(&mut self.sponge, value);
+    }
+
+    /// Squeeze an element.
+    pub fn squeeze_value(&mut self) -> Value<F, H> {
+        self.model.squeeze_from(&mut self.sponge)
+    }
+
+    /// A 128-bit challenge: the lowest 128 bits of a squeeze.
+    pub fn challenge_value(&mut self) -> ScalarChallenge<Value<F, H>>
+    where
+        H::Model: ChallengeModel<F>,
+    {
+        let x = self.squeeze_value();
+        ScalarChallenge(self.model.with(|m| m.lowest_128_bits(&x)))
+    }
+
+    /// The model's handle.
+    pub fn model(&self) -> &H {
+        &self.model
+    }
 }
 
 impl<F, S> FrSponge<F, S>
@@ -286,43 +453,45 @@ where
     F: PrimeField,
     S: Transcript<F>,
 {
-    /// A sponge over `sponge`, nothing buffered.
+    /// A sponge over `sponge`, in the field itself.
     #[must_use]
     pub const fn new(sponge: S) -> Self {
-        Self {
-            sponge,
-            buffer: Vec::new(),
-            field: core::marker::PhantomData,
-        }
+        Self::with_model(Native, sponge)
     }
 
     /// Absorb one element.
     pub fn absorb(&mut self, value: F) {
-        self.buffer.clear();
-        self.sponge.absorb(value);
+        self.absorb_value(&value);
     }
 
     /// Absorb elements, in order.
     pub fn absorb_multiple(&mut self, values: &[F]) {
-        self.buffer.clear();
         for v in values {
-            self.sponge.absorb(*v);
+            self.absorb_value(v);
         }
     }
 
     /// A 128-bit challenge.
     pub fn challenge(&mut self) -> ScalarChallenge<F> {
-        while self.buffer.len() < CHALLENGE_LIMBS {
-            let x = self.sponge.squeeze();
-            self.buffer.extend((0..KEPT_LIMBS).map(|i| x.limb(i)));
-        }
-        let taken: Vec<u64> = self.buffer.drain(..CHALLENGE_LIMBS).collect();
-        ScalarChallenge(pack(&taken))
+        self.challenge_value()
     }
 
     /// The digest: a squeezed element.
     #[must_use]
     pub fn digest(mut self) -> F {
-        self.sponge.squeeze()
+        self.squeeze_value()
+    }
+}
+
+impl<'m, F, M, P> FrSponge<F, Duplexed<'m, M::Value, P>, &'m RefCell<M>>
+where
+    F: Field,
+    M: FieldModel<F>,
+    P: PermutationIn<M, F, WIDTH>,
+{
+    /// Kimchi's sponge in `model`, over `permutation`, fresh.
+    pub fn in_model(model: &'m RefCell<M>, permutation: &'m P) -> Self {
+        let duplex = Duplexed::new(&mut *model.borrow_mut(), permutation);
+        Self::with_model(model, duplex)
     }
 }

@@ -1,7 +1,7 @@
 //! The behaviour of each public item, one test per item.
 
 use arrabbiata_curve::{Projective, glv::Glv};
-use arrabbiata_field::{Field, Native, PrimeField};
+use arrabbiata_field::{Field, FieldModel, Native, PrimeField};
 use arrabbiata_gadget::{Cell, Env, Of, Placed, Scalar as Value, TypedGadget, Unit, compile};
 use arrabbiata_ipa::generic::{BaseOracle, ChallengeMap, HashToCurve, IpaOracle, Opening, Schnorr};
 use arrabbiata_kimchi::{
@@ -27,7 +27,10 @@ use arrabbiata_kimchi::{
         LookupPoint, LookupTableId, PATTERNS, RANGE_CHECK_TABLE_ID, RuntimeTable, XOR_TABLE_ID,
         combine_entry, constraint_count, id_to_field, lookup_value, range_check_table, xor_table,
     },
-    oracle::{CHALLENGE_LIMBS, ChallengeModel, FqSponge, FrSponge, ScalarChallenge},
+    oracle::{
+        CHALLENGE_LIMBS, ChallengeModel, Duplexed, FqSponge, FrSponge, ModelHandle,
+        ScalarChallenge, SpongeIn, Value as ModelValue,
+    },
     permutation::{PERMUTS, shifts},
     prover::{
         self, CONSTRAINED, EvaluationRound, Hidden, LOOKUP_ALPHA, LookupCommitments,
@@ -41,12 +44,14 @@ use arrabbiata_kimchi::{
     srs::{GroupMap, PolyComm, Srs, packed, point_of_random_bytes},
     transcript::{
         self, AfterGamma, Base, Beta, Challenge, Digest, DigestOf, FqTape, FrSpongeIn, FrTapeIn,
-        Message, Piop, Scalar, VerifierIndexDigest, evaluation_in, previous_challenges_digest_in,
+        FrTapeOn, Message, Piop, Scalar, VerifierIndexDigest, evaluation_in, evaluation_on,
+        previous_challenges_digest_in, previous_challenges_digest_on,
     },
     verifier::{
         BaseTranscript, Challenges, Claim, Linearization, Oracles, VerifyError, base_transcript,
         combined_commitment, combined_inner_product, commitments, evaluation_shape, evaluations,
-        ft_comm, linearization, oracles, scalar_transcript, scalar_transcript_in, succinct, verify,
+        ft_comm, linearization, oracles, scalar_transcript, scalar_transcript_in,
+        scalar_transcript_on, succinct, verify,
     },
     verifier_index::{LookupVerifierIndex, VerifierIndex},
 };
@@ -1238,10 +1243,7 @@ fn verifier_scalar_transcript_in() {
         &proof.ft_eval1,
         &proof.evals,
     );
-    assert_eq!(
-        (ScalarChallenge(xi), ScalarChallenge(r)),
-        (o.v_chal, o.u_chal)
-    );
+    assert_eq!((xi, r), (o.v_chal, o.u_chal));
 }
 
 #[test]
@@ -1282,7 +1284,7 @@ fn fr_sponge_in() {
         tape.statement(&Message::new(Scalar(one))),
         native.statement(&Message::new(Scalar(one))),
     );
-    let sponge: FrSpongeIn<'_, Fp, Native, _> = FrSpongeIn::new(&model, &poseidon);
+    let sponge: FrSpongeIn<'_, Fp, Native, _> = FrSpongeIn::in_model(&model, &poseidon);
     let _ = sponge.clone();
     let _ = (a, b);
 }
@@ -1986,4 +1988,126 @@ fn accumulation_published() {
     let relation = Satisfied::new(&index, &kimchi, (&base, &scalar), &ipa);
     fn pattern_of<R: Reduction<Fp, Pattern = Published<Vesta>>>(_: &R) {}
     pattern_of(&KimchiSuccinct::new(relation, Arkworks(SplitMix64(6))));
+}
+
+#[test]
+fn oracle_model_handle() {
+    // The field itself, or a shared model: both run a computation in it.
+    let two = ModelHandle::<Fp>::with(&Native, |m| FieldModel::<Fp>::constant(m, Fp::from_u64(2)));
+    let shared = core::cell::RefCell::new(Native);
+    let three =
+        ModelHandle::<Fp>::with(&&shared, |m| FieldModel::<Fp>::constant(m, Fp::from_u64(3)));
+    assert_eq!((two, three), (Fp::from_u64(2), Fp::from_u64(3)));
+}
+
+#[test]
+fn oracle_value() {
+    // In the field itself, a value is an element.
+    let x: ModelValue<Fp, Native> = Fp::ONE;
+    assert_eq!(x, Fp::ONE);
+}
+
+#[test]
+fn oracle_sponge_in() {
+    // Natively, a transcript's own absorb and squeeze.
+    let mut ours = KimchiSponge::new(pallas_base());
+    let mut theirs = KimchiSponge::new(pallas_base());
+    SpongeIn::<Fp, _>::absorb_into(&Native, &mut ours, &Fp::ONE);
+    theirs.absorb(Fp::ONE);
+    assert_eq!(
+        SpongeIn::<Fp, _>::squeeze_from(&Native, &mut ours),
+        theirs.squeeze()
+    );
+}
+
+#[test]
+fn oracle_duplexed() {
+    // Kimchi's duplex over Poseidon, run in the native model, is Kimchi's
+    // sponge.
+    let poseidon = pallas_base();
+    let model = core::cell::RefCell::new(Native);
+    let mut duplex = Duplexed::new::<Fp, _>(&mut Native, &poseidon);
+    let mut sponge = KimchiSponge::new(pallas_base());
+    (&model).absorb_into(&mut duplex, &Fp::from_u64(7));
+    sponge.absorb(Fp::from_u64(7));
+    assert_eq!((&model).squeeze_from(&mut duplex), sponge.squeeze());
+}
+
+#[test]
+fn oracle_fr_sponge_with_model() {
+    // One sponge, two models: the same challenges and the same digest.
+    let poseidon = pallas_base();
+    let model = core::cell::RefCell::new(Native);
+    let mut native = FrSponge::with_model(Native, KimchiSponge::new(pallas_base()));
+    let mut in_model = FrSponge::in_model(&model, &poseidon);
+    native.absorb_value(&Fp::from_u64(3));
+    in_model.absorb_value(&Fp::from_u64(3));
+    assert_eq!(native.challenge_value(), in_model.challenge_value());
+    assert_eq!(native.squeeze_value(), in_model.squeeze_value());
+    let _: &Native = native.model();
+}
+
+#[test]
+fn transcript_evaluation_on() {
+    // The pattern at the carrier of the sponge's model, run through by the
+    // verifier's steps: the native tape's challenges.
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let prev = transcript::previous_challenges_digest(scalar.clone(), vec![]);
+    let poseidon = pallas_base();
+    let model = core::cell::RefCell::new(Native);
+    let tape = evaluation_on(FrSponge::in_model(&model, &poseidon))
+        .statement(&Message::new(Scalar(o.digest)))
+        .statement(&Message::new(Scalar(prev)))
+        .receive(&Message::new(Scalar(proof.ft_eval1)))
+        .receive(&Message::new(proof.evals.clone()));
+    let (v, tape) = tape.squeeze();
+    let (u, _) = tape.squeeze();
+    assert_eq!((v, u), (o.v_chal, o.u_chal));
+}
+
+#[test]
+fn transcript_previous_challenges_digest_on() {
+    let chals = vec![
+        vec![Fp::from_u64(5)],
+        vec![Fp::from_u64(6), Fp::from_u64(7)],
+    ];
+    let digest = previous_challenges_digest_on(
+        FrSponge::new(KimchiSponge::new(pallas_base())),
+        chals.clone(),
+    );
+    assert_eq!(
+        digest,
+        transcript::previous_challenges_digest(KimchiSponge::new(pallas_base()), chals)
+    );
+}
+
+#[test]
+fn verifier_scalar_transcript_on() {
+    // The one definition, on Kimchi's sponge and on the duplex in a model:
+    // the verifier's `v` and `u` both times.
+    let (index, proof, kimchi) = proved();
+    let base = KimchiSponge::new(vesta_base());
+    let scalar = KimchiSponge::new(pallas_base());
+    let vi = &index.verifier_index;
+    let o = oracles(vi, &index.srs, &proof, &[], &kimchi, (&base, &scalar)).unwrap();
+    let native = FrSponge::new(scalar.clone());
+    let ours = scalar_transcript_on(&native, &o.digest, &[], &proof.ft_eval1, &proof.evals);
+    let poseidon = pallas_base();
+    let model = core::cell::RefCell::new(Native);
+    let in_model = FrSponge::in_model(&model, &poseidon);
+    let theirs = scalar_transcript_on(&in_model, &o.digest, &[], &proof.ft_eval1, &proof.evals);
+    assert_eq!(ours, (o.v_chal, o.u_chal));
+    assert_eq!(theirs, ours);
+}
+
+#[test]
+fn transcript_fr_tape_on() {
+    // A tape of the sponge in any model; in the field itself, `FrTape`.
+    let tape: FrTapeOn<Fp, KimchiSponge<Fp>, Native, transcript::Evaluation<Fp>> =
+        transcript::evaluation(KimchiSponge::new(pallas_base()));
+    let _: transcript::FrTape<Fp, KimchiSponge<Fp>, transcript::Evaluation<Fp>> = tape;
 }
