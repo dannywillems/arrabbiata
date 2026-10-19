@@ -39,13 +39,19 @@
 //! are the identity, the wrap domain and public input) is the circuit's,
 //! from a reference index, while Mina's step circuits take keys of any
 //! domain among the branches'; the step proof
-//! carries no previous challenges, so the wrap proof's accumulator is
-//! decided by [`finalize`] rather than accumulated into the next IPA, and
-//! the base step proof's accumulator, hashed in the wrap statement's
-//! messages, is not decided here; the messages hash the prechallenges
-//! rather than Mina's prepared challenges, and the wrap key's commitments in
-//! the order of `index_to_field_elements` as read, not yet checked against
-//! vectors.
+//! accumulates the base step proof's accumulator (its `sg`, from the wrap
+//! statement's messages, and its challenges, the wrap statement's deferred
+//! ones) as Kimchi's previous challenge, as Mina's step prover does, while
+//! the wrap proof's accumulator is decided by [`finalize`] when no wrap
+//! follows; the wrap key's commitments are hashed in the order of
+//! `index_to_field_elements` as read, not yet checked against vectors.
+//!
+//! The accumulators cross over between the levels (Mina's
+//! `Per_proof_witness`): the step messages hold the `sg` of the wrap proof
+//! verified and the challenges of the step proof it wrapped; the wrap
+//! messages hold the `sg` of the step proof wrapped and the challenges of
+//! the wrap proofs it verified. Each proof's previous challenges zip them
+//! back into accumulators of its own curve.
 
 use alloc::{vec, vec::Vec};
 use core::cell::RefCell;
@@ -53,7 +59,7 @@ use core::cell::RefCell;
 use arrabbiata_curve::{Projective, glv::Glv, msm};
 use arrabbiata_field::{Field, FieldModel, Native};
 use arrabbiata_gadget::{Array, Env, Of, Scalar, TypedGadget, Unit};
-use arrabbiata_ipa::b_poly_coefficients;
+use arrabbiata_ipa::{RecursionChallenge, b_poly_coefficients};
 use arrabbiata_kimchi::{
     compiled,
     constraints::{COLUMNS, ConstraintSystem},
@@ -70,7 +76,7 @@ use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiPoseidon, KimchiSponge, pallas_base, vesta_base};
 
 use crate::{
-    curve::{Shifted, held},
+    curve::{Shifted, held, point_at},
     group::{
         Constants, DeferredIn, KeyIn, ProofIn, PublicWord, group_half_in, group_half_with_key_in,
         key_digest_in,
@@ -247,8 +253,10 @@ pub fn index_elements(index: &VerifierIndex<Pallas>) -> Vec<Fp> {
 }
 
 /// What the next step proof needs of this one, hashed into the statement:
-/// the application state, the wrap key, and the accumulators of the wrap
-/// proofs verified (Pickles' `Messages_for_next_step_proof`).
+/// the application state, the wrap key, the `sg` of each wrap proof
+/// verified, and the challenges each wrap statement deferred, those of the
+/// step proof it wrapped, mapped into `Fp` (Pickles'
+/// `Messages_for_next_step_proof`, prepared by `Ipa.Step.compute_challenges`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessagesForNextStepProof {
     /// The wrap key ([`index_elements`]).
@@ -257,7 +265,7 @@ pub struct MessagesForNextStepProof {
     pub app_state: Vec<Fp>,
     /// The wrap proofs' accumulator commitments, as coordinates.
     pub challenge_polynomial_commitments: Vec<[Fp; 2]>,
-    /// Their prechallenges.
+    /// The challenges the wrap statements deferred, mapped.
     pub old_bulletproof_challenges: Vec<Vec<Fp>>,
 }
 
@@ -369,6 +377,21 @@ pub struct WrapProof<'a> {
     pub proof: &'a ProverProof<Pallas>,
     /// Its statement.
     pub statement: &'a wrap::Statement<Fq>,
+    /// The messages its statement's digest hashes: the accumulator of the
+    /// step proof it wrapped.
+    pub messages: &'a wrap::MessagesForNextWrapProof,
+}
+
+/// The challenges a wrap statement deferred, mapped into `Fp` by the
+/// endomorphism of Vesta: those of the step proof it wrapped.
+#[must_use]
+pub fn deferred_challenges(statement: &wrap::Statement<Fq>) -> Vec<Fp> {
+    let lambda = Vesta::lambda();
+    statement
+        .bulletproof_challenges
+        .iter()
+        .map(|c| ScalarChallenge(to_fp(*c)).to_field(lambda))
+        .collect()
 }
 
 /// What finalizing a wrap proof needs beyond the statement: its
@@ -421,20 +444,40 @@ fn wrap_constants(wrap: &WrapProof<'_>) -> Result<Constants<Pallas>, Error> {
 
 /// The step statement of verifying `wrap`, whose step proof has the
 /// evaluations `evaluations`, from the application state `state`; the
-/// messages its digest hashes; the private input; the shape.
+/// messages its digest hashes; the private input; the shape; and the
+/// previous challenge the step proof carries, the wrapped step proof's
+/// accumulator.
 ///
 /// # Errors
 ///
 /// [`Error::Wrap`] for a wrap proof of the wrong shape, [`Error::Opening`]
 /// when its opening does not hold, [`Error::Lookups`] for an index with
 /// lookups, [`Error::Messages`] when the wrap statement's messages are not
-/// those of `state`, [`Error::Bound`] for a value past its bound.
+/// those of `state` or its digest not that of its messages,
+/// [`Error::Bound`] for a value past its bound.
 #[allow(clippy::type_complexity)]
 pub fn statement(
     wrap: &WrapProof<'_>,
     evaluations: &StepEvaluations,
     state: Fp,
-) -> Result<(Statement<Fp>, MessagesForNextStepProof, Vec<Fp>, Shape), Error> {
+) -> Result<
+    (
+        Statement<Fp>,
+        MessagesForNextStepProof,
+        Vec<Fp>,
+        Shape,
+        RecursionChallenge<Vesta>,
+    ),
+    Error,
+> {
+    if wrap.messages.digest() != wrap.statement.messages_for_next_wrap_proof {
+        return Err(Error::Messages);
+    }
+    let [x, y] = wrap.messages.challenge_polynomial_commitment;
+    let previous_challenge = RecursionChallenge {
+        chals: deferred_challenges(wrap.statement),
+        comm: point_at::<Vesta>(x, y).ok_or(Error::Messages)?,
+    };
     let wrap_public = wrap.statement.to_vec();
     let step_rounds = wrap.statement.bulletproof_challenges.len();
     let base_sponge = KimchiSponge::new(pallas_base());
@@ -503,7 +546,7 @@ pub fn statement(
         index,
         app_state: vec![rule(state)],
         challenge_polynomial_commitments: vec![[sx, sy]],
-        old_bulletproof_challenges: vec![out.prechallenges.clone()],
+        old_bulletproof_challenges: vec![previous_challenge.chals.clone()],
     };
     let statement = Statement {
         unfinalized: Unfinalized {
@@ -572,7 +615,7 @@ pub fn statement(
     private.push(evaluations.ft_eval1);
     let _ = evaluations.evals.map(&mut |v| private.push(*v));
     private.push(state);
-    Ok((statement, messages, private, shape))
+    Ok((statement, messages, private, shape, previous_challenge))
 }
 
 /// The step circuit for wrap proofs of `shape`, against a wrap key it takes
@@ -752,18 +795,22 @@ impl<const S: usize, const W: usize> TypedGadget<Fp> for Step<'_, S, W> {
             let one = m.constant(Fp::ONE);
             m.add(&state, &one)
         };
+        // The challenges the wrap statement deferred, mapped: the wrapped
+        // step proof's, which the messages carry and its scalar half reads.
+        let lambda = self.base_constants.lambda;
+        let bulletproof_challenges: Vec<Affine<E::Var, Fp>> = {
+            let mut m = model.borrow_mut();
+            ws.bulletproof_challenges
+                .iter()
+                .map(|c| m.endo(&value(c), lambda))
+                .collect()
+        };
         let mut tail = vec![next_state, value(&sg[0]), value(&sg[1])];
-        tail.extend(out.prechallenges.iter().cloned());
+        tail.extend(bulletproof_challenges.iter().cloned());
         let messages = digest_of(&tail);
 
         // The wrap statement finalized: the base step proof's scalar half.
         let mut m = model.into_inner();
-        let lambda = self.base_constants.lambda;
-        let bulletproof_challenges = ws
-            .bulletproof_challenges
-            .iter()
-            .map(|c| m.endo(&value(c), lambda))
-            .collect();
         let inputs = Inputs {
             alpha: value(&ws.alpha),
             beta: value(&ws.beta),
@@ -843,13 +890,15 @@ pub fn index<const S: usize, const W: usize>(
         .map_err(|_| Error::Circuit)?;
     let cs = ConstraintSystem::create(gates)
         .public(S)
+        .prev_challenges(1)
         .build()
         .map_err(|_| Error::Circuit)?;
     let depth = cs.domain.d1.size();
     Ok(ProverIndex::create(cs, Srs::create(depth)))
 }
 
-/// The step proof of `statement`, with the private input `private`.
+/// The step proof of `statement`, with the private input `private` and the
+/// previous challenge `previous` ([`statement`]'s).
 ///
 /// # Errors
 ///
@@ -860,6 +909,7 @@ pub fn prove_step<const S: usize, const W: usize, R>(
     index: &ProverIndex<Vesta>,
     statement: &Statement<Fp>,
     private: &[Fp],
+    previous: &RecursionChallenge<Vesta>,
     rng: &mut R,
 ) -> Result<ProverProof<Vesta>, Error>
 where
@@ -877,7 +927,7 @@ where
         index,
         columns,
         &[],
-        &[],
+        core::slice::from_ref(previous),
         &step_gates(),
         (&base, &scalar),
         rng,
@@ -958,7 +1008,6 @@ pub fn finalize(
     }
     if messages.index != index_elements(wrap_index)
         || messages.digest() != statement.messages_for_next_step_proof
-        || messages.old_bulletproof_challenges.last() != Some(prechallenges)
     {
         return Err(Error::Messages);
     }
@@ -970,26 +1019,47 @@ pub fn finalize(
     Ok(())
 }
 
-/// Verify a step proof: the step proof against its statement (Kimchi, on
-/// Vesta), then the unfinalized wrap proof's scalar half, messages and
+/// Verify a step proof: its previous challenge the accumulator the
+/// statement's messages hash (`previous`, the verified wrap proof's
+/// messages, and the challenges of `messages`), the step proof against its
+/// statement (Kimchi, on Vesta, which opens that accumulator at a fresh
+/// point), then the unfinalized wrap proof's scalar half, messages and
 /// accumulator ([`finalize`]).
 ///
 /// # Errors
 ///
+/// [`Error::Messages`] for a previous challenge that is not the messages',
 /// [`Error::Step`] when the step proof does not verify, else
 /// [`finalize`]'s.
+#[allow(clippy::too_many_arguments)]
 pub fn verify_step<R>(
     step_index: &VerifierIndex<Vesta>,
     step_srs: &Srs<Vesta>,
     step_proof: &ProverProof<Vesta>,
     statement: &Statement<Fp>,
     messages: &MessagesForNextStepProof,
+    previous: &wrap::MessagesForNextWrapProof,
     wrap: (&VerifierIndex<Pallas>, &Srs<Pallas>, &WrapEvaluations),
     rng: &mut R,
 ) -> Result<(), Error>
 where
     R: Sampler<Fp>,
 {
+    let [x, y] = previous.challenge_polynomial_commitment;
+    let accumulated = step_proof
+        .prev_challenges
+        .iter()
+        .map(|c| (coordinates(&c.comm), &c.chals))
+        .collect::<Vec<_>>();
+    if Word::of(previous.digest()) != Word::of(statement.messages_for_next_wrap_proof)
+        || messages
+            .old_bulletproof_challenges
+            .first()
+            .map(|c| vec![((x, y), c)])
+            != Some(accumulated)
+    {
+        return Err(Error::Messages);
+    }
     let base = KimchiSponge::new(vesta_base());
     let scalar = KimchiSponge::new(pallas_base());
     verify(

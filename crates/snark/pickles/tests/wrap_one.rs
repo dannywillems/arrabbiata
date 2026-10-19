@@ -118,9 +118,10 @@ fn a_step_proof_with_a_predecessor_is_wrapped_and_finalized() {
         srs: &first_index.srs,
         proof: &first_proof,
         statement: &first_statement,
+        messages: &first_messages,
     };
     let base_evaluations = StepEvaluations::of(&proof);
-    let (step_statement, step_messages, step_private, step_shape) =
+    let (step_statement, step_messages, step_private, step_shape, step_previous) =
         step::statement(&verified, &base_evaluations, state).unwrap();
     let fp_poseidon = pallas_base();
     let step_circuit = Step::<SS, SW>::new(
@@ -138,6 +139,7 @@ fn a_step_proof_with_a_predecessor_is_wrapped_and_finalized() {
         &step_index,
         &step_statement,
         &step_private,
+        &step_previous,
         &mut rng,
     )
     .unwrap();
@@ -148,6 +150,7 @@ fn a_step_proof_with_a_predecessor_is_wrapped_and_finalized() {
         srs: &step_index.srs,
         proof: &step_proof,
         statement: &step_statement,
+        messages: &step_messages,
     };
     let first_evaluations = WrapEvaluations::of(&first_proof);
     let predecessor = Predecessor {
@@ -156,8 +159,14 @@ fn a_step_proof_with_a_predecessor_is_wrapped_and_finalized() {
         messages: &first_messages,
     };
     let new_padding = vec![Fq::from_u64(7); 3];
-    let (stmt, messages, private, shape) =
+    let (stmt, messages, private, shape, previous) =
         wrap_one::statement(&step, &predecessor, &new_padding).unwrap();
+    // The wrap proof carries the first wrap proof's accumulator, with the
+    // challenges it finalized.
+    assert_eq!(
+        Some(&previous.chals),
+        messages.old_bulletproof_challenges.last()
+    );
     assert_eq!((shape.statement(), shape.witness()), (S, W));
     assert_eq!(messages.old_bulletproof_challenges.len(), 2);
     let circuit = WrapOne::<S, W>::new(
@@ -172,7 +181,8 @@ fn a_step_proof_with_a_predecessor_is_wrapped_and_finalized() {
     .unwrap();
     let index = wrap_one::index(&circuit).unwrap();
     let mut rng = Arkworks(SplitMix64(17));
-    let wrap_proof = wrap_one::prove_wrap(&circuit, &index, &stmt, &private, &mut rng).unwrap();
+    let wrap_proof =
+        wrap_one::prove_wrap(&circuit, &index, &stmt, &private, &previous, &mut rng).unwrap();
     let step_evaluations = StepEvaluations::of(&step_proof);
     let step_side = (
         &step_index.verifier_index,
@@ -230,11 +240,24 @@ fn a_step_proof_with_a_predecessor_is_wrapped_and_finalized() {
     let last = false_previous.len() - 1;
     false_previous[last] = false_previous[last] + Fq::ONE;
     for false_private in [false_evaluation, false_previous] {
-        assert!(wrap_one::prove_wrap(&circuit, &index, &stmt, &false_private, &mut rng).is_err());
+        assert!(
+            wrap_one::prove_wrap(&circuit, &index, &stmt, &false_private, &previous, &mut rng)
+                .is_err()
+        );
     }
     let mut false_digest = stmt.clone();
     false_digest.messages_for_next_wrap_proof = stmt.messages_for_next_wrap_proof + Fq::ONE;
-    assert!(wrap_one::prove_wrap(&circuit, &index, &false_digest, &private, &mut rng).is_err());
+    assert!(
+        wrap_one::prove_wrap(
+            &circuit,
+            &index,
+            &false_digest,
+            &private,
+            &previous,
+            &mut rng
+        )
+        .is_err()
+    );
 
     // Verifying against another key for the first wrap proof fails: the
     // step messages hash the key the step circuit was given.

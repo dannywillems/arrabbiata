@@ -107,7 +107,8 @@ fn a_step_proof_verifies_a_wrap_proof() {
         proof: &proof,
         public: &public,
     };
-    let (wrap_statement, _, wrap_private, _) = wrap::statement(&base_step, &padding).unwrap();
+    let (wrap_statement, wrap_messages, wrap_private, _) =
+        wrap::statement(&base_step, &padding).unwrap();
     let mut rng = Arkworks(SplitMix64(11));
     let wrap_proof = wrap::prove_wrap(
         &wrap_circuit,
@@ -124,9 +125,18 @@ fn a_step_proof_verifies_a_wrap_proof() {
         srs: &wrap_index.srs,
         proof: &wrap_proof,
         statement: &wrap_statement,
+        messages: &wrap_messages,
     };
     let evaluations = StepEvaluations::of(&proof);
-    let (stmt, messages, private, shape) = step::statement(&verified, &evaluations, state).unwrap();
+    let (stmt, messages, private, shape, previous) =
+        step::statement(&verified, &evaluations, state).unwrap();
+    // The step proof carries the base step proof's accumulator: the sg the
+    // wrap messages hash, with the wrap statement's deferred challenges.
+    assert_eq!(previous.chals, step::deferred_challenges(&wrap_statement));
+    assert_eq!(
+        messages.old_bulletproof_challenges,
+        vec![previous.chals.clone()]
+    );
     assert_eq!((shape.statement(), shape.witness()), (S, W));
     assert_eq!(messages.app_state, vec![Fp::from_u64(42)]);
     let fp_poseidon = pallas_base();
@@ -140,7 +150,8 @@ fn a_step_proof_verifies_a_wrap_proof() {
     .unwrap();
     let step_index = step::index(&circuit).unwrap();
     let mut rng = Arkworks(SplitMix64(13));
-    let step_proof = prove_step(&circuit, &step_index, &stmt, &private, &mut rng).unwrap();
+    let step_proof =
+        prove_step(&circuit, &step_index, &stmt, &private, &previous, &mut rng).unwrap();
     let wrap_evaluations = WrapEvaluations::of(&wrap_proof);
     let wrap_side = (
         &wrap_index.verifier_index,
@@ -155,10 +166,29 @@ fn a_step_proof_verifies_a_wrap_proof() {
             &step_proof,
             &stmt,
             &messages,
+            &wrap_messages,
             wrap_side,
             &mut rng,
         ),
         Ok(())
+    );
+
+    // Against other wrap messages, the previous challenge is not the
+    // accumulator the statement passes.
+    let mut other_messages = wrap_messages.clone();
+    other_messages.challenge_polynomial_commitment.swap(0, 1);
+    assert_eq!(
+        verify_step(
+            &step_index.verifier_index,
+            &step_index.srs,
+            &step_proof,
+            &stmt,
+            &messages,
+            &other_messages,
+            wrap_side,
+            &mut rng,
+        ),
+        Err(Error::Messages)
     );
 
     // From another state, the wrap statement's messages are not the
@@ -181,17 +211,47 @@ fn a_step_proof_verifies_a_wrap_proof() {
     let mut false_b = stmt.clone();
     false_b.unfinalized.b[0] = false_b.unfinalized.b[0] + Fp::ONE;
     for false_statement in [false_messages, false_passed, not_finalized, false_b] {
-        assert!(prove_step(&circuit, &step_index, &false_statement, &private, &mut rng).is_err());
+        assert!(
+            prove_step(
+                &circuit,
+                &step_index,
+                &false_statement,
+                &private,
+                &previous,
+                &mut rng
+            )
+            .is_err()
+        );
     }
     // Nor for a private wrap statement whose deferred value is not the base
     // step proof's, nor for another wrap key: the wrap proof's transcript
     // starts from the key's digest, and the messages hash the key.
     let mut false_private = private.clone();
     false_private[2 * KEY + 4] = false_private[2 * KEY + 4] + Fp::ONE;
-    assert!(prove_step(&circuit, &step_index, &stmt, &false_private, &mut rng).is_err());
+    assert!(
+        prove_step(
+            &circuit,
+            &step_index,
+            &stmt,
+            &false_private,
+            &previous,
+            &mut rng
+        )
+        .is_err()
+    );
     let mut false_key = private.clone();
     false_key[0] = false_key[0] + Fp::ONE;
-    assert!(prove_step(&circuit, &step_index, &stmt, &false_key, &mut rng).is_err());
+    assert!(
+        prove_step(
+            &circuit,
+            &step_index,
+            &stmt,
+            &false_key,
+            &previous,
+            &mut rng
+        )
+        .is_err()
+    );
 
     // Natively: false messages, a false accumulator under its own hash, and
     // a false deferred value of the unfinalized proof.

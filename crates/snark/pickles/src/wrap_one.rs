@@ -26,12 +26,17 @@
 //! The statement is [`wrap::Statement`], Mina's order, its branch data for
 //! one proof verified.
 //!
+//! The accumulators: the step proof carries the base step proof's as its
+//! previous challenge, whose commitment the group half reads among the
+//! step proof's commitments, and whose cells are those hashed into the
+//! predecessor's messages, so the accumulator the step proof opened is the
+//! one the step statement passed. The wrap proof carries the predecessor's
+//! accumulator in turn: the `sg` the step messages hold, with the finalized
+//! challenges.
+//!
 //! Deviations from Mina: the unfinalized proof must be finalized
 //! (`should_finalize` is asserted one, where Mina's circuit skips a dummy);
-//! the predecessor's accumulator hashed in its messages, the base step
-//! proof's, is not decided (Mina accumulates it through the step proof's
-//! previous challenges); the padding is ours, not
-//! `Dummy.Ipa.Wrap.challenges_computed`.
+//! the padding is ours, not `Dummy.Ipa.Wrap.challenges_computed`.
 
 use alloc::{vec, vec::Vec};
 use core::cell::RefCell;
@@ -39,7 +44,7 @@ use core::cell::RefCell;
 use arrabbiata_curve::{glv::Glv, msm};
 use arrabbiata_field::{Field, FieldModel, Native};
 use arrabbiata_gadget::{Array, Env, Of, Scalar, TypedGadget, Unit};
-use arrabbiata_ipa::b_poly_coefficients;
+use arrabbiata_ipa::{RecursionChallenge, b_poly_coefficients};
 use arrabbiata_kimchi::{
     compiled,
     constraints::{COLUMNS, ConstraintSystem},
@@ -56,7 +61,7 @@ use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_poseidon::kimchi::{KimchiPoseidon, KimchiSponge, pallas_base, vesta_base};
 
 use crate::{
-    curve::Shifted,
+    curve::{Shifted, point_at},
     group::{Constants, DeferredIn, ProofIn, PublicWord, group_half_in},
     model::{Affine, Circuit, load},
     scalar::{self, Inputs, scalar_half},
@@ -84,6 +89,9 @@ pub struct StepProof<'a> {
     pub proof: &'a ProverProof<Vesta>,
     /// Its statement.
     pub statement: &'a step::Statement<Fp>,
+    /// The messages its statement's digest hashes: the predecessor's
+    /// accumulator commitment, and the challenges the step proof carries.
+    pub messages: &'a MessagesForNextStepProof,
 }
 
 /// The predecessor the step proof verified: the wrap proof's index and
@@ -237,10 +245,11 @@ fn finalized(
 }
 
 /// The wrap statement of `step`, the messages its digest hashes, the
-/// private input, and the shape: the step proof's group half natively, its
-/// unfinalized proof finalized on `predecessor`'s evaluations, the new
-/// messages hashed from `padding` (one vector), the finalized challenges
-/// and the step proof's accumulator.
+/// private input, the shape, and the previous challenge the wrap proof
+/// carries: the step proof's group half natively, its unfinalized proof
+/// finalized on `predecessor`'s evaluations, the new messages hashed from
+/// `padding` (one vector), the finalized challenges and the step proof's
+/// accumulator; the previous challenge the predecessor's accumulator.
 ///
 /// # Errors
 ///
@@ -254,13 +263,43 @@ pub fn statement(
     step: &StepProof<'_>,
     predecessor: &Predecessor<'_>,
     padding: &[Fq],
-) -> Result<(Statement<Fq>, MessagesForNextWrapProof, Vec<Fq>, Shape), Error> {
+) -> Result<
+    (
+        Statement<Fq>,
+        MessagesForNextWrapProof,
+        Vec<Fq>,
+        Shape,
+        RecursionChallenge<Pallas>,
+    ),
+    Error,
+> {
     let unfinalized = &step.statement.unfinalized;
+    let [px, py] = predecessor.messages.challenge_polynomial_commitment;
+    let carried: Vec<(Fq, Fq)> = step
+        .proof
+        .prev_challenges
+        .iter()
+        .map(|c| coordinates(&c.comm))
+        .collect();
     if Word::of(predecessor.messages.digest())
         != Word::of(step.statement.messages_for_next_wrap_proof)
+        || step.messages.digest() != step.statement.messages_for_next_step_proof
+        || carried != vec![(px, py)]
     {
         return Err(Error::Messages);
     }
+    let Some([wx, wy]) = step
+        .messages
+        .challenge_polynomial_commitments
+        .last()
+        .copied()
+    else {
+        return Err(Error::Messages);
+    };
+    let previous_challenge = RecursionChallenge {
+        chals: computed(&unfinalized.bulletproof_challenges),
+        comm: point_at::<Pallas>(wx, wy).ok_or(Error::Messages)?,
+    };
     finalized(predecessor.index, unfinalized, predecessor.evaluations)?;
 
     let public = step.statement.to_vec();
@@ -288,9 +327,6 @@ pub fn statement(
         z2: opening.z2,
         sg: opening.sg,
     };
-    if !proof.previous.is_empty() {
-        return Err(Error::Size);
-    }
     let wrap_rounds = unfinalized.bulletproof_challenges.len();
     let deferred = DeferredIn {
         public: words(step.statement)
@@ -363,7 +399,7 @@ pub fn statement(
     private.push(predecessor.evaluations.ft_eval1);
     let _ = predecessor.evaluations.evals.map(&mut |v| private.push(*v));
     private.extend(predecessor.messages.challenge_polynomial_commitment);
-    Ok((statement, messages, private, shape))
+    Ok((statement, messages, private, shape, previous_challenge))
 }
 
 /// The wrap circuit for step proofs of `shape` with one predecessor: its
@@ -498,9 +534,10 @@ impl<const S: usize, const W: usize> TypedGadget<Fq> for WrapOne<'_, S, W> {
         };
         let u = &step_statement.unfinalized;
 
-        // The step proof's group half, x_hat on the step statement.
+        // The step proof's group half, x_hat on the step statement, its
+        // previous accumulator the one the predecessor's messages hash.
         let proof = ProofIn {
-            previous: vec![],
+            previous: vec![previous_sg.clone()],
             witness,
             z,
             t,
@@ -623,13 +660,15 @@ pub fn index<const S: usize, const W: usize>(
         .map_err(|_| Error::Circuit)?;
     let cs = ConstraintSystem::create(gates)
         .public(S)
+        .prev_challenges(1)
         .build()
         .map_err(|_| Error::Circuit)?;
     let depth = cs.domain.d1.size();
     Ok(ProverIndex::create(cs, Srs::create(depth)))
 }
 
-/// The wrap proof of `statement`, with the private input `private`.
+/// The wrap proof of `statement`, with the private input `private` and the
+/// previous challenge `previous` ([`statement`]'s).
 ///
 /// # Errors
 ///
@@ -640,6 +679,7 @@ pub fn prove_wrap<const S: usize, const W: usize, R>(
     index: &ProverIndex<Pallas>,
     statement: &Statement<Fq>,
     private: &[Fq],
+    previous: &RecursionChallenge<Pallas>,
     rng: &mut R,
 ) -> Result<ProverProof<Pallas>, Error>
 where
@@ -657,7 +697,7 @@ where
         index,
         columns,
         &[],
-        &[],
+        core::slice::from_ref(previous),
         &wrap_gates(),
         (&base, &scalar),
         rng,
@@ -665,11 +705,13 @@ where
     .map_err(|_| Error::Prove)
 }
 
-/// Verify a wrap proof of a step proof with one predecessor: the wrap proof
-/// and the step proof's scalar half, messages and accumulator
-/// ([`wrap::verify_wrap`]), then the step messages its statement passes:
-/// their digest, the trusted wrap key `predecessor_key`, and the
-/// predecessor's accumulator, which the step proof hashed, on its SRS with
+/// Verify a wrap proof of a step proof with one predecessor: its previous
+/// challenge the accumulator the messages hash (the step messages' `sg`,
+/// the new messages' challenges), the step proof's previous challenges
+/// those its messages hold, the wrap proof and the step proof's scalar half,
+/// messages and accumulator ([`wrap::verify_wrap`]), then the step messages
+/// its statement passes: their digest, the trusted wrap key
+/// `predecessor_key`, and the predecessor's accumulator on its SRS with
 /// the challenges the new messages hold.
 ///
 /// # Errors
@@ -691,6 +733,22 @@ pub fn verify<R>(
 where
     R: Sampler<Fq>,
 {
+    let carried: Vec<((Fp, Fp), &Vec<Fq>)> = wrap_proof
+        .prev_challenges
+        .iter()
+        .map(|c| (coordinates(&c.comm), &c.chals))
+        .collect();
+    let expected = step_messages
+        .challenge_polynomial_commitments
+        .last()
+        .zip(messages.old_bulletproof_challenges.last())
+        .map(|(sg, chals)| vec![((sg[0], sg[1]), chals)]);
+    let (_, _, evaluations) = step;
+    if expected != Some(carried)
+        || evaluations.prev_challenges != step_messages.old_bulletproof_challenges
+    {
+        return Err(Error::Accumulator);
+    }
     wrap::verify_wrap(
         wrap_index, wrap_srs, wrap_proof, statement, messages, step, rng,
     )
@@ -704,13 +762,8 @@ where
         return Err(Error::Accumulator);
     };
     let accumulator = coordinates(&msm(&srs.g, &b_poly_coefficients(old)));
-    let challenges = step_messages
-        .old_bulletproof_challenges
-        .last()
-        .map(|c| computed(c));
     if digest != statement.messages_for_next_step_proof
         || step_messages.index != step::index_elements(key)
-        || challenges.as_ref() != Some(old)
         || accumulator != (sg[0], sg[1])
     {
         return Err(Error::Accumulator);

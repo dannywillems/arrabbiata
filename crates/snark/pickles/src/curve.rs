@@ -86,7 +86,7 @@ where
 }
 
 /// The point of `(x, y)`, or `None` off the curve.
-fn point_at<C: Glv>(x: C::Base, y: C::Base) -> Option<Projective<C>> {
+pub(crate) fn point_at<C: Glv>(x: C::Base, y: C::Base) -> Option<Projective<C>> {
     CurvePoint::<C>::new(x, y).map(|p| p.to_projective())
 }
 
