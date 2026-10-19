@@ -15,11 +15,10 @@ use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_pickles::{
     recursion::{
         Error, Params, RecStep, RecWrap, StepInput, WrapInput, domains_needed, dummy, prove_step,
-        prove_wrap, step_index, step_statement, wrap_index, wrap_statement,
+        prove_wrap, step_index, step_statement, verify, wrap_index, wrap_statement,
     },
     statement::Word,
     wrap::StepEvaluations,
-    wrap_one,
 };
 use arrabbiata_poseidon::kimchi::{pallas_base, vesta_base};
 
@@ -41,7 +40,7 @@ fn satisfied(step: &RecStep<'_, SS, SW>, statement: &[Fp; SS], private: &[Fp; SW
 /// a later state, and `should_finalize` flipped.
 fn attacks(
     step: &RecStep<'_, SS, SW>,
-    statement: &arrabbiata_pickles::step::Statement<Fp>,
+    statement: &arrabbiata_pickles::recursion::step::Statement<Fp>,
     private: &[Fp],
     level: u64,
 ) {
@@ -181,7 +180,7 @@ fn a_chain_of_one_rule_verifies_at_every_level() {
         let step_evaluations = StepEvaluations::of(&step_proof);
         let mut verify_rng = Arkworks(SplitMix64(107 + level));
         assert_eq!(
-            wrap_one::verify(
+            verify(
                 &wrap_idx.verifier_index,
                 &wrap_idx.srs,
                 &wrap_proof,
@@ -196,6 +195,30 @@ fn a_chain_of_one_rule_verifies_at_every_level() {
             "level {level}"
         );
 
+        if level == 1 {
+            refusals(&step_input, &input, &padding);
+            // Step messages over another key, even consistently hashed:
+            // the step circuit took the key as a witness, so the verifier
+            // pins it.
+            let mut other_key = messages.clone();
+            other_key.index[0] = other_key.index[0] + Fp::ONE;
+            let mut verify_rng = Arkworks(SplitMix64(211));
+            assert_eq!(
+                verify(
+                    &wrap_idx.verifier_index,
+                    &wrap_idx.srs,
+                    &wrap_proof,
+                    &wrap_stmt,
+                    &wrap_messages,
+                    (&step_idx.verifier_index, &step_idx.srs, &step_evaluations),
+                    &other_key,
+                    wrap_side,
+                    &mut verify_rng,
+                ),
+                Err(Error::Accumulator)
+            );
+        }
+
         input = WrapInput::of(
             &wrap_idx.verifier_index,
             &wrap_idx.srs,
@@ -207,4 +230,26 @@ fn a_chain_of_one_rule_verifies_at_every_level() {
         previous = messages;
         evaluations = step_evaluations;
     }
+}
+
+/// The wrap side natively refuses, before proving: an unfinalized proof
+/// that does not finalize, and a predecessor whose messages are not those
+/// the step statement passes.
+fn refusals(step: &StepInput<'_>, predecessor: &WrapInput, padding: &[Fq]) {
+    let mut false_perm = step.statement.clone();
+    false_perm.unfinalized.perm[1] = Fp::ONE - false_perm.unfinalized.perm[1];
+    let false_step = StepInput {
+        statement: &false_perm,
+        ..*step
+    };
+    assert_eq!(
+        wrap_statement(PARAMS, &false_step, predecessor, padding).err(),
+        Some(Error::Deferred("perm"))
+    );
+    let mut other = predecessor.clone();
+    other.messages.challenge_polynomial_commitment.swap(0, 1);
+    assert_eq!(
+        wrap_statement(PARAMS, step, &other, padding).err(),
+        Some(Error::Messages)
+    );
 }

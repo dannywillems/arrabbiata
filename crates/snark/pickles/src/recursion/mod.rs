@@ -21,7 +21,7 @@
 //! the IPA's final equation, by `must_verify`, which the rule sets to
 //! `state != 0`; `should_finalize` is `must_verify`.
 //!
-//! The accumulators cross over as in [`crate::step`]: each step proof
+//! The accumulators cross over as in [`step`]: each step proof
 //! carries the accumulator of the step proof its predecessor wrapped, each
 //! wrap proof that of the wrap proof its step proof verified.
 //!
@@ -60,12 +60,14 @@ use crate::{
     model::{Affine, Circuit, load},
     scalar::{self, Inputs, Outputs, scalar_half},
     statement::{BranchData, ProofsVerified, Sort, Type2, WINDOW_BITS, Word},
-    step::{
-        self, MessagesForNextStepProof, WrapEvaluations, index_elements, to_fp, to_fq, type1_shift,
-        type2,
-    },
     wrap::{self, MessagesForNextWrapProof, StepEvaluations, shifted, step_gates, wrap_gates},
-    wrap_one::computed,
+};
+
+pub mod step;
+
+use step::{
+    MessagesForNextStepProof, WrapEvaluations, computed, index_elements, to_fp, to_fq, type1_shift,
+    type2,
 };
 
 /// The column variables of the compiled circuits.
@@ -201,6 +203,12 @@ pub enum Error {
     Circuit,
     /// A proof could not be made.
     Prove,
+    /// The head's wrap proof does not verify, or the step proof it wraps
+    /// does not finalize.
+    Wrap(wrap::Error),
+    /// The head's step messages, or the accumulator they hash, are not
+    /// right.
+    Accumulator,
 }
 
 /// A wrap proof's own deferred values: the scalars of `Fq` its group half
@@ -1567,4 +1575,70 @@ pub fn evaluations<F: Clone>(evals: &ProofEvaluations<F>) -> usize {
     let mut n = 0;
     let _ = evals.map(&mut |_| n += 1);
     n
+}
+
+/// Verify the head of a chain, a wrap proof of a step proof: its previous
+/// challenge the accumulator the messages hash (the step messages' `sg`,
+/// the new messages' challenges), the step proof's previous challenges
+/// those its messages hold, the wrap proof and the step proof's scalar half,
+/// messages and accumulator ([`wrap::verify_wrap`]), then the step messages
+/// its statement passes: their digest, the trusted wrap key
+/// `predecessor_key`, and the predecessor's accumulator on its SRS with
+/// the challenges the new messages hold.
+///
+/// # Errors
+///
+/// [`Error::Wrap`] from [`wrap::verify_wrap`], [`Error::Accumulator`] for
+/// step messages that are not the statement's or a false accumulator.
+#[allow(clippy::too_many_arguments)]
+pub fn verify<R>(
+    wrap_index: &VerifierIndex<Pallas>,
+    wrap_srs: &Srs<Pallas>,
+    wrap_proof: &ProverProof<Pallas>,
+    statement: &wrap::Statement<Fq>,
+    messages: &MessagesForNextWrapProof,
+    step: (&VerifierIndex<Vesta>, &Srs<Vesta>, &StepEvaluations),
+    step_messages: &MessagesForNextStepProof,
+    predecessor_key: (&VerifierIndex<Pallas>, &Srs<Pallas>),
+    rng: &mut R,
+) -> Result<(), Error>
+where
+    R: Sampler<Fq>,
+{
+    let carried: Vec<((Fp, Fp), &Vec<Fq>)> = wrap_proof
+        .prev_challenges
+        .iter()
+        .map(|c| (coordinates(&c.comm), &c.chals))
+        .collect();
+    let expected = step_messages
+        .challenge_polynomial_commitments
+        .last()
+        .zip(messages.old_bulletproof_challenges.last())
+        .map(|(sg, chals)| vec![((sg[0], sg[1]), chals)]);
+    let (_, _, evaluations) = step;
+    if expected != Some(carried)
+        || evaluations.prev_challenges != step_messages.old_bulletproof_challenges
+    {
+        return Err(Error::Accumulator);
+    }
+    wrap::verify_wrap(
+        wrap_index, wrap_srs, wrap_proof, statement, messages, step, rng,
+    )
+    .map_err(Error::Wrap)?;
+    let (key, srs) = predecessor_key;
+    let digest: Fq = Word::of(step_messages.digest()).reduce();
+    let (Some(old), Some(sg)) = (
+        messages.old_bulletproof_challenges.last(),
+        step_messages.challenge_polynomial_commitments.last(),
+    ) else {
+        return Err(Error::Accumulator);
+    };
+    let accumulator = coordinates(&msm(&srs.g, &b_poly_coefficients(old)));
+    if digest != statement.messages_for_next_step_proof
+        || step_messages.index != step::index_elements(key)
+        || accumulator != (sg[0], sg[1])
+    {
+        return Err(Error::Accumulator);
+    }
+    Ok(())
 }

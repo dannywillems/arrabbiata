@@ -18,14 +18,10 @@
 //!   its circuit reading, scalars of the other field shifted;
 //! - [`statement`]: the sorts a statement crosses the cycle in, each word
 //!   with a canonical lift;
-//! - [`wrap`]: the wrap circuit, verifying a base-case step proof;
-//! - [`step`]: the step circuit, verifying a wrap proof and applying a
-//!   rule;
-//! - [`wrap_one`]: the wrap circuit of a step proof with a predecessor,
-//!   finalizing in its field the wrap proof the step proof left
-//!   unfinalized;
+//! - [`wrap`]: the wrap circuit of a step proof that verified nothing;
 //! - [`recursion`]: one step circuit and one wrap circuit verifying each
-//!   other, iterated without bound from a dummy base case.
+//!   other, iterated without bound from a dummy base case, and the step
+//!   side's statement and messages ([`recursion::step`]).
 
 #![no_std]
 
@@ -37,7 +33,5 @@ pub mod model;
 pub mod recursion;
 pub mod scalar;
 pub mod statement;
-pub mod step;
 pub mod transcript;
 pub mod wrap;
-pub mod wrap_one;

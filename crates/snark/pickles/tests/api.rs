@@ -15,14 +15,13 @@ use arrabbiata_pickles::{
     curve::{self, CHALLENGE_BITS, EndoScale, SCALAR_BITS, Shape, Shifted, held, scalar_width},
     group::{self, GroupModel},
     model::{Affine, Basic, Circuit, Constant, Hint, Inverse, LOAD, Load, load},
-    recursion,
+    recursion::{self, step},
     scalar::{
         Constants, Inputs, OUTPUTS, Outputs, ScalarError, b_poly, combine, combined_inner_product,
         evaluations, flatten,
     },
-    step,
     transcript::{Permute, Split128},
-    wrap, wrap_one,
+    wrap,
 };
 use arrabbiata_poseidon::kimchi::pallas_base;
 use arrabbiata_transcript::Permutation;
@@ -837,70 +836,28 @@ fn step_messages_rule_and_index_elements() {
 }
 
 #[test]
-fn step_shape_and_new_refuses_a_wrong_size() {
-    // A wrap proof of one chunk, a quotient of seven, two rounds, over a
-    // step proof of three rounds and four evaluations.
-    let shape = step::Shape {
-        step_rounds: 3,
-        chunks: 1,
-        quotient_chunks: 7,
-        wrap_rounds: 2,
-        evaluations: 4,
-        key_points: 5,
+fn recursion_circuits_refuse_a_wrong_size() {
+    // Sizes that are not the parameters', or an SRS not of the domain's
+    // size, have no circuit.
+    let params = recursion::Params {
+        step_log2: 3,
+        wrap_log2: 3,
     };
-    assert_eq!(
-        (shape.statement(), shape.witness()),
-        (21, 2 * 5 + 17 + 2 * 29 + 4 + 1 + 4 + 1)
-    );
-    assert_eq!((step::VARIABLES, step::DEGREE), (64, 7));
-    let base = index();
-    let wrap = pallas_index();
+    let srs = arrabbiata_kimchi::srs::Srs::<arrabbiata_pasta::Pallas>::create(8);
     let poseidon = pallas_base();
-    let refused = step::Step::<1, 1>::new(
-        &wrap.verifier_index,
-        &wrap.srs,
+    let refused = recursion::RecStep::<1, 1>::new(params, &srs, &poseidon).err();
+    assert_eq!(refused, Some(recursion::Error::Size));
+    let base = index();
+    let fq_poseidon = arrabbiata_poseidon::kimchi::vesta_base();
+    let refused = recursion::RecWrap::<1, 1>::new(
+        params,
         &base.verifier_index,
-        &poseidon,
-        shape,
-    )
-    .err();
-    assert_eq!(refused, Some(step::Error::Size));
-}
-
-#[test]
-fn wrap_one_shape_and_new_refuses_a_wrong_size() {
-    // A step proof of one chunk, a quotient of seven, two rounds, whose
-    // predecessor has three rounds and four evaluations: the step proof's
-    // witness, the unfinalized words, ft(zeta w), the evaluations, sg.
-    let step = wrap::Shape {
-        chunks: 1,
-        quotient_chunks: 7,
-        rounds: 2,
-    };
-    let shape = wrap_one::Shape {
-        step,
-        wrap_rounds: 3,
-        evaluations: 4,
-    };
-    assert_eq!(
-        (shape.statement(), shape.witness()),
-        (16, step.witness() + 20 + 1 + 4 + 2)
-    );
-    assert_eq!((wrap_one::VARIABLES, wrap_one::DEGREE), (64, 7));
-    let index = index();
-    let predecessor = pallas_index();
-    let poseidon = arrabbiata_poseidon::kimchi::vesta_base();
-    let refused = wrap_one::WrapOne::<1, 1>::new(
-        &index.verifier_index,
-        &index.srs,
-        &predecessor.verifier_index,
-        &poseidon,
-        shape,
-        vec![],
+        &base.srs,
+        &fq_poseidon,
         vec![],
     )
     .err();
-    assert_eq!(refused, Some(wrap_one::Error::Size));
+    assert_eq!(refused, Some(recursion::Error::Size));
 }
 
 #[test]
