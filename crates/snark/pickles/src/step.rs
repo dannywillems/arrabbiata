@@ -22,6 +22,11 @@
 //!   the hash of the previous application state and the wrap key, applies
 //!   the rule (the state plus one), and hashes the new state with the wrap
 //!   proof's accumulator into the new messages;
+//! - takes the wrap key as a witness: the wrap proof's transcript starts
+//!   from the key's digest, computed in the circuit, and the key is hashed
+//!   into both messages, so the step circuit does not depend on the wrap
+//!   circuit and the verifier pins the key by checking the messages
+//!   ([`finalize`]);
 //! - leaves the wrap proof unfinalized in its own statement.
 //!
 //! The statement is Pickles' `Types.Step.Statement` for one predecessor,
@@ -30,10 +35,10 @@
 //! prechallenges, `should_finalize`), the messages for the next step proof,
 //! the predecessor's messages for the next wrap proof.
 //!
-//! Deviations from Mina: the wrap key is a constant of the circuit, not a
-//! witness hashed into the messages (so a step circuit verifies the wrap
-//! proofs of one fixed wrap circuit, and true self-recursion, where the
-//! wrap key depends on the step key, is not reached yet); the step proof
+//! Deviations from Mina: the wrap key's shape (its chunks, which of them
+//! are the identity, the wrap domain and public input) is the circuit's,
+//! from a reference index, while Mina's step circuits take keys of any
+//! domain among the branches'; the step proof
 //! carries no previous challenges, so the wrap proof's accumulator is
 //! decided by [`finalize`] rather than accumulated into the next IPA, and
 //! the base step proof's accumulator, hashed in the wrap statement's
@@ -66,7 +71,10 @@ use arrabbiata_poseidon::kimchi::{KimchiPoseidon, KimchiSponge, pallas_base, ves
 
 use crate::{
     curve::{Shifted, held},
-    group::{Constants, DeferredIn, ProofIn, PublicWord, group_half_in},
+    group::{
+        Constants, DeferredIn, KeyIn, ProofIn, PublicWord, group_half_in, group_half_with_key_in,
+        key_digest_in,
+    },
     model::{Affine, Circuit, load},
     scalar::{self, Inputs, scalar_half},
     statement::{Bool, Challenge, Digest, Sort, Type2, WINDOW_BITS, Word},
@@ -300,6 +308,8 @@ pub struct Shape {
     pub wrap_rounds: usize,
     /// The base step proof's evaluations.
     pub evaluations: usize,
+    /// The wrap key's chunks that are not the identity.
+    pub key_points: usize,
 }
 
 impl Shape {
@@ -309,14 +319,15 @@ impl Shape {
         FIXED + self.wrap_rounds
     }
 
-    /// The size of the private input ([`statement`]'s): the wrap statement, the
-    /// wrap proof's points as coordinates and `z1`, `z2` as Type2, the base
-    /// step proof's `ft(zeta w)` and evaluations, the previous state.
+    /// The size of the private input ([`statement`]'s): the wrap key's
+    /// points, the wrap statement, the wrap proof's points (as coordinates)
+    /// and `z1`, `z2` as Type2, the base step proof's `ft(zeta w)` and
+    /// evaluations, the previous state.
     #[must_use]
     pub const fn witness(&self) -> usize {
         let points =
             COLUMNS * self.chunks + self.chunks + self.quotient_chunks + 2 * self.wrap_rounds + 2;
-        (14 + self.step_rounds) + 2 * points + 4 + 1 + self.evaluations + 1
+        2 * self.key_points + (14 + self.step_rounds) + 2 * points + 4 + 1 + self.evaluations + 1
     }
 }
 
@@ -438,6 +449,7 @@ pub fn statement(
     )
     .map_err(Error::Wrap)?;
     let constants = wrap_constants(wrap)?;
+    let key_points = constants.key.chunks().flatten().count();
     let opening = &wrap.proof.proof;
     let proof = ProofIn {
         previous: wrap.proof.prev_challenges.iter().map(|p| p.comm).collect(),
@@ -522,6 +534,7 @@ pub fn statement(
             let _ = evaluations.evals.map(&mut |_| n += 1);
             n
         },
+        key_points,
     };
     let in_bounds = statement
         .to_vec()
@@ -532,7 +545,12 @@ pub fn statement(
         return Err(Error::Bound);
     }
 
-    let mut private: Vec<Fp> = deferred.public.iter().map(|w| w.value).collect();
+    let mut private: Vec<Fp> = Vec::new();
+    for p in constants.key.chunks().flatten() {
+        let (x, y) = coordinates(p);
+        private.extend([x, y]);
+    }
+    private.extend(deferred.public.iter().map(|w| w.value));
     let mut points: Vec<&Projective<Pallas>> = Vec::new();
     for w in &proof.witness {
         points.extend(w);
@@ -557,14 +575,14 @@ pub fn statement(
     Ok((statement, messages, private, shape))
 }
 
-/// The step circuit for wrap proofs of `shape` against one wrap index,
-/// whose step proofs are of one base index: its input the statement (`S`
-/// values, the public input) and the private input (`W` values).
+/// The step circuit for wrap proofs of `shape`, against a wrap key it takes
+/// as a witness, whose step proofs are of one base index: its input the
+/// statement (`S` values, the public input) and the private input (`W`
+/// values).
 #[derive(Clone, Debug)]
 pub struct Step<'a, const S: usize, const W: usize> {
     wrap_constants: Constants<Pallas>,
     base_constants: scalar::Constants<Fp>,
-    index: Vec<Fp>,
     branch_data: Fp,
     poseidon: &'a KimchiPoseidon<Fp>,
     gates: arrabbiata_kimchi::gates::KimchiGates<Fp>,
@@ -572,8 +590,10 @@ pub struct Step<'a, const S: usize, const W: usize> {
 }
 
 impl<'a, const S: usize, const W: usize> Step<'a, S, W> {
-    /// The step circuit verifying wrap proofs on `wrap_index` and `wrap_srs`
-    /// of step proofs on `base`, with Kimchi's `poseidon` over `Fp`.
+    /// The step circuit verifying wrap proofs on `wrap_srs` of step proofs
+    /// on `base`, with Kimchi's `poseidon` over `Fp`. Of `wrap_index` only
+    /// the shape is read (its domain, public input and which key chunks are
+    /// the identity): the key itself is a witness.
     ///
     /// # Errors
     ///
@@ -599,7 +619,6 @@ impl<'a, const S: usize, const W: usize> Step<'a, S, W> {
         Ok(Self {
             wrap_constants,
             base_constants,
-            index: index_elements(wrap_index),
             branch_data: branch[0].reduce(),
             poseidon,
             gates: step_gates(),
@@ -638,6 +657,7 @@ impl<const S: usize, const W: usize> TypedGadget<Fp> for Step<'_, S, W> {
             Some(v) => v,
             None => unreachable!("the private input has the shape's size"),
         };
+        let key = self.wrap_constants.key.map(&mut |_| [take(), take()]);
         let wrap_words: Vec<E::Var> = (0..14 + shape.step_rounds).map(|_| take()).collect();
         let Some(ws) = wrap::Statement::of(shape.step_rounds, &wrap_words) else {
             unreachable!("the wrap statement has the shape's size")
@@ -692,21 +712,34 @@ impl<const S: usize, const W: usize> TypedGadget<Fp> for Step<'_, S, W> {
             b: held(&u.b),
         };
         let model = RefCell::new(Circuit::new(env));
-        let out = group_half_in::<Pallas, _>(
+        let key = KeyIn {
+            digest: key_digest_in::<Pallas, _>(&model, self.poseidon, &key),
+            key,
+        };
+        let out = group_half_with_key_in::<Pallas, _>(
             &model,
             self.poseidon,
             &self.wrap_constants,
+            &key,
             &proof,
             &deferred,
         );
 
         // The messages: the previous state's, then the next state's with
-        // the wrap proof's accumulator.
+        // the wrap proof's accumulator, both over the witnessed key (an
+        // identity chunk as (0, 0), as `index_elements` has it).
         let digest_of = |tail: &[Affine<E::Var, Fp>]| {
             let mut sponge = FrSponge::in_model(&model, self.poseidon);
-            for c in &self.index {
-                let c = model.borrow_mut().constant(*c);
-                sponge.absorb_value(&c);
+            for chunk in key.key.chunks() {
+                let (x, y) = match chunk {
+                    Some([x, y]) => (value(x), value(y)),
+                    None => {
+                        let zero = model.borrow_mut().constant(Fp::ZERO);
+                        (zero.clone(), zero)
+                    }
+                };
+                sponge.absorb_value(&x);
+                sponge.absorb_value(&y);
             }
             for v in tail {
                 sponge.absorb_value(v);
@@ -861,8 +894,10 @@ where
 ///
 /// [`Error::Deferred`] naming the first value that is not its definition,
 /// [`Error::Bound`] for a word no Type2 value has, [`Error::Messages`] for
-/// messages that are not the statement's, [`Error::Accumulator`] for a
-/// false accumulator, [`Error::Lookups`] for an index with lookups.
+/// messages that are not the statement's or whose key is not
+/// `wrap_index`'s (the step circuit takes the key as a witness, so this is
+/// where it is pinned), [`Error::Accumulator`] for a false accumulator,
+/// [`Error::Lookups`] for an index with lookups.
 pub fn finalize(
     wrap_index: &VerifierIndex<Pallas>,
     wrap_srs: &Srs<Pallas>,
@@ -921,7 +956,8 @@ pub fn finalize(
     if to_fp(out.xi) != u.xi {
         return Err(Error::Deferred("xi"));
     }
-    if messages.digest() != statement.messages_for_next_step_proof
+    if messages.index != index_elements(wrap_index)
+        || messages.digest() != statement.messages_for_next_step_proof
         || messages.old_bulletproof_challenges.last() != Some(prechallenges)
     {
         return Err(Error::Messages);

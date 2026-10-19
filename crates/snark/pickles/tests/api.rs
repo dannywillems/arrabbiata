@@ -420,7 +420,36 @@ fn group_constants() {
     let c = group::Constants::new(&index.verifier_index, &index.srs, &base).unwrap();
     assert_eq!(c.index_digest, index.verifier_index.digest(base.clone()));
     assert_eq!((c.lagrange.len(), c.chunks), (0, 1));
-    assert_eq!(c.before_witness.len(), 6);
+    assert_eq!(c.key, group::Key::of(&index.verifier_index).unwrap());
+}
+
+#[test]
+fn group_key_key_in_and_its_digest() {
+    // A key is the index's commitments, the identities None; its digest in
+    // a model is the index's digest, natively and from constants; mapping
+    // keeps the identities.
+    let index = index();
+    let vi = &index.verifier_index;
+    let key = group::Key::of(vi).unwrap();
+    assert_eq!(key.chunks().count(), 7 + 15 + 6);
+    assert!(
+        key.chunks().any(Option::is_none),
+        "a zero coefficient column"
+    );
+    let base =
+        arrabbiata_poseidon::kimchi::KimchiSponge::new(arrabbiata_poseidon::kimchi::vesta_base());
+    let poseidon = arrabbiata_poseidon::kimchi::vesta_base();
+    let model = core::cell::RefCell::new(Native);
+    let digest = group::key_digest_in::<Vesta, _>(&model, &poseidon, &key);
+    assert_eq!(digest, vi.digest(base.clone()));
+    let c = group::Constants::new(vi, &index.srs, &base).unwrap();
+    let key_in = c.key_in(&mut Native);
+    assert_eq!((key_in.digest, key_in.key), (digest, key.clone()));
+    let mapped = key.map(&mut |_| ());
+    assert_eq!(
+        mapped.chunks().filter(|c| c.is_none()).count(),
+        key.chunks().filter(|c| c.is_none()).count()
+    );
 }
 
 #[test]
@@ -791,10 +820,11 @@ fn step_shape_and_new_refuses_a_wrong_size() {
         quotient_chunks: 7,
         wrap_rounds: 2,
         evaluations: 4,
+        key_points: 5,
     };
     assert_eq!(
         (shape.statement(), shape.witness()),
-        (21, 17 + 2 * 29 + 4 + 1 + 4 + 1)
+        (21, 2 * 5 + 17 + 2 * 29 + 4 + 1 + 4 + 1)
     );
     assert_eq!((step::VARIABLES, step::DEGREE), (64, 7));
     let base = index();

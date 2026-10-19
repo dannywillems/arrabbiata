@@ -60,10 +60,15 @@ fn base_proof(index: &ProverIndex<Vesta>, digest: Fp) -> ProverProof<Vesta> {
 const WS: usize = 14 + 3;
 const WW: usize = 2 * (15 + 1 + 7 + 6 + 2) + 2;
 
-/// The step statement's size and its private input's, for the wrap proof
+/// The wrap key's chunks that are not the identity, for the wrap circuit
 /// these tests make.
+const KEY: usize = 28;
+
+/// The step statement's size and its private input's, for the wrap proof
+/// these tests make: the key's points, then the wrap statement, the wrap
+/// proof, the base step proof's evaluations and the state.
 const S: usize = 19 + 13;
-const W: usize = 17 + 2 * (15 + 1 + 7 + 26 + 2) + 4 + 1 + 88 + 1;
+const W: usize = 2 * KEY + 17 + 2 * (15 + 1 + 7 + 26 + 2) + 4 + 1 + 88 + 1;
 
 #[test]
 fn a_step_proof_verifies_a_wrap_proof() {
@@ -179,14 +184,28 @@ fn a_step_proof_verifies_a_wrap_proof() {
         assert!(prove_step(&circuit, &step_index, &false_statement, &private, &mut rng).is_err());
     }
     // Nor for a private wrap statement whose deferred value is not the base
-    // step proof's.
+    // step proof's, nor for another wrap key: the wrap proof's transcript
+    // starts from the key's digest, and the messages hash the key.
     let mut false_private = private.clone();
-    false_private[4] = false_private[4] + Fp::ONE;
+    false_private[2 * KEY + 4] = false_private[2 * KEY + 4] + Fp::ONE;
     assert!(prove_step(&circuit, &step_index, &stmt, &false_private, &mut rng).is_err());
+    let mut false_key = private.clone();
+    false_key[0] = false_key[0] + Fp::ONE;
+    assert!(prove_step(&circuit, &step_index, &stmt, &false_key, &mut rng).is_err());
 
     // Natively: false messages, a false accumulator under its own hash, and
     // a false deferred value of the unfinalized proof.
     let (wi, wsrs) = (&wrap_index.verifier_index, &wrap_index.srs);
+    // Messages over another key, even hashed into the statement: the key is
+    // a witness of the circuit, so the verifier pins it here.
+    let mut other_key = messages.clone();
+    other_key.index[0] = other_key.index[0] + Fp::ONE;
+    let mut rekeyed = stmt.clone();
+    rekeyed.messages_for_next_step_proof = other_key.digest();
+    assert_eq!(
+        step::finalize(wi, wsrs, &rekeyed, &other_key, &wrap_evaluations),
+        Err(Error::Messages)
+    );
     let mut other = messages.clone();
     other.app_state = vec![Fp::from_u64(43)];
     assert_eq!(

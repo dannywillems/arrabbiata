@@ -24,10 +24,11 @@ use arrabbiata_field::{Field, Native, PrimeField, Sqrt, TwoAdicField};
 use arrabbiata_ipa::generic::shift_scalar;
 use arrabbiata_kimchi::{
     constraints::COLUMNS,
-    oracle::{ChallengeModel, ScalarChallenge, coordinates, scalar_elements},
+    oracle::{ChallengeModel, FqSponge, ScalarChallenge, coordinates, scalar_elements},
+    permutation::PERMUTS,
     srs::{GroupMap, GroupMapModel, PolyComm, Srs, num_chunks},
     transcript::Point,
-    verifier::{PiopChallenges, PiopInputs, base_transcript_in, fixed_commitments},
+    verifier::{PiopChallenges, PiopInputs, base_transcript_in},
     verifier_index::VerifierIndex,
 };
 use arrabbiata_poly::Domain;
@@ -185,8 +186,147 @@ where
     }
 }
 
-/// What the group half takes from the verifier index and the SRS: native
-/// constants, embedded into the model as constants.
+/// A verifier index's commitments, the key a proof is verified against,
+/// each a list of chunks, a chunk `None` when it is the identity (a column
+/// the circuit leaves zero, which no gate can hold). In a model the key is
+/// constants or witnesses: a circuit that takes it as a witness verifies
+/// proofs of any index with the same shape, which is how a step circuit is
+/// parametric in the wrap key it verifies against (Pickles'
+/// `dlog_plonk_index`). The shape, which chunks are the identity, stays
+/// the circuit's.
+///
+/// The standard gates only: an index with optional or lookup selectors has
+/// no key here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Key<P> {
+    /// The permutation's columns.
+    pub sigma: [Vec<Option<P>>; PERMUTS],
+    /// The coefficient columns.
+    pub coefficients: [Vec<Option<P>>; COLUMNS],
+    /// The selectors: Generic, Poseidon, CompleteAdd, VarBaseMul, EndoMul,
+    /// EndoMulScalar.
+    pub selectors: [Vec<Option<P>>; 6],
+}
+
+impl<P> Key<P> {
+    /// The key with each point mapped by `f`, the identities kept.
+    pub fn map<Q>(&self, f: &mut impl FnMut(&P) -> Q) -> Key<Q> {
+        let mut chunks = |c: &Vec<Option<P>>| c.iter().map(|p| p.as_ref().map(&mut *f)).collect();
+        Key {
+            sigma: core::array::from_fn(|i| chunks(&self.sigma[i])),
+            coefficients: core::array::from_fn(|i| chunks(&self.coefficients[i])),
+            selectors: core::array::from_fn(|i| chunks(&self.selectors[i])),
+        }
+    }
+
+    /// The chunks in the order the index's digest absorbs them: the sigmas,
+    /// the coefficients, the selectors.
+    pub fn chunks(&self) -> impl Iterator<Item = &Option<P>> {
+        self.sigma
+            .iter()
+            .chain(&self.coefficients)
+            .chain(&self.selectors)
+            .flatten()
+    }
+
+    /// The commitments before the witness columns' in the opening: the
+    /// selectors.
+    fn before_witness(&self) -> impl Iterator<Item = &Vec<Option<P>>> {
+        self.selectors.iter()
+    }
+
+    /// The commitments after them: the coefficients, then the sigmas but the
+    /// last.
+    fn after_witness(&self) -> impl Iterator<Item = &Vec<Option<P>>> {
+        self.coefficients.iter().chain(&self.sigma[..PERMUTS - 1])
+    }
+}
+
+impl<C: Glv> Key<Projective<C>> {
+    /// The key of `index`; none for an index with optional or lookup
+    /// selectors.
+    #[must_use]
+    pub fn of(index: &VerifierIndex<C>) -> Option<Self> {
+        let optional = [
+            &index.range_check0_comm,
+            &index.range_check1_comm,
+            &index.foreign_field_add_comm,
+            &index.foreign_field_mul_comm,
+            &index.xor_comm,
+            &index.rot_comm,
+        ];
+        if index.lookup_index.is_some() || optional.iter().any(|c| c.is_some()) {
+            return None;
+        }
+        let chunks = |c: &PolyComm<C>| -> Vec<Option<Projective<C>>> {
+            c.chunks
+                .iter()
+                .map(|p| (!p.is_identity()).then_some(*p))
+                .collect()
+        };
+        Some(Self {
+            sigma: core::array::from_fn(|i| chunks(&index.sigma_comm[i])),
+            coefficients: core::array::from_fn(|i| chunks(&index.coefficients_comm[i])),
+            selectors: [
+                chunks(&index.generic_comm),
+                chunks(&index.psm_comm),
+                chunks(&index.complete_add_comm),
+                chunks(&index.mul_comm),
+                chunks(&index.emul_comm),
+                chunks(&index.endomul_scalar_comm),
+            ],
+        })
+    }
+}
+
+/// A key in a model with its digest, the value the base sponge starts from:
+/// what the group half reads of the index.
+#[derive(Clone, Debug)]
+pub struct KeyIn<V, P> {
+    /// The index's digest.
+    pub digest: V,
+    /// Its commitments.
+    pub key: Key<P>,
+}
+
+/// The digest of `key` in `model`: Kimchi's base sponge over `permutation`,
+/// fresh, absorbing each chunk's coordinates (the identity's as `(0, 0)`,
+/// as `coordinates` gives them), then a squeeze; the native digest of the
+/// index (`VerifierIndex::digest`) when the key is constant.
+pub fn key_digest_in<C, M>(
+    model: &RefCell<M>,
+    permutation: &KimchiPoseidon<C::Base>,
+    key: &Key<M::Point>,
+) -> M::Value
+where
+    C: Glv,
+    C::Base: PrimeField,
+    M: GroupModel<C>,
+    KimchiPoseidon<C::Base>: PermutationIn<M, C::Base, WIDTH>,
+{
+    let mut sponge = FqSponge::<C, _, _>::in_model(model, permutation);
+    for chunk in key.chunks() {
+        let (x, y) = {
+            let mut m = model.borrow_mut();
+            match chunk {
+                Some(p) => {
+                    let c = m.coordinates_of(p);
+                    (c.x, c.y)
+                }
+                None => {
+                    let zero = m.constant(C::Base::ZERO);
+                    (zero.clone(), zero)
+                }
+            }
+        };
+        sponge.absorb_value(&x);
+        sponge.absorb_value(&y);
+    }
+    sponge.squeeze_value()
+}
+
+/// What the group half takes from the SRS and the index's shape, and the
+/// index's key as constants.
 #[derive(Clone, Debug)]
 pub struct Constants<C>
 where
@@ -200,12 +340,8 @@ where
     pub chunks: usize,
     /// The blinding point `h`.
     pub h: Projective<C>,
-    /// The last sigma's commitment, which `ft`'s scales by `perm`.
-    pub sigma_last: PolyComm<C>,
-    /// The index's commitments before the witness columns' in the opening.
-    pub before_witness: Vec<PolyComm<C>>,
-    /// The index's commitments after them.
-    pub after_witness: Vec<PolyComm<C>>,
+    /// The index's key.
+    pub key: Key<Projective<C>>,
     /// The group map of the IPA's value base.
     pub group_map: GroupMap<C>,
 }
@@ -217,7 +353,8 @@ where
     C::Scalar: TwoAdicField,
 {
     /// The constants of `index` on `srs`, its digest by `base_sponge`; none
-    /// for an index with lookups, which the group half does not cover yet.
+    /// for an index with optional or lookup selectors, which the group half
+    /// does not cover yet.
     ///
     /// # Panics
     ///
@@ -226,9 +363,7 @@ where
     where
         S: arrabbiata_transcript::Transcript<C::Base> + Clone,
     {
-        if index.lookup_index.is_some() {
-            return None;
-        }
+        let key = Key::of(index)?;
         let n = index.domain_size;
         let chunks = num_chunks(n, index.max_poly_size);
         let Some(domain) = Domain::<C::Scalar>::containing(n) else {
@@ -244,17 +379,24 @@ where
                 }
             })
             .collect();
-        let fixed = fixed_commitments(index);
         Some(Self {
             index_digest: index.digest(base_sponge.clone()),
             lagrange,
             chunks,
             h: srs.h,
-            sigma_last: index.sigma_comm[arrabbiata_kimchi::permutation::PERMUTS - 1].clone(),
-            before_witness: fixed.before_witness,
-            after_witness: fixed.after_witness,
+            key,
             group_map: GroupMap::setup(),
         })
+    }
+}
+
+impl<C: Glv> Constants<C> {
+    /// The key as constants of `m`, with the native digest.
+    pub fn key_in<M: GroupModel<C>>(&self, m: &mut M) -> KeyIn<M::Value, M::Point> {
+        KeyIn {
+            digest: m.constant(self.index_digest),
+            key: self.key.map(&mut |p| m.constant_point(p)),
+        }
     }
 }
 
@@ -350,15 +492,6 @@ where
     acc
 }
 
-/// A constant commitment's chunks in the model.
-fn constant<C, M>(m: &mut M, c: &PolyComm<C>) -> Vec<M::Point>
-where
-    C: Glv,
-    M: GroupModel<C>,
-{
-    c.chunks.iter().map(|p| m.constant_point(p)).collect()
-}
-
 /// The coordinates of points, for the base sponge.
 fn held<C, M>(m: &mut M, points: &[M::Point]) -> Vec<Point<M::Value>>
 where
@@ -375,7 +508,7 @@ where
 /// coordinates.
 fn combined<C, M>(
     m: &mut M,
-    constants: &Constants<C>,
+    key: &Key<M::Point>,
     proof: &ProofIn<M::Point, M::Scalar>,
     public: Vec<M::Point>,
     ft: M::Point,
@@ -389,19 +522,14 @@ where
     comms.extend(public.into_iter().map(Some));
     comms.push(Some(ft));
     comms.extend(proof.z.iter().cloned().map(Some));
-    let fixed = |m: &mut M, c: &PolyComm<C>, comms: &mut Vec<Option<M::Point>>| {
-        for p in &c.chunks {
-            comms.push((!p.is_identity()).then(|| m.constant_point(p)));
-        }
-    };
-    for c in &constants.before_witness {
-        fixed(m, c, &mut comms);
+    for c in key.before_witness() {
+        comms.extend(c.iter().cloned());
     }
     for w in &proof.witness {
         comms.extend(w.iter().cloned().map(Some));
     }
-    for c in &constants.after_witness {
-        fixed(m, c, &mut comms);
+    for c in key.after_witness() {
+        comms.extend(c.iter().cloned());
     }
     let mut acc: Option<M::Point> = None;
     for c in comms.iter().rev() {
@@ -425,7 +553,7 @@ where
 /// `[perm] sigma_last - [zeta^n - 1] t`, chunks combined by `zeta^m`.
 fn ft_comm<C, M>(
     m: &mut M,
-    constants: &Constants<C>,
+    key: &Key<M::Point>,
     t: &[M::Point],
     deferred: &DeferredIn<M::Value, M::Scalar>,
 ) -> M::Point
@@ -433,7 +561,13 @@ where
     C: Glv,
     M: GroupModel<C>,
 {
-    let sigma = constant::<C, M>(m, &constants.sigma_last);
+    let sigma: Vec<M::Point> = key.sigma[PERMUTS - 1]
+        .iter()
+        .map(|c| match c {
+            Some(p) => p.clone(),
+            None => unreachable!("a sigma is a permutation, never zero"),
+        })
+        .collect();
     let sigma = chunked::<C, M>(m, &sigma, &deferred.zeta_to_srs_length);
     let sigma = m.scale_point(&sigma, &deferred.perm);
     let t = chunked::<C, M>(m, t, &deferred.zeta_to_srs_length);
@@ -476,8 +610,9 @@ where
 }
 
 /// The group half in `model`, on Kimchi's base sponge over `permutation`
-/// in that model (see the module documentation). The model is shared with
-/// the sponge, so each step borrows it in turn.
+/// in that model (see the module documentation), the index's key its
+/// constants. The model is shared with the sponge, so each step borrows it
+/// in turn.
 pub fn group_half_in<C, M>(
     model: &RefCell<M>,
     permutation: &KimchiPoseidon<C::Base>,
@@ -491,12 +626,33 @@ where
     M: GroupModel<C>,
     KimchiPoseidon<C::Base>: PermutationIn<M, C::Base, WIDTH>,
 {
+    let key = constants.key_in(&mut *model.borrow_mut());
+    group_half_with_key_in(model, permutation, constants, &key, proof, deferred)
+}
+
+/// The group half as [`group_half_in`], against the key `key` in the model:
+/// constants, or witnesses with their digest computed in the model
+/// ([`key_digest_in`]). Only the SRS's part of `constants` and the index's
+/// shape are read from `constants`.
+pub fn group_half_with_key_in<C, M>(
+    model: &RefCell<M>,
+    permutation: &KimchiPoseidon<C::Base>,
+    constants: &Constants<C>,
+    key: &KeyIn<M::Value, M::Point>,
+    proof: &ProofIn<M::Point, M::Scalar>,
+    deferred: &DeferredIn<M::Value, M::Scalar>,
+) -> Outputs<M::Value, M::Point>
+where
+    C: Glv,
+    C::Base: PrimeField + Sqrt,
+    M: GroupModel<C>,
+    KimchiPoseidon<C::Base>: PermutationIn<M, C::Base, WIDTH>,
+{
     let (public, inputs) = {
         let mut m = model.borrow_mut();
         let public = x_hat::<C, M>(&mut m, constants, &deferred.public);
-        let index_digest = m.constant(constants.index_digest);
         let inputs = PiopInputs {
-            index_digest,
+            index_digest: key.digest.clone(),
             previous: held::<C, M>(&mut m, &proof.previous),
             public: held::<C, M>(&mut m, &public),
             witness: core::array::from_fn(|i| held::<C, M>(&mut m, &proof.witness[i])),
@@ -509,8 +665,8 @@ where
     let (drawn, mut sponge) = base_transcript_in::<C, M, _>(model, permutation, &inputs);
     let (combined, elements) = {
         let mut m = model.borrow_mut();
-        let ft = ft_comm::<C, M>(&mut m, constants, &proof.t, deferred);
-        let combined = combined::<C, M>(&mut m, constants, proof, public, ft, &deferred.xi);
+        let ft = ft_comm::<C, M>(&mut m, &key.key, &proof.t, deferred);
+        let combined = combined::<C, M>(&mut m, &key.key, proof, public, ft, &deferred.xi);
         let elements = m.shifted_elements(&deferred.combined_inner_product);
         (combined, elements)
     };
