@@ -170,6 +170,58 @@ where
             lambda: C::lambda(),
         })
     }
+
+    /// The constants of an index of the standard gates on a domain of
+    /// `domain_size` rows, `max_poly_size` the chunk size, `zk_rows` the
+    /// zero-knowledge rows: what a circuit verifying proofs of itself needs
+    /// before its index exists, since these depend on its shape alone.
+    ///
+    /// # Errors
+    ///
+    /// [`ScalarError::Domain`] for a domain not of the field.
+    pub fn standard<C>(
+        domain_size: usize,
+        max_poly_size: usize,
+        zk_rows: usize,
+    ) -> Result<Self, ScalarError>
+    where
+        C: Glv<Scalar = F>,
+        F: PrimeField,
+    {
+        let d = Domain::<F>::containing(domain_size).ok_or(ScalarError::Domain)?;
+        let n = d.size();
+        let chunks = num_chunks(n, max_poly_size);
+        let point = || PointEvaluations {
+            zeta: vec![(); chunks],
+            zeta_omega: vec![(); chunks],
+        };
+        let shape = ProofEvaluations {
+            public: point(),
+            w: core::array::from_fn(|_| point()),
+            z: point(),
+            s: core::array::from_fn(|_| point()),
+            coefficients: core::array::from_fn(|_| point()),
+            generic_selector: point(),
+            poseidon_selector: point(),
+            complete_add_selector: point(),
+            mul_selector: point(),
+            emul_selector: point(),
+            endomul_scalar_selector: point(),
+            optional_selectors: Vec::new(),
+            lookup: None,
+        };
+        Ok(Self {
+            domain_size: n,
+            max_poly_size,
+            omega: d.generator(),
+            w_end: d.element(n - zk_rows),
+            w_after: d.element(n - zk_rows + 1),
+            w_last: d.element(n - 1),
+            shift: arrabbiata_kimchi::permutation::shifts(n.trailing_zeros()),
+            shape,
+            lambda: C::lambda(),
+        })
+    }
 }
 
 /// `sum_i chunks[i] y^i`, by Horner: the value at the point of a chunked

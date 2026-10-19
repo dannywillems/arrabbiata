@@ -364,12 +364,43 @@ where
         S: arrabbiata_transcript::Transcript<C::Base> + Clone,
     {
         let key = Key::of(index)?;
-        let n = index.domain_size;
-        let chunks = num_chunks(n, index.max_poly_size);
-        let Some(domain) = Domain::<C::Scalar>::containing(n) else {
+        let digest = index.digest(base_sponge.clone());
+        Some(Self::shape(
+            srs,
+            index.domain_size,
+            index.public,
+            index.max_poly_size,
+            key,
+            digest,
+        ))
+    }
+
+    /// The constants of an index of `public` public inputs on a domain of
+    /// `domain_size` rows, `max_poly_size` the chunk size, with the key
+    /// `key` and its digest `index_digest`. A circuit taking the key as a
+    /// witness, and verifying proofs of a circuit not built yet (the
+    /// recursion's other circuit, whose shape is fixed in advance), reads
+    /// only the SRS's part and the key's shape: its `key` may be any key of
+    /// the right shape.
+    ///
+    /// # Panics
+    ///
+    /// If the domain is not one of the field's.
+    #[must_use]
+    pub fn shape(
+        srs: &Srs<C>,
+        domain_size: usize,
+        public: usize,
+        max_poly_size: usize,
+        key: Key<Projective<C>>,
+        index_digest: C::Base,
+    ) -> Self {
+        let chunks = num_chunks(domain_size, max_poly_size);
+        let Some(domain) = Domain::<C::Scalar>::containing(domain_size) else {
             panic!("the index's domain is not one of the field's")
         };
-        let lagrange = (0..index.public)
+        let n = domain.size();
+        let lagrange = (0..public)
             .map(|row| {
                 let mut e = alloc::vec![C::Scalar::ZERO; n];
                 e[row] = C::Scalar::ONE;
@@ -379,14 +410,14 @@ where
                 }
             })
             .collect();
-        Some(Self {
-            index_digest: index.digest(base_sponge.clone()),
+        Self {
+            index_digest,
             lagrange,
             chunks,
             h: srs.h,
             key,
             group_map: GroupMap::setup(),
-        })
+        }
     }
 }
 

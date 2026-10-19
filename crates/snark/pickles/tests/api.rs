@@ -236,6 +236,17 @@ fn scalar_constants() {
 }
 
 #[test]
+fn scalar_constants_standard() {
+    // From the shape alone, the constants of an index of the standard
+    // gates: those of the index itself.
+    let vi = index().verifier_index;
+    let k = Constants::of(&vi).unwrap();
+    let standard = Constants::standard::<Vesta>(vi.domain_size, vi.max_poly_size, vi.zk_rows);
+    assert_eq!(standard.unwrap(), k);
+    assert!(Constants::standard::<Vesta>(1 << 40, 8, 3).is_err());
+}
+
+#[test]
 fn scalar_error() {
     assert_eq!(
         ScalarError::Lookups.to_string(),
@@ -421,6 +432,20 @@ fn group_constants() {
     assert_eq!(c.index_digest, index.verifier_index.digest(base.clone()));
     assert_eq!((c.lagrange.len(), c.chunks), (0, 1));
     assert_eq!(c.key, group::Key::of(&index.verifier_index).unwrap());
+    // From the shape: the same constants.
+    let vi = &index.verifier_index;
+    let shape = group::Constants::shape(
+        &index.srs,
+        vi.domain_size,
+        vi.public,
+        vi.max_poly_size,
+        c.key.clone(),
+        c.index_digest,
+    );
+    assert_eq!(
+        (shape.index_digest, shape.lagrange, shape.chunks, shape.h),
+        (c.index_digest, c.lagrange.clone(), c.chunks, c.h)
+    );
 }
 
 #[test]
