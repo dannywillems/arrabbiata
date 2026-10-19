@@ -5,11 +5,12 @@
 //! the chain verifies, at every level, with the same two circuits.
 
 use arrabbiata_field::Field;
-use arrabbiata_gadget::TypedGadget;
+use arrabbiata_gadget::{TypedGadget, witness};
 use arrabbiata_kimchi::{
     rng::{Arkworks, SplitMix64},
     srs::Srs,
 };
+use arrabbiata_kimchi_gadgets::LAYOUT;
 use arrabbiata_pasta::{Fp, Fq, Pallas, Vesta};
 use arrabbiata_pickles::{
     recursion::{
@@ -24,6 +25,49 @@ use arrabbiata_poseidon::kimchi::{pallas_base, vesta_base};
 
 /// How many levels the chain test proves.
 const LEVELS: u64 = 3;
+
+/// The position of `z1`'s high part in the step circuit's private input:
+/// after the wrap key, the wrap statement and the wrap proof's points.
+const Z1: usize = 2 * 28 + PARAMS.wrap_statement() + 2 * (15 + 1 + 7 + 2 * 14 + 2);
+
+/// Whether the step circuit has a witness for `statement` and `private`.
+fn satisfied(step: &RecStep<'_, SS, SW>, statement: &[Fp; SS], private: &[Fp; SW]) -> bool {
+    witness::<Fp, _, 64, 7>(step, LAYOUT, &(*statement, *private)).is_ok()
+}
+
+/// The step circuit against a prover who lies, at `level`: a broken IPA
+/// of the wrap proof verified (accepted only at the base case, where the
+/// predecessor is the dummy and must not verify), the base case claimed at
+/// a later state, and `should_finalize` flipped.
+fn attacks(
+    step: &RecStep<'_, SS, SW>,
+    statement: &arrabbiata_pickles::step::Statement<Fp>,
+    private: &[Fp],
+    level: u64,
+) {
+    let public: [Fp; SS] = statement.to_vec().try_into().unwrap();
+    let honest: [Fp; SW] = private.try_into().unwrap();
+    assert!(satisfied(step, &public, &honest), "level {level}");
+
+    let mut broken = honest;
+    broken[Z1] = broken[Z1] + Fp::ONE;
+    assert_eq!(
+        satisfied(step, &public, &broken),
+        level == 0,
+        "level {level}"
+    );
+
+    if level > 0 {
+        let mut base = honest;
+        base[SW - 1] = Fp::ZERO;
+        assert!(!satisfied(step, &public, &base), "level {level}");
+    }
+
+    let mut flipped = statement.clone();
+    flipped.unfinalized.should_finalize = Fp::ONE - flipped.unfinalized.should_finalize;
+    let flipped: [Fp; SS] = flipped.to_vec().try_into().unwrap();
+    assert!(!satisfied(step, &flipped, &honest), "level {level}");
+}
 
 /// The domains, fixed in advance.
 const PARAMS: Params = Params {
@@ -108,6 +152,7 @@ fn a_chain_of_one_rule_verifies_at_every_level() {
         assert_eq!(messages.app_state, vec![Fp::from_u64(level + 1)]);
         let flag = if level == 0 { Fp::ZERO } else { Fp::ONE };
         assert_eq!(statement.unfinalized.should_finalize, flag);
+        attacks(&step, &statement, &private, level);
         let step_proof =
             prove_step(&step, &step_idx, &statement, &private, &carried, &mut rng).unwrap();
 
