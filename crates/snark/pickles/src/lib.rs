@@ -23,7 +23,9 @@
 //!   rule;
 //! - [`wrap_one`]: the wrap circuit of a step proof with a predecessor,
 //!   finalizing in its field the wrap proof the step proof left
-//!   unfinalized.
+//!   unfinalized;
+//! - [`recursion`]: one step circuit and one wrap circuit verifying each
+//!   other, iterated without bound from a dummy base case.
 
 #![no_std]
 
@@ -32,6 +34,7 @@ extern crate alloc;
 pub mod curve;
 pub mod group;
 pub mod model;
+pub mod recursion;
 pub mod scalar;
 pub mod statement;
 pub mod step;

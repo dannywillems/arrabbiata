@@ -176,7 +176,7 @@ fn words(statement: &step::Statement<Fp>) -> Vec<Fq> {
 
 /// The finalized proof's challenges mapped by the endomorphism of Pallas:
 /// the scalars of `Fq` its accumulator's polynomial is made of.
-fn computed(prechallenges: &[Fp]) -> Vec<Fq> {
+pub(crate) fn computed(prechallenges: &[Fp]) -> Vec<Fq> {
     let lambda = Pallas::lambda();
     prechallenges
         .iter()

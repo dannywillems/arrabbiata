@@ -15,6 +15,7 @@ use arrabbiata_pickles::{
     curve::{self, CHALLENGE_BITS, EndoScale, SCALAR_BITS, Shape, Shifted, held, scalar_width},
     group::{self, GroupModel},
     model::{Affine, Basic, Circuit, Constant, Hint, Inverse, LOAD, Load, load},
+    recursion,
     scalar::{
         Constants, Inputs, OUTPUTS, Outputs, ScalarError, b_poly, combine, combined_inner_product,
         evaluations, flatten,
@@ -900,6 +901,37 @@ fn wrap_one_shape_and_new_refuses_a_wrong_size() {
     )
     .err();
     assert_eq!(refused, Some(wrap_one::Error::Size));
+}
+
+#[test]
+fn recursion_params_and_constants() {
+    // The sizes a pair of domains fixes, and the evaluations of a proof of
+    // the standard gates of one chunk: those of the standard constants.
+    let params = recursion::Params {
+        step_log2: 4,
+        wrap_log2: 5,
+    };
+    assert_eq!((params.step_rounds(), params.wrap_rounds()), (4, 5));
+    assert_eq!((params.step_domain(), params.wrap_domain()), (16, 32));
+    assert_eq!((params.step_statement(), params.wrap_statement()), (24, 18));
+    let points = |rounds: usize| 15 + 1 + 7 + 2 * rounds + 2;
+    assert_eq!(
+        params.step_private(),
+        2 * 28 + 18 + 2 * points(5) + 4 + 2 + 4 + 1 + recursion::EVALUATIONS + 1
+    );
+    assert_eq!(
+        params.wrap_private(),
+        2 * points(4) + 2 + 17 + 5 + 1 + recursion::EVALUATIONS + 5 + 2
+    );
+    let k = Constants::standard::<Vesta>(16, 16, recursion::ZK_ROWS).unwrap();
+    let evals = k.shape.map(&mut |()| Fp::ZERO);
+    assert_eq!(recursion::evaluations(&evals), recursion::EVALUATIONS);
+    assert_eq!(recursion::KEY_COMMITMENTS, 28);
+    assert_eq!((recursion::VARIABLES, recursion::DEGREE), (64, 7));
+    assert_eq!(
+        recursion::Error::Domain { found: 8 },
+        recursion::Error::Domain { found: 8 }
+    );
 }
 
 #[test]

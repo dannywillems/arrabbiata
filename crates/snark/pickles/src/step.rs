@@ -416,23 +416,23 @@ impl WrapEvaluations {
 }
 
 /// A value of `Fq` below `2^254` as the element of `Fp` with its integer.
-fn to_fp(x: Fq) -> Fp {
+pub(crate) fn to_fp(x: Fq) -> Fp {
     Word::of(x).reduce()
 }
 
 /// A value of `Fp` below `2^254` as the element of `Fq` with its integer.
-fn to_fq(x: Fp) -> Fq {
+pub(crate) fn to_fq(x: Fp) -> Fq {
     Word::of(x).reduce()
 }
 
 /// The Type2 words of a scalar of `Fq`, in `Fp`.
-fn type2(s: Fq) -> [Fp; 2] {
+pub(crate) fn type2(s: Fq) -> [Fp; 2] {
     let words = Type2::<Pallas>::encode(&s);
     [words[0].reduce(), words[1].reduce()]
 }
 
 /// `2^255 + 1` in `Fp`: Type1's shift.
-fn type1_shift() -> Fp {
+pub(crate) fn type1_shift() -> Fp {
     (Fp::ONE + Fp::ONE).pow(255) + Fp::ONE
 }
 
