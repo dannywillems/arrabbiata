@@ -19,6 +19,7 @@ use arrabbiata_pickles::{
         Constants, Inputs, OUTPUTS, Outputs, ScalarError, b_poly, combine, combined_inner_product,
         evaluations, flatten,
     },
+    step,
     transcript::{Permute, Split128},
     wrap,
 };
@@ -30,6 +31,19 @@ fn index() -> ProverIndex<Vesta> {
     let gates: Vec<CircuitGate<Fp>> = (0..2)
         .map(|row| {
             let coeffs = vec![Fp::ONE, Fp::ONE, -Fp::ONE];
+            CircuitGate::new(GateType::Generic, Wire::for_row(row), coeffs)
+        })
+        .collect();
+    let cs = ConstraintSystem::create(gates).build().unwrap();
+    let depth = cs.domain.d1.size();
+    ProverIndex::create(cs, Srs::create(depth))
+}
+
+/// The index of two Generic rows over `Fq`, on Pallas.
+fn pallas_index() -> ProverIndex<arrabbiata_pasta::Pallas> {
+    let gates: Vec<CircuitGate<Fq>> = (0..2)
+        .map(|row| {
+            let coeffs = vec![Fq::ONE, Fq::ONE, -Fq::ONE];
             CircuitGate::new(GateType::Generic, Wire::for_row(row), coeffs)
         })
         .collect();
@@ -704,6 +718,97 @@ fn wrap_new_refuses_a_wrong_size() {
     let refused =
         wrap::Wrap::<1, 1>::new(&index.verifier_index, &index.srs, &poseidon, shape, padding).err();
     assert_eq!(refused, Some(wrap::Error::Size));
+}
+
+#[test]
+fn step_statement_round_trip_and_bounds() {
+    // A step statement is its public input, in Pickles' order: of inverts
+    // to_vec, a wrong length has no statement, each word its sort's bound.
+    let v = |k: u64| Fp::from_u64(k);
+    let st = step::Statement {
+        unfinalized: step::Unfinalized {
+            combined_inner_product: [v(1), v(2)],
+            b: [v(3), v(4)],
+            zeta_to_srs_length: [v(5), v(6)],
+            zeta_to_domain_size: [v(7), v(8)],
+            perm: [v(9), v(10)],
+            sponge_digest_before_evaluations: v(11),
+            beta: v(12),
+            gamma: v(13),
+            alpha: v(14),
+            zeta: v(15),
+            xi: v(16),
+            bulletproof_challenges: vec![v(17), v(18)],
+            should_finalize: v(19),
+        },
+        messages_for_next_step_proof: v(20),
+        messages_for_next_wrap_proof: v(21),
+    };
+    let flat = st.to_vec();
+    assert_eq!(flat, (1..=21).map(v).collect::<Vec<_>>());
+    assert_eq!(step::Statement::of(2, &flat), Some(st));
+    assert_eq!(step::Statement::of(3, &flat), None);
+    let mut expected = [254, 1].repeat(5);
+    expected.push(254);
+    expected.extend([128; 7]);
+    expected.extend([1, 254, 254]);
+    assert_eq!(step::bounds(2), expected);
+}
+
+#[test]
+fn step_messages_rule_and_index_elements() {
+    // The key, the state, then each commitment and its challenges; the
+    // digest is the sponge's; the rule adds one; a key's elements are its
+    // commitments' coordinates.
+    let messages = step::MessagesForNextStepProof {
+        index: vec![Fp::from_u64(1)],
+        app_state: vec![Fp::from_u64(2)],
+        challenge_polynomial_commitments: vec![[Fp::from_u64(3), Fp::from_u64(4)]],
+        old_bulletproof_challenges: vec![vec![Fp::from_u64(5)]],
+    };
+    assert_eq!(
+        messages.field_elements(),
+        [1, 2, 3, 4, 5].map(Fp::from_u64).to_vec()
+    );
+    let mut sponge = arrabbiata_kimchi::oracle::FrSponge::new(
+        arrabbiata_poseidon::kimchi::KimchiSponge::new(pallas_base()),
+    );
+    sponge.absorb_multiple(&messages.field_elements());
+    assert_eq!(messages.digest(), sponge.digest());
+    assert_eq!(step::rule(Fp::from_u64(41)), Fp::from_u64(42));
+    let pallas = pallas_index();
+    // 7 + 15 + 6 commitments of one chunk.
+    assert_eq!(step::index_elements(&pallas.verifier_index).len(), 2 * 28);
+}
+
+#[test]
+fn step_shape_and_new_refuses_a_wrong_size() {
+    // A wrap proof of one chunk, a quotient of seven, two rounds, over a
+    // step proof of three rounds and four evaluations.
+    let shape = step::Shape {
+        step_rounds: 3,
+        chunks: 1,
+        quotient_chunks: 7,
+        wrap_rounds: 2,
+        evaluations: 4,
+    };
+    assert_eq!(
+        (shape.statement(), shape.witness()),
+        (21, 17 + 2 * 29 + 4 + 1 + 4 + 1)
+    );
+    assert_eq!((step::VARIABLES, step::DEGREE), (64, 7));
+    let base = index();
+    let wrap = pallas_index();
+    let poseidon = pallas_base();
+    let refused = step::Step::<1, 1>::new(
+        &wrap.verifier_index,
+        &wrap.srs,
+        &base.verifier_index,
+        &poseidon,
+        shape,
+    )
+    .err();
+    assert_eq!(refused, Some(step::Error::Size));
 }
 
 #[test]

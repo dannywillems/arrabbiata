@@ -13,7 +13,14 @@
 //!   scalar-sponge transcript (the permutation's rows, the challenges'
 //!   splits and endomorphism rows);
 //! - [`scalar`]: the scalar half written once over that signature, and the
-//!   typed gadget that is its circuit.
+//!   typed gadget that is its circuit;
+//! - [`group`], [`curve`]: the group half over the points of a model, and
+//!   its circuit reading, scalars of the other field shifted;
+//! - [`statement`]: the sorts a statement crosses the cycle in, each word
+//!   with a canonical lift;
+//! - [`wrap`]: the wrap circuit, verifying a base-case step proof;
+//! - [`step`]: the step circuit, verifying a wrap proof and applying a
+//!   rule.
 
 #![no_std]
 
@@ -24,5 +31,6 @@ pub mod group;
 pub mod model;
 pub mod scalar;
 pub mod statement;
+pub mod step;
 pub mod transcript;
 pub mod wrap;
