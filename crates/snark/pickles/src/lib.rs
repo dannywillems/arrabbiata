@@ -20,7 +20,10 @@
 //!   with a canonical lift;
 //! - [`wrap`]: the wrap circuit, verifying a base-case step proof;
 //! - [`step`]: the step circuit, verifying a wrap proof and applying a
-//!   rule.
+//!   rule;
+//! - [`wrap_one`]: the wrap circuit of a step proof with a predecessor,
+//!   finalizing in its field the wrap proof the step proof left
+//!   unfinalized.
 
 #![no_std]
 
@@ -34,3 +37,4 @@ pub mod statement;
 pub mod step;
 pub mod transcript;
 pub mod wrap;
+pub mod wrap_one;

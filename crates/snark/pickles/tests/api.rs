@@ -21,7 +21,7 @@ use arrabbiata_pickles::{
     },
     step,
     transcript::{Permute, Split128},
-    wrap,
+    wrap, wrap_one,
 };
 use arrabbiata_poseidon::kimchi::pallas_base;
 use arrabbiata_transcript::Permutation;
@@ -839,6 +839,42 @@ fn step_shape_and_new_refuses_a_wrong_size() {
     )
     .err();
     assert_eq!(refused, Some(step::Error::Size));
+}
+
+#[test]
+fn wrap_one_shape_and_new_refuses_a_wrong_size() {
+    // A step proof of one chunk, a quotient of seven, two rounds, whose
+    // predecessor has three rounds and four evaluations: the step proof's
+    // witness, the unfinalized words, ft(zeta w), the evaluations, sg.
+    let step = wrap::Shape {
+        chunks: 1,
+        quotient_chunks: 7,
+        rounds: 2,
+    };
+    let shape = wrap_one::Shape {
+        step,
+        wrap_rounds: 3,
+        evaluations: 4,
+    };
+    assert_eq!(
+        (shape.statement(), shape.witness()),
+        (16, step.witness() + 20 + 1 + 4 + 2)
+    );
+    assert_eq!((wrap_one::VARIABLES, wrap_one::DEGREE), (64, 7));
+    let index = index();
+    let predecessor = pallas_index();
+    let poseidon = arrabbiata_poseidon::kimchi::vesta_base();
+    let refused = wrap_one::WrapOne::<1, 1>::new(
+        &index.verifier_index,
+        &index.srs,
+        &predecessor.verifier_index,
+        &poseidon,
+        shape,
+        vec![],
+        vec![],
+    )
+    .err();
+    assert_eq!(refused, Some(wrap_one::Error::Size));
 }
 
 #[test]

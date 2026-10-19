@@ -322,12 +322,12 @@ fn to_base(x: Fp) -> Fq {
     }
 }
 
-/// The branch data of a base-case step proof on `index`'s domain, as the
-/// element of `Fq` its word is.
-fn branch_data_of(index: &VerifierIndex<Vesta>) -> Fq {
+/// The branch data of a step proof on `index`'s domain whose rule verifies
+/// `proofs`, as the element of `Fq` its word is.
+pub(crate) fn branch_data_of(index: &VerifierIndex<Vesta>, proofs: ProofsVerified) -> Fq {
     let log2 = index.domain_size.trailing_zeros();
     let log2 = u8::try_from(log2).unwrap_or(u8::MAX);
-    BranchData::encode(&(ProofsVerified::N0, log2))[0].reduce()
+    BranchData::encode(&(proofs, log2))[0].reduce()
 }
 
 /// A step proof, with what verifying it needs.
@@ -468,7 +468,7 @@ pub fn statement(
         messages_for_next_wrap_proof: messages.digest(),
         messages_for_next_step_proof: deferred.public[0].value,
         bulletproof_challenges: out.prechallenges,
-        branch_data: branch_data_of(step.index),
+        branch_data: branch_data_of(step.index, ProofsVerified::N0),
     };
     let shape = Shape {
         chunks: proof.z.len(),
@@ -554,7 +554,7 @@ impl<'a, const S: usize, const W: usize> Wrap<'a, S, W> {
             poseidon,
             shape,
             padding,
-            branch_data: branch_data_of(index),
+            branch_data: branch_data_of(index, ProofsVerified::N0),
         })
     }
 }
