@@ -41,7 +41,7 @@ arrabbiata-transcript = { path = "crates/oracle/transcript" }
 # Kimchi samples its permutation shifts and hashes its SRS with Blake2b
 # (arrabbiata-kimchi only; approved 2026-10-16, audited: no advisory since
 # RUSTSEC-2019-0019, HMAC only, < 0.8.1).
-blake2 = { version = "0.10.6", default-features = false }
+blake2 = { version = "0.11.0", default-features = false }
 
 # Dev-only. Never in a library crate's [dependencies]: the extracted crates
 # must stay dependency-free so that Charon/Aeneas see only our code.
