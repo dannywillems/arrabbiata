@@ -55,6 +55,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrabbiata-folding"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-bn254",
+ "arrabbiata-commit",
+ "arrabbiata-field",
+ "arrabbiata-ipa",
+ "arrabbiata-kzg",
+ "arrabbiata-pasta",
+ "arrabbiata-poly",
+ "arrabbiata-poseidon",
+ "arrabbiata-relation",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
 name = "arrabbiata-frontend"
 version = "0.0.0"
 dependencies = [
@@ -256,6 +273,29 @@ dependencies = [
  "arrabbiata-plonkish",
  "arrabbiata-poly",
  "arrabbiata-poseidon",
+ "arrabbiata-transcript",
+ "proptest",
+]
+
+[[package]]
+name = "arrabbiata-plonk-decider"
+version = "0.0.0"
+dependencies = [
+ "arrabbiata-bn254",
+ "arrabbiata-commit",
+ "arrabbiata-field",
+ "arrabbiata-frontend",
+ "arrabbiata-generalized-plonk",
+ "arrabbiata-ipa",
+ "arrabbiata-kzg",
+ "arrabbiata-mvpoly",
+ "arrabbiata-pasta",
+ "arrabbiata-plonk",
+ "arrabbiata-plonkish",
+ "arrabbiata-plonkish-folding",
+ "arrabbiata-poly",
+ "arrabbiata-poseidon",
+ "arrabbiata-reduction",
  "arrabbiata-transcript",
  "proptest",
 ]
