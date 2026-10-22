@@ -47,7 +47,7 @@ blake2 = { version = "0.11.0", default-features = false }
 # must stay dependency-free so that Charon/Aeneas see only our code.
 proptest = "1.9"
 # A concrete byte hash for the hash transcript's tests (approved: sha2 >= 0.10).
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.11.1", default-features = false }
 
 # Pairings and multi-scalar multiplications dominate the test suite; run
 # tests optimized.
